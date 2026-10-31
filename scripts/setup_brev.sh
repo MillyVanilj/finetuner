@@ -18,7 +18,13 @@ need() { command -v "$1" >/dev/null || { echo "❌ '$1' not found. Install it fi
 need git git
 need python3 python3
 python3 -c 'import sys; assert sys.version_info >= (3,10)' || { echo "❌ Python 3.10+ needed" >&2; exit 1; }
-python3 -m venv --help >/dev/null 2>&1 || { echo "❌ python3-venv missing: sudo apt install -y python3-venv" >&2; exit 1; }
+# 'venv --help' works even when venvs can't be built; ensurepip is what's really needed.
+if ! python3 -c 'import ensurepip' >/dev/null 2>&1; then
+  PYVER="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+  echo "python3-venv missing; installing python${PYVER}-venv (Brev images lack it)"
+  sudo apt-get update -qq && sudo apt-get install -y -qq "python${PYVER}-venv" \
+    || { echo "❌ Could not install. Run: sudo apt install -y python${PYVER}-venv" >&2; exit 1; }
+fi
 
 echo "== 1/5 ScienceClaw =="
 if [ -d "$SC_DIR/.git" ]; then
@@ -29,14 +35,14 @@ fi
 echo "ScienceClaw version: $(git -C "$SC_DIR" rev-parse --short HEAD)"
 
 echo "== 2/5 ScienceClaw Python environment =="
-[ -d "$SC_DIR/.venv" ] || python3 -m venv "$SC_DIR/.venv"
+[ -x "$SC_DIR/.venv/bin/pip" ] || { rm -rf "$SC_DIR/.venv"; python3 -m venv "$SC_DIR/.venv"; }   # rebuild if a previous run left it half-made
 "$SC_DIR/.venv/bin/pip" install -q --upgrade pip
 "$SC_DIR/.venv/bin/pip" install -q -r "$SC_DIR/requirements.txt"
 (cd "$SC_DIR" && ./install_scienceclaw_command.sh >/dev/null)
 echo "✓ ScienceClaw installed"
 
 echo "== 3/5 Training environment (separate, so GPU packages don't clash with ScienceClaw) =="
-[ -d "$REPO_DIR/.venv-train" ] || python3 -m venv "$REPO_DIR/.venv-train"
+[ -x "$REPO_DIR/.venv-train/bin/pip" ] || { rm -rf "$REPO_DIR/.venv-train"; python3 -m venv "$REPO_DIR/.venv-train"; }   # rebuild if a previous run left it half-made
 "$REPO_DIR/.venv-train/bin/pip" install -q --upgrade pip
 "$REPO_DIR/.venv-train/bin/pip" install -q torch "transformers>=5" "trl>=1" peft datasets accelerate huggingface_hub
 "$REPO_DIR/.venv-train/bin/python" - <<'EOF'
