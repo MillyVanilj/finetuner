@@ -1,5 +1,7 @@
 # CLAUDE.md — Project context
 
+> **Read first:** `docs/decisions.md` (current plan, model choices and reasoning, compute) and `docs/wireframe_v0.2_review.md` (wireframe critique + ScienceClaw internals). The current plan follows wireframe v0.2 (LLM fine-tuning with generated data, Qwen3-4B on Brev). Where the protein/ESM examples below disagree with `docs/decisions.md`, the decisions doc wins.
+
 ## What we're doing
 
 We are a team of 3 at the ScienceClaw hackathon (MIT, Oct 31 – Nov 1, 2026). We're using the ScienceClaw multi-agent framework to automate the model fine-tuning process: a team of agents that takes a goal (e.g. "make a small model better at predicting protein properties"), then finds data, prepares it, fine-tunes a model, evaluates it, and reports results — with minimal human work.
