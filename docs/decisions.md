@@ -101,6 +101,7 @@ Brev machine
 ## Decision 6: training & eval defaults
 
 - Script: `scripts/brev-smoke/train_sft.py` (Owen's). TRL `SFTTrainer`, LoRA all-linear, r=16, α=32, lr 1e-4–2e-4 (script default 2e-4; TRL's own default 2e-5 is too low for LoRA), 2 epochs, bf16, loss on assistant replies only.
+- **Trainer skills (built):** `skills/finetune-submit` (validates data, writes `run.json`, starts `train_sft.py` in the background, returns `train_job_id`; refuses when the GPU is busy; takes Evaluator overrides via `--retrain-config-path`) and `skills/finetune-status` (`--train-job-id` → running % / done with `adapter_path` / failed with log). Hand-off keys: `train_jsonl_path` → submit → `train_job_id` → status → `adapter_path` → Evaluator. Put status in a different agent from submit (agents ignore their own artifacts). Runs live in `~/finetuner/runs/<job_id>/`.
 - Every run saves `run.json`: spec, model IDs + prompts, LoRA config, seeds, dataset SHA-256s, git commit, metrics, adapter location.
 - Eval report always shows: base zero-shot, **base few-shot (must beat this)**, teacher (ceiling), tuned, all with 95% confidence intervals.
 - **Ask a human before launching any GPU job.**
