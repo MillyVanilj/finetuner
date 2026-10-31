@@ -26,6 +26,14 @@ if ! python3 -c 'import ensurepip' >/dev/null 2>&1; then
     || { echo "❌ Could not install. Run: sudo apt install -y python${PYVER}-venv" >&2; exit 1; }
 fi
 
+# Triton (used by TRL during training) compiles a C helper and needs Python.h. Brev images lack it.
+PYVER="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+if [ ! -f "/usr/include/python${PYVER}/Python.h" ]; then
+  echo "Python headers missing; installing python${PYVER}-dev (needed for GPU training)"
+  sudo apt-get install -y -qq "python${PYVER}-dev" >/dev/null \
+    || { echo "❌ Could not install. Run: sudo apt install -y python${PYVER}-dev" >&2; exit 1; }
+fi
+
 echo "== 1/5 ScienceClaw =="
 if [ -d "$SC_DIR/.git" ]; then
   echo "already at $SC_DIR (not updating it; run 'git -C $SC_DIR pull' yourself if you want the latest)"

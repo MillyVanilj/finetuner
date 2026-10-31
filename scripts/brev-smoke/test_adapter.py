@@ -25,10 +25,11 @@ model = AutoModelForCausalLM.from_pretrained(a.model, dtype=torch.bfloat16, devi
 
 
 def ask(m, q):
-    ids = tok.apply_chat_template([{"role": "user", "content": q}], add_generation_prompt=True,
-                                  return_tensors="pt").to(m.device)
-    out = m.generate(ids, max_new_tokens=120, do_sample=False)
-    return tok.decode(out[0, ids.shape[1]:], skip_special_tokens=True).strip()
+    # return_dict=True: transformers v5 returns a dict here anyway; this works on v4 and v5.
+    enc = tok.apply_chat_template([{"role": "user", "content": q}], add_generation_prompt=True,
+                                  return_tensors="pt", return_dict=True).to(m.device)
+    out = m.generate(**enc, max_new_tokens=120, do_sample=False)
+    return tok.decode(out[0, enc["input_ids"].shape[1]:], skip_special_tokens=True).strip()
 
 
 base = {q: ask(model, q) for q in QUESTIONS}
