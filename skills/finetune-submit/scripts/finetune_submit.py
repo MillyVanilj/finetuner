@@ -95,7 +95,8 @@ def git_commit(root: Path):
 
 def main():
     p = argparse.ArgumentParser(description="Submit a LoRA fine-tuning job (returns immediately).")
-    p.add_argument("--train-jsonl-path", required=True, help="Chat JSONL from DataAgent")
+    p.add_argument("--train-jsonl-path", "--train-path", dest="train_jsonl_path", required=True,
+                   help="Chat JSONL from DataAgent (finetune-data-gen outputs it as `train_path`)")
     p.add_argument("--retrain-config-path", help="JSON of hyperparameter overrides from the Evaluator")
     p.add_argument("--parent-job-id", help="Job this one is a retry of (for lineage)")
     p.add_argument("--model")

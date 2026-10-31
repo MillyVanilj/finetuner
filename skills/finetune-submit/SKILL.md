@@ -20,7 +20,7 @@ What it does, in order:
 
 | Flag | Required | Meaning |
 |---|---|---|
-| `--train-jsonl-path` | yes | Training data (chat JSONL). DataAgent's output key `train_jsonl_path` matches this. |
+| `--train-jsonl-path` (alias `--train-path`) | yes | Training data (chat JSONL). Matches finetune-data-gen's output key `train_path`. |
 | `--retrain-config-path` | no | JSON with new settings from the Evaluator, e.g. `{"lr": 1e-4, "epochs": 1, "parent_job_id": "...", "reason": "overfitting"}`. Allowed keys: model, rank, alpha, lr, epochs, batch_size, grad_accum, max_length, seed. |
 | `--parent-job-id` | no | The job this one retries (lineage) |
 | `--model --rank --alpha --lr --epochs` | no | Explicit overrides |
