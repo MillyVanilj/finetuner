@@ -47,6 +47,8 @@ Every training run must save: config used, dataset version, metrics, and where t
 
 ## Setup (on the shared Linux cloud machine)
 
+**Use the scripts:** clone this repo to `~/finetuner`, then run `bash scripts/setup_brev.sh` once (installs ScienceClaw at `~/scienceclaw` + a separate training env + `.env`). Run `bash scripts/install.sh` after every `git pull`. The manual steps below are what the script automates (ignore the `setup.py --quick` lines: we hand-write profiles in `agents/`).
+
 ```bash
 git clone https://github.com/lamm-mit/scienceclaw.git
 cd scienceclaw
