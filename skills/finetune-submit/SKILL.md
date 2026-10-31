@@ -20,7 +20,7 @@ What it does, in order:
 
 | Flag | Required | Meaning |
 |---|---|---|
-| `--train-jsonl-path` (alias `--train-path`) | yes | Training data (chat JSONL). Matches finetune-data-gen's output key `train_path`. |
+| `--train-path` | yes | Training data (chat JSONL). Matches finetune-data-gen's output key `train_path`. |
 | `--retrain-config-path` | no | JSON with new settings from the Evaluator, e.g. `{"lr": 1e-4, "epochs": 1, "parent_job_id": "...", "reason": "overfitting"}`. Allowed keys: model, rank, alpha, lr, epochs, batch_size, grad_accum, max_length, seed. |
 | `--parent-job-id` | no | The job this one retries (lineage) |
 | `--model --rank --alpha --lr --epochs` | no | Explicit overrides |
@@ -40,7 +40,7 @@ Poll with **finetune-status** (`--train-job-id`). Agents never react to their ow
 ## Example
 
 ```bash
-python skills/finetune-submit/scripts/finetune_submit.py --train-jsonl-path ~/data/train.jsonl --dry-run
+python skills/finetune-submit/scripts/finetune_submit.py --train-path ~/data/train.jsonl --dry-run
 ```
 
 Environment: `FINETUNER_DIR` (default `~/finetuner`), `FINETUNER_RUNS` (default `$FINETUNER_DIR/runs`).

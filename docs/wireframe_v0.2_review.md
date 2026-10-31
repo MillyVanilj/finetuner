@@ -46,7 +46,7 @@
 **Hard facts that shape the design:**
 - A skill = `scienceclaw/skills/<name>/SKILL.md` + **exactly one** `scripts/*.py`. If there are more, the executor picks the first one in an unpredictable order. Parameters arrive as `--flags`; output must be **one JSON object on stdout** (logs go to stderr).
 - Time limit per skill run: **45 s** (heartbeat), **30 s** (reactor). Skills can't change this. → Every slow step (generation, training, eval) must **start a background job and return a job ID immediately**. The next agent's skill polls; if the job isn't done it exits with an error, and ScienceClaw automatically retries next cycle (artifact stays unconsumed).
-- **Hand-offs without editing ScienceClaw:** the reactor matches keys in one agent's output JSON to the `--flags` of another agent's skill. So DataAgent outputs `{"train_jsonl_path": ...}` and TrainAgent's skill takes `--train-jsonl-path`. Use specific key names (never `query`), or everything matches everything.
+- **Hand-offs without editing ScienceClaw:** the reactor matches keys in one agent's output JSON to the `--flags` of another agent's skill. So DataAgent outputs `{"train_path": ...}` and TrainAgent's skill takes `--train-path`. Use specific key names (never `query`), or everything matches everything.
 - **Loops:** one pass per heartbeat, no built-in looping. Iterate by having EvalAgent output e.g. `{"retrain_config_path": ...}` (TrainAgent reacts) or `{"data_feedback_path": ...}` (DataAgent reacts). Stop = output neither key.
 - Heartbeat default is every 6 h. Run each daemon with `--interval 60` and `--profile <Name>`.
 - **Write profile JSON by hand.** `setup.py --quick` puts tools under `preferences.tools`, but the reactor reads top-level `preferred_tools`. Give Data/Bench/Train/Eval agents **no `interests`**, so they only react to hand-offs.
@@ -59,9 +59,9 @@
 | Agent | Wireframe boxes | Our skill | Reacts to key → emits key |
 |---|---|---|---|
 | *(CLI pre-step)* | M1 | `scripts/make_spec.py` | user → `task_spec_path` |
-| DataAgent | M2–M4 + contamination | `ftc_data_gen` | `task_spec_path`, `data_feedback_path` → `train_jsonl_path` |
+| DataAgent | M2–M4 + contamination | `ftc_data_gen` | `task_spec_path`, `data_feedback_path` → `train_path` |
 | BenchAgent | M5–M6 + splits | `ftc_bench_gen` | `task_spec_path` → `bench_dir` |
-| TrainAgent | Trainer | `ftc_train` | `train_jsonl_path`, `retrain_config_path` → `train_job_id` |
+| TrainAgent | Trainer | `ftc_train` | `train_path`, `retrain_config_path` → `train_job_id` |
 | EvalAgent | M7–M9 + Iterate? | `ftc_eval` | `train_job_id` + `bench_dir` → `eval_report_path` (+ feedback key, or `final=true`) |
 | ReportAgent | Output | `ftc_report` | `eval_report_path` with `final=true` → HF push + Infinite post |
 
