@@ -19,3 +19,6 @@ checkpoints/
 wandb/
 
 .DS_Store
+
+# Training outputs (adapters/checkpoints go to HF Hub, not git)
+runs/

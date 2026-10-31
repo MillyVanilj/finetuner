@@ -30,7 +30,7 @@ fi
 PYVER="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
 if [ ! -f "/usr/include/python${PYVER}/Python.h" ]; then
   echo "Python headers missing; installing python${PYVER}-dev (needed for GPU training)"
-  sudo apt-get install -y -qq "python${PYVER}-dev" >/dev/null \
+  sudo apt-get update -qq && sudo apt-get install -y -qq "python${PYVER}-dev" >/dev/null \
     || { echo "❌ Could not install. Run: sudo apt install -y python${PYVER}-dev" >&2; exit 1; }
 fi
 
