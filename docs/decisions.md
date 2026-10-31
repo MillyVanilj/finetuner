@@ -101,7 +101,7 @@ Brev machine
 ## Decision 6: training & eval defaults
 
 - Script: `scripts/brev-smoke/train_sft.py` (Owen's). TRL `SFTTrainer`, LoRA all-linear, r=16, α=32, lr 1e-4–2e-4 (script default 2e-4; TRL's own default 2e-5 is too low for LoRA), 2 epochs, bf16, loss on assistant replies only.
-- **Trainer skills (built):** `skills/finetune-submit` (validates data, writes `run.json`, starts `train_sft.py` in the background, returns `train_job_id`; refuses when the GPU is busy; takes Evaluator overrides via `--retrain-config-path`) and `skills/finetune-status` (`--train-job-id` → running % / done with `adapter_path` / failed with log). Hand-off keys: `train_path` (DataGen output; submit also accepts `--train-jsonl-path`) → submit → `train_job_id` → status → `adapter_path` → Evaluator. Put status in a different agent from submit (agents ignore their own artifacts). Runs live in `~/finetuner/runs/<job_id>/`.
+- **Trainer skills (built):** `skills/finetune-submit` (validates data, writes `run.json`, starts `train_sft.py` in the background, returns `train_job_id`; refuses when the GPU is busy; takes Evaluator overrides via `--retrain-config-path`) and `skills/finetune-status` (`--train-job-id` → running % / done with `adapter_path` / failed with log). Hand-off keys: `train_path` (DataGen output = submit's `--train-path`) → submit → `train_job_id` → status → `adapter_path` → Evaluator. Put status in a different agent from submit (agents ignore their own artifacts). Runs live in `~/finetuner/runs/<job_id>/`.
 - Every run saves `run.json`: spec, model IDs + prompts, LoRA config, seeds, dataset SHA-256s, git commit, metrics, adapter location.
 - Eval report always shows: base zero-shot, **base few-shot (must beat this)**, teacher (ceiling), tuned, all with 95% confidence intervals.
 - **Ask a human before launching any GPU job.**
@@ -116,7 +116,7 @@ To settle as a team:
 
 Things to fix in the setup plan (checked against ScienceClaw's code):
 - **Step 3 "set `preferences.tools`" won't work.** The heartbeat and reactor read a top-level `preferred_tools` list (`artifacts/reactor.py:405`, `autonomous/loop_controller.py:1359`). `setup.py` writes `preferences.tools` (`setup.py:360`), which they ignore. Hand-write `preferred_tools` in each profile.
-- **Step 2 edits ScienceClaw source** (`needs.py`, `artifact.py`). This is avoidable: the reactor chains agents by matching **keys in one skill's JSON output** to **`--flags` of the next skill** (`artifacts/reactor.py:603`, `:931`). So emit specific keys like `train_jsonl_path` and take `--train-jsonl-path`, with no core edits. (Our rules say don't edit ScienceClaw unless needed.)
+- **Step 2 edits ScienceClaw source** (`needs.py`, `artifact.py`). This is avoidable: the reactor chains agents by matching **keys in one skill's JSON output** to **`--flags` of the next skill** (`artifacts/reactor.py:603`, `:931`). So emit specific keys like `train_path` and take `--train-path`, with no core edits. (Our rules say don't edit ScienceClaw unless needed.)
 - **`skills/finetune-data-gen/scripts/gen_data.py`:**
   - Defaults to `--format summary`, which prints plain text. ScienceClaw doesn't add `--format json` for you (`core/skill_executor.py:135-155`), so the output becomes `{"output": "..."}` and no next agent can chain on it. Default to JSON.
   - One LLM call for 20 examples with `max_tokens=8000` can exceed the **45 s** skill time limit. Generate in small batches, or run as a background job for larger sets.
