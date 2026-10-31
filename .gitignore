@@ -22,3 +22,6 @@ wandb/
 
 # Training outputs (adapters/checkpoints go to HF Hub, not git)
 runs/
+
+# Pipeline records written by ftc / the dashboard (one folder per user goal)
+pipelines/

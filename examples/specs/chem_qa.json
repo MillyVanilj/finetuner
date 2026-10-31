@@ -1,0 +1,87 @@
+{
+  "spec_version": 2,
+  "task": "Answer general chemistry questions concisely and correctly.",
+  "io_format": "Assistant reply is exactly two lines: 'ANSWER: <short answer>' then 'WHY: <one-sentence justification>'.",
+  "success_criteria": [
+    "The answer is factually correct",
+    "Follows the two-line ANSWER/WHY format exactly, with no extra text",
+    "WHY is one sentence of at most 30 words",
+    "For ambiguous questions, ANSWER is a clarifying question that asks for the missing information"
+  ],
+  "edge_cases": [
+    "Calculations that need unit conversion",
+    "Trick or false-premise questions (the answer corrects the premise)",
+    "Ambiguous questions (ANSWER asks for the missing information)",
+    "Questions about common misconceptions"
+  ],
+  "n_examples": 50,
+  "system_prompt": null,
+  "id": "chem-qa",
+  "title": "Concise chemistry answers (ANSWER/WHY)",
+  "domain": "chemistry",
+  "input": {
+    "description": "One chemistry question in plain English.",
+    "example": null
+  },
+  "output": {
+    "type": "text",
+    "description": "Assistant reply is exactly two lines: 'ANSWER: <short answer>' then 'WHY: <one-sentence justification>'.",
+    "json_schema": null,
+    "labels": null,
+    "format_regex": "^ANSWER: .+\\nWHY: .+$"
+  },
+  "coverage": {
+    "topics": [
+      "stoichiometry",
+      "acids and bases",
+      "thermochemistry",
+      "periodic trends",
+      "organic basics",
+      "electrochemistry"
+    ],
+    "difficulty": [
+      "easy",
+      "medium",
+      "hard"
+    ]
+  },
+  "seed_examples": [
+    {
+      "input": "What is the pH of 0.001 M NaOH at 25 \u00b0C?",
+      "output": "ANSWER: 11.0\nWHY: pOH = -log(0.001) = 3, so pH = 14 - 3 = 11.",
+      "source": "user"
+    }
+  ],
+  "scoring": {
+    "method": "judge",
+    "format_check": "regex",
+    "numeric_tolerance": 0.01,
+    "json_fields": null,
+    "judge_rubric": "1 if ANSWER is correct (same value and units as the reference, or a correct clarifying question for ambiguous items), else 0. Ignore WHY wording.",
+    "pass_threshold": 0.5
+  },
+  "benchmark": {
+    "n_dev": 200,
+    "n_heldout": 100,
+    "seed_examples_to_heldout": true,
+    "real_sources": []
+  },
+  "targets": {
+    "target_score": 0.8,
+    "min_gain": 0.02,
+    "max_loops": 3,
+    "max_general_drop": 0.03
+  },
+  "budget": {
+    "max_api_usd": 20.0,
+    "max_gpu_hours": 2.0
+  },
+  "models": {
+    "student": "Qwen/Qwen3-4B-Instruct-2507",
+    "generator": "gemini-3.6-flash",
+    "verifier": "claude-sonnet-5-5",
+    "bench_writer": "gpt",
+    "judge": "claude-sonnet-5-5"
+  },
+  "training": {}
+}

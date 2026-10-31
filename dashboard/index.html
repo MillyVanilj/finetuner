@@ -1,0 +1,870 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fine-tuning collective · live</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --surface-2: #f3f2ef;
+  --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
+  --s1-soft: rgba(42,120,214,0.12);
+  --good: #0ca30c; --good-text: #006300; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
+  --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232321;
+    --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+    --s1-soft: rgba(57,135,229,0.18); --good-text: #0ca30c;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232321;
+  --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+  --s1-soft: rgba(57,135,229,0.18); --good-text: #0ca30c;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.45 var(--font); }
+button, input, select, textarea { font: inherit; color: inherit; }
+a { color: var(--s1); }
+.wrap { max-width: 1320px; margin: 0 auto; padding: 0 20px 40px; }
+
+/* top bar */
+.top { display: flex; align-items: center; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--border);
+       background: var(--surface); position: sticky; top: 0; z-index: 20; }
+.brand { font-weight: 650; letter-spacing: -0.01em; }
+.brand small { color: var(--muted); font-weight: 400; margin-left: 6px; }
+.spacer { flex: 1; }
+.btn { border: 1px solid var(--border); background: var(--surface); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+.btn:hover { background: var(--surface-2); }
+.btn.primary { background: var(--s1); color: #fff; border-color: transparent; }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn:disabled { opacity: .5; cursor: default; }
+select.btn { padding-right: 8px; max-width: 360px; }
+.live { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); font-size: 12px; }
+.live .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.live.on .dot { background: var(--good); box-shadow: 0 0 0 0 rgba(12,163,12,.5); animation: ping 2s infinite; }
+@keyframes ping { 0% { box-shadow: 0 0 0 0 rgba(12,163,12,.45); } 70% { box-shadow: 0 0 0 7px rgba(12,163,12,0); } 100% { box-shadow: 0 0 0 0 rgba(12,163,12,0); } }
+
+/* cards */
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }
+.card h3 { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--ink-2); text-transform: uppercase; letter-spacing: .04em; }
+.grid2 { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; margin-top: 16px; }
+@media (max-width: 1000px) { .grid2 { grid-template-columns: 1fr; } }
+
+/* header */
+.hero { display: flex; gap: 18px; align-items: flex-start; margin-top: 16px; }
+.hero .title { font-size: 20px; font-weight: 650; letter-spacing: -0.01em; margin: 0; }
+.hero .task { color: var(--ink-2); margin: 4px 0 8px; max-width: 820px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--border); }
+.chip b { color: var(--ink); font-weight: 600; }
+.hero-stats { display: flex; gap: 22px; margin-left: auto; text-align: right; }
+.hero-stats .v { font-size: 22px; font-weight: 600; }
+.hero-stats .l { font-size: 12px; color: var(--muted); }
+
+/* status badges: icon + label, never color alone */
+.badge { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; padding: 2px 8px 2px 6px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); color: var(--ink-2); white-space: nowrap; }
+.badge .ic { width: 14px; height: 14px; display: inline-grid; place-items: center; border-radius: 50%; font-size: 10px; color: #fff; }
+.badge.done .ic { background: var(--good); }
+.badge.failed .ic { background: var(--critical); }
+.badge.running .ic { background: var(--s1); }
+.badge.pending .ic { background: transparent; border: 1.5px dashed var(--muted); }
+.badge.running .ic::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #fff; animation: blink 1.2s infinite; }
+@keyframes blink { 50% { opacity: .25; } }
+
+/* pipeline map */
+.map { position: relative; margin-top: 16px; padding: 22px 18px 58px; }
+.map svg.edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.lanes { position: relative; display: grid; grid-template-columns: 1fr 1.25fr 1.15fr 1.25fr 0.95fr 1fr; gap: 34px; align-items: center; }
+.col { display: flex; flex-direction: column; gap: 18px; }
+.node { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; cursor: pointer;
+        transition: border-color .2s, box-shadow .2s, transform .1s; min-height: 92px; }
+.node:hover { border-color: var(--axis); }
+.node.sel { outline: 2px solid var(--s1); outline-offset: 1px; }
+.node.running { border-color: var(--s1); box-shadow: 0 0 0 4px var(--s1-soft); }
+.node.failed { border-color: var(--critical); }
+.node .nm { font-weight: 600; display: flex; justify-content: space-between; gap: 6px; align-items: baseline; }
+.node .sub { font-size: 11px; color: var(--muted); }
+.node .kv { margin-top: 6px; font-size: 12px; color: var(--ink-2); min-height: 18px; font-variant-numeric: tabular-nums; }
+.node .kv b { color: var(--ink); }
+.node.decide { border-radius: 10px; border-style: dashed; }
+.bar { height: 4px; border-radius: 4px; background: var(--grid); overflow: hidden; margin-top: 6px; }
+.bar > i { display: block; height: 100%; background: var(--s1); border-radius: 4px; transition: width .6s ease; }
+.bar.done > i { background: var(--good); }
+.edge { fill: none; stroke: var(--axis); stroke-width: 1.5; }
+.edge.active { stroke: var(--s1); stroke-width: 2; stroke-dasharray: 6 5; animation: flow 0.9s linear infinite; }
+.edge.done { stroke: var(--ink-2); }
+.edge.loop { stroke-dasharray: 3 4; }
+.edge.loop.taken { stroke: var(--s2); stroke-width: 2; stroke-dasharray: none; }
+@keyframes flow { to { stroke-dashoffset: -11; } }
+.edge-label { font-size: 11px; fill: var(--muted); }
+.edge-label.taken { fill: var(--ink-2); font-weight: 600; }
+
+/* panel */
+.panel-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.panel-head h2 { font-size: 16px; margin: 0; }
+.panel-head .muted { color: var(--muted); font-size: 12px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.tile { background: var(--surface-2); border-radius: 10px; padding: 10px 12px; }
+.tile .v { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
+.tile .v small { font-size: 13px; color: var(--muted); font-weight: 500; }
+.tile .l { font-size: 12px; color: var(--ink-2); }
+.sec { margin-top: 16px; }
+.sec h4 { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+.muted { color: var(--muted); }
+.mono { font-family: var(--mono); font-size: 12px; }
+.ex { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; font-size: 12.5px; animation: fadein .5s; }
+.ex .u { color: var(--ink-2); }
+.ex .a { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; margin-top: 4px; }
+.ex .r { color: var(--ink-2); }
+.ex .r b { color: var(--ink); }
+@keyframes fadein { from { opacity: 0; transform: translateY(-3px); } }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 800px) { .two { grid-template-columns: 1fr; } }
+table.t { border-collapse: collapse; width: 100%; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+table.t th { text-align: left; font-weight: 600; color: var(--ink-2); border-bottom: 1px solid var(--grid); padding: 5px 6px; }
+table.t td { border-bottom: 1px solid var(--grid); padding: 5px 6px; }
+table.t td.n, table.t th.n { text-align: right; }
+.delta-good { color: var(--good-text); }
+.delta-bad { color: var(--critical); }
+ul.plain { margin: 4px 0; padding-left: 18px; }
+.kvlist { display: grid; grid-template-columns: 150px 1fr; gap: 4px 12px; font-size: 13px; }
+.kvlist dt { color: var(--ink-2); }
+.kvlist dd { margin: 0; }
+.callout { border-left: 3px solid var(--s1); background: var(--surface-2); padding: 10px 12px; border-radius: 0 8px 8px 0; }
+.callout.warn { border-color: var(--warning); }
+.callout.stop { border-color: var(--good); }
+.callout.loop { border-color: var(--s2); }
+
+/* activity feed */
+.feed { max-height: 560px; overflow: auto; margin: 0 -6px; }
+.ev { display: grid; grid-template-columns: 54px 1fr; gap: 8px; padding: 6px; border-radius: 6px; font-size: 12.5px; }
+.ev:first-child { animation: fadein .5s; }
+.ev .ts { color: var(--muted); font-variant-numeric: tabular-nums; }
+.ev .st { font-weight: 600; text-transform: uppercase; font-size: 10.5px; letter-spacing: .04em; color: var(--ink-2); margin-right: 4px; }
+.ev.failed .st { color: var(--critical); }
+.ev.decision { background: var(--surface-2); }
+
+/* charts */
+.chart { position: relative; }
+.chart svg { display: block; width: 100%; overflow: visible; }
+.chart .gridline { stroke: var(--grid); stroke-width: 1; }
+.chart .axis { stroke: var(--axis); stroke-width: 1; }
+.chart text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.chart text.lbl { fill: var(--ink-2); font-size: 11.5px; }
+.chart text.val { fill: var(--ink); font-size: 11.5px; font-weight: 600; }
+.legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: var(--ink-2); margin-bottom: 6px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+.legend i.line { height: 3px; border-radius: 2px; vertical-align: 3px; width: 14px; }
+.tip { position: fixed; pointer-events: none; z-index: 50; background: var(--surface); border: 1px solid var(--border); box-shadow: 0 6px 20px rgba(0,0,0,.12);
+       border-radius: 8px; padding: 7px 9px; font-size: 12px; display: none; min-width: 120px; font-variant-numeric: tabular-nums; }
+.tip .h { font-weight: 600; margin-bottom: 3px; }
+.tip .row { display: flex; gap: 8px; justify-content: space-between; color: var(--ink-2); }
+.tip .row b { color: var(--ink); }
+.tip i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
+
+/* new task */
+.overlay { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 40; display: none; overflow: auto; }
+.overlay.show { display: block; }
+.sheet { max-width: 1100px; margin: 30px auto; background: var(--surface); border-radius: 14px; border: 1px solid var(--border); padding: 20px 22px; }
+.sheet h2 { margin: 0 0 4px; }
+.steps { display: flex; gap: 8px; margin: 12px 0 16px; font-size: 12px; color: var(--muted); }
+.steps span.on { color: var(--ink); font-weight: 600; }
+.form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 18px; }
+.form .full { grid-column: 1 / -1; }
+.f label { display: block; font-size: 12px; font-weight: 600; color: var(--ink-2); margin-bottom: 4px; }
+.f .hint { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
+.f input, .f select, .f textarea { width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px; background: var(--page); }
+.f textarea { min-height: 70px; resize: vertical; }
+.f textarea.code { font-family: var(--mono); font-size: 12px; min-height: 110px; }
+fieldset { border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px 14px; margin: 0; }
+legend { font-size: 12px; font-weight: 650; color: var(--ink-2); padding: 0 6px; }
+.q { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; background: var(--surface-2); }
+.q .why { font-size: 12px; color: var(--muted); margin: 2px 0 6px; }
+.msgs { font-size: 12.5px; }
+.msgs .err { color: var(--critical); }
+.msgs .wrn { color: var(--ink-2); }
+.msgs .err::before { content: "✗ "; font-weight: 700; }
+.msgs .wrn::before { content: "! "; font-weight: 700; color: var(--serious); }
+pre.cmd { background: var(--surface-2); padding: 8px 10px; border-radius: 8px; overflow: auto; font-size: 12px; }
+.empty { text-align: center; padding: 70px 20px; color: var(--ink-2); }
+.empty h2 { color: var(--ink); }
+</style>
+</head>
+<body>
+<div class="top">
+  <div class="brand">Fine-tuning collective <small>ScienceClaw · live</small></div>
+  <select id="pipeSel" class="btn" title="Pipeline"></select>
+  <span id="live" class="live"><span class="dot"></span><span id="liveTxt">offline</span></span>
+  <div class="spacer"></div>
+  <button class="btn" id="themeBtn" title="Toggle light/dark" aria-label="Toggle light or dark theme">◐</button>
+  <button class="btn" id="simBtn" title="Run a fake pipeline (no GPU, no API calls) to see the dashboard move">▶ Simulate demo run</button>
+  <button class="btn primary" id="newBtn">＋ New task</button>
+</div>
+
+<div class="wrap" id="app">
+  <div class="empty" id="empty" style="display:none">
+    <h2>No pipelines yet</h2>
+    <p>Start with <b>＋ New task</b> to write a task spec (M1), or press <b>▶ Simulate demo run</b> to watch a fake run end to end.</p>
+  </div>
+  <div id="main" style="display:none">
+    <div class="hero">
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;gap:10px;align-items:center"><h1 class="title" id="title"></h1><span id="status"></span></div>
+        <p class="task" id="task"></p>
+        <div class="chips" id="chips"></div>
+      </div>
+      <div class="hero-stats">
+        <div><div class="v" id="loopV">–</div><div class="l">loop</div></div>
+        <div><div class="v" id="elapsedV">–</div><div class="l">elapsed</div></div>
+        <div><div class="v" id="bestV">–</div><div class="l">best dev score</div></div>
+      </div>
+    </div>
+
+    <div class="card map" id="map">
+      <svg class="edges" id="edges"></svg>
+      <div class="lanes" id="lanes"></div>
+    </div>
+
+    <div class="grid2">
+      <div class="card" id="panel"></div>
+      <div class="card"><h3>Activity</h3><div class="feed" id="feed"></div></div>
+    </div>
+
+    <div class="card" style="margin-top:16px" id="loopsCard">
+      <h3>Across loops</h3>
+      <div class="two"><div id="loopChart"></div><div id="loopList"></div></div>
+    </div>
+  </div>
+</div>
+
+<div class="tip" id="tip"></div>
+
+<!-- New task (M1) -->
+<div class="overlay" id="ov">
+  <div class="sheet">
+    <div style="display:flex;align-items:center;gap:10px">
+      <h2 style="flex:1">New fine-tuning task</h2>
+      <select class="btn" id="exSel"><option value="">Load an example…</option></select>
+      <button class="btn" id="closeOv">Close</button>
+    </div>
+    <div class="steps"><span id="st1" class="on">1 · Describe the goal</span>›<span id="st2">2 · Answer questions</span>›<span id="st3">3 · Check the spec</span>›<span id="st4">4 · Start</span></div>
+
+    <div class="f full">
+      <label for="goal">What should the small model get better at?</label>
+      <textarea id="goal" placeholder="e.g. Read a clinical-trial abstract and return the drug, condition, phase, number of participants and outcome as JSON."></textarea>
+      <div class="hint">M1 turns this into a task spec and asks only the questions that change it. Without an API key on the server you get a template to fill in by hand.</div>
+    </div>
+    <div style="margin:10px 0 16px;display:flex;gap:8px;align-items:center">
+      <button class="btn primary" id="draftBtn">Draft spec</button><span id="draftMsg" class="muted"></span>
+    </div>
+
+    <div id="qBox"></div>
+
+    <div class="form" id="specForm" style="display:none">
+      <fieldset class="full"><legend>Task</legend>
+        <div class="form">
+          <div class="f"><label>Title</label><input id="f_title"></div>
+          <div class="f"><label>Domain</label><input id="f_domain"></div>
+          <div class="f full"><label>Task <span class="muted">(required)</span></label><textarea id="f_task"></textarea></div>
+          <div class="f full"><label>Input: what the model receives</label><input id="f_in_desc"><div class="hint">e.g. "One PubMed abstract, 100–400 words"</div></div>
+        </div>
+      </fieldset>
+      <fieldset class="full"><legend>Output format (I/O)</legend>
+        <div class="form">
+          <div class="f"><label>Output type</label>
+            <select id="f_out_type"><option value="text">text: free-form reply</option><option value="json">json: a JSON object</option><option value="label">label: one of a fixed list</option><option value="number">number</option></select></div>
+          <div class="f"><label>Format regex <span class="muted">(optional)</span></label><input id="f_regex" class="mono" placeholder="^ANSWER: .+\nWHY: .+$"></div>
+          <div class="f full" id="w_schema"><label>JSON schema</label><textarea id="f_schema" class="code"></textarea><div class="hint">Keys the reply must have. Used for the format check and per-field scoring.</div></div>
+          <div class="f full" id="w_labels"><label>Allowed labels <span class="muted">(comma-separated)</span></label><input id="f_labels"></div>
+          <div class="f full"><label>Exact reply format (io_format) <span class="muted">(required: the generator and verifier read this)</span></label><textarea id="f_io"></textarea></div>
+        </div>
+      </fieldset>
+      <fieldset><legend>What good looks like</legend>
+        <div class="f"><label>Success criteria <span class="muted">(one per line)</span></label><textarea id="f_crit"></textarea></div>
+        <div class="f" style="margin-top:10px"><label>Edge cases <span class="muted">(one per line; data generation rotates over them)</span></label><textarea id="f_edge"></textarea></div>
+        <div class="f" style="margin-top:10px"><label>Subtopics for coverage <span class="muted">(comma-separated)</span></label><input id="f_topics"></div>
+      </fieldset>
+      <fieldset><legend>Scoring &amp; stopping</legend>
+        <div class="form">
+          <div class="f"><label>Scoring method</label>
+            <select id="f_method"><option>exact_match</option><option>label_accuracy</option><option>numeric</option><option>json_field_f1</option><option>regex</option><option>judge</option></select></div>
+          <div class="f"><label>Target score (0–1)</label><input id="f_target" type="number" step="0.01" min="0" max="1"></div>
+          <div class="f full" id="w_rubric"><label>Judge rubric</label><textarea id="f_rubric"></textarea></div>
+          <div class="f"><label>Max loops</label><input id="f_loops" type="number" min="1" max="5"></div>
+          <div class="f"><label>Training examples</label><input id="f_n" type="number" min="10"></div>
+          <div class="f"><label>Dev items <span class="muted">(scored every loop)</span></label><input id="f_ndev" type="number"></div>
+          <div class="f"><label>Held-out items <span class="muted">(scored once)</span></label><input id="f_nho" type="number"></div>
+          <div class="f"><label>Max API $</label><input id="f_usd" type="number"></div>
+          <div class="f"><label>Max GPU hours</label><input id="f_gpu" type="number" step="0.5"></div>
+        </div>
+      </fieldset>
+      <fieldset class="full"><legend>Real examples (recommended)</legend>
+        <div class="f"><label>One per line: <span class="mono">input =&gt; ideal output</span></label><textarea id="f_seeds" class="code"></textarea>
+        <div class="hint">Real examples go into the held-out set, so the final score isn't measured only on generated data.</div></div>
+      </fieldset>
+      <fieldset class="full"><legend>Models</legend>
+        <div class="form">
+          <div class="f"><label>Student (fine-tuned)</label><input id="f_m_student"></div>
+          <div class="f"><label>Data generator (M2)</label><input id="f_m_generator"></div>
+          <div class="f"><label>Verifier (M3)</label><input id="f_m_verifier"></div>
+          <div class="f"><label>Benchmark writer (M5)</label><input id="f_m_bench"></div>
+          <div class="f"><label>Judge (M7)</label><input id="f_m_judge"></div>
+        </div>
+      </fieldset>
+      <div class="full card" style="background:var(--surface-2)">
+        <div class="msgs" id="valMsgs"></div>
+        <details style="margin-top:8px"><summary class="muted">task_spec.json preview</summary><pre class="cmd" id="specPreview"></pre></details>
+      </div>
+      <div class="full" style="display:flex;gap:8px">
+        <button class="btn primary" id="createBtn">Create pipeline</button>
+        <button class="btn" id="simSpecBtn">▶ Simulate with this spec</button>
+        <button class="btn" id="dlBtn">Download task_spec.json</button>
+      </div>
+      <div class="full" id="createOut"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+// ---------------- utilities ----------------
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmtPct = (x) => x == null ? "–" : (x * 100).toFixed(1) + "%";
+const fmtNum = (x, d=0) => x == null ? "–" : Number(x).toLocaleString(undefined, {maximumFractionDigits: d, minimumFractionDigits: d});
+const fmtDur = (s) => { if (s == null) return "–"; s = Math.max(0, Math.round(s)); const h = Math.floor(s/3600), m = Math.floor(s%3600/60), x = s%60;
+  return h ? `${h}h ${String(m).padStart(2,"0")}m` : m ? `${m}m ${String(x).padStart(2,"0")}s` : `${x}s`; };
+const timeOf = (iso) => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit", second:"2-digit"}); };
+const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const ICON = {done: "✓", failed: "✕", running: "", pending: ""};
+const LABEL = {done: "Done", failed: "Failed", running: "Running", pending: "Waiting", idle: "Idle"};
+const badge = (st) => `<span class="badge ${st}"><span class="ic">${ICON[st] ?? ""}</span>${LABEL[st] ?? st}</span>`;
+
+// Fixed series identity (categorical order, never by rank)
+const SYSTEMS = [
+  {key: "tuned", name: "Tuned (LoRA)", short: "Tuned", color: "--s1"},
+  {key: "base_fewshot", name: "Base few-shot", short: "Few-shot", color: "--s2"},
+  {key: "base_zeroshot", name: "Base zero-shot", short: "Zero-shot", color: "--s3"},
+  {key: "teacher", name: "Teacher (ceiling)", short: "Teacher", color: "--s4"},
+];
+
+// ---------------- tooltip ----------------
+const tip = $("tip");
+function showTip(ev, html) { tip.innerHTML = html; tip.style.display = "block";
+  const w = tip.offsetWidth, h = tip.offsetHeight; let x = ev.clientX + 14, y = ev.clientY + 14;
+  if (x + w > innerWidth - 8) x = ev.clientX - w - 14; if (y + h > innerHeight - 8) y = ev.clientY - h - 14;
+  tip.style.left = x + "px"; tip.style.top = y + "px"; }
+function hideTip() { tip.style.display = "none"; }
+
+// ---------------- charts (hand-rolled SVG) ----------------
+function niceTicks(lo, hi, n=4) { if (hi <= lo) hi = lo + 1; const span = hi - lo, step0 = span / n, mag = Math.pow(10, Math.floor(Math.log10(step0)));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => span / s <= n) || 10 * mag;
+  const t = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) t.push(+v.toFixed(10)); return t; }
+
+// Line chart with crosshair tooltip. series: [{name, color, points:[{x,y}], dots:boolean}]
+function lineChart(el, series, o = {}) {
+  const W = el.clientWidth || 600, H = o.height || 220, m = {l: 40, r: 14, t: 10, b: 26};
+  const all = series.flatMap(s => s.points);
+  if (!all.length) { el.innerHTML = `<div class="muted" style="padding:30px 0;text-align:center">${esc(o.empty || "No data yet")}</div>`; return; }
+  const xMax = Math.max(o.xMax || 0, ...all.map(p => p.x)), xMin = Math.min(...all.map(p => p.x));
+  const ys = all.map(p => p.y).concat((o.refs || []).map(r => r.y));
+  let yMin = Math.min(...ys), yMax = Math.max(...ys);
+  if (o.yZero) yMin = 0; const pad = (yMax - yMin) * 0.08 || 0.1; yMin = o.yZero ? 0 : yMin - pad; yMax += pad;
+  const X = v => m.l + (v - xMin) / Math.max(1e-9, xMax - xMin) * (W - m.l - m.r), Y = v => H - m.b - (v - yMin) / (yMax - yMin) * (H - m.t - m.b);
+  const yt = niceTicks(yMin, yMax, 4).filter(v => v >= yMin && v <= yMax);
+  let xt = niceTicks(xMin, xMax, 6).filter(v => v >= xMin && v <= xMax);
+  if (o.xInt) xt = [...new Set(xt.map(Math.round))];
+  let s = `<svg viewBox="0 0 ${W} ${H}" height="${H}" role="img" aria-label="${esc(o.aria || "line chart")}">`;
+  yt.forEach(v => { s += `<line class="gridline" x1="${m.l}" x2="${W - m.r}" y1="${Y(v)}" y2="${Y(v)}"/><text x="${m.l - 6}" y="${Y(v) + 4}" text-anchor="end">${fmtNum(v, o.yDigits ?? 2)}</text>`; });
+  s += `<line class="axis" x1="${m.l}" x2="${W - m.r}" y1="${H - m.b}" y2="${H - m.b}"/>`;
+  xt.forEach(v => { s += `<text x="${X(v)}" y="${H - 8}" text-anchor="middle">${fmtNum(v)}</text>`; });
+  if (o.xLabel) s += `<text x="${W - m.r}" y="${H - 8}" text-anchor="end" class="lbl">${esc(o.xLabel)}</text>`;
+  (o.refs || []).forEach(r => { s += `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(r.y)}" y2="${Y(r.y)}" stroke="var(${r.color || "--muted"})" stroke-dasharray="4 4" stroke-width="1.5"/>
+      <text x="${m.l + 4}" y="${Y(r.y) - 5}" class="lbl">${esc(r.label)}</text>`; });
+  series.forEach(se => { if (!se.points.length) return;
+    const d = se.points.map((p, i) => `${i ? "L" : "M"}${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join("");
+    s += `<path d="${d}" fill="none" stroke="var(${se.color})" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    if (se.dots || se.points.length < 12) se.points.forEach(p => { s += `<circle cx="${X(p.x)}" cy="${Y(p.y)}" r="${se.dots ? 4 : 2.5}" fill="var(${se.color})" stroke="var(--surface)" stroke-width="2"/>`; });
+    const last = se.points[se.points.length - 1];
+    if (o.endLabels) s += `<text x="${X(last.x) + 6}" y="${Y(last.y) + 4}" class="val">${fmtNum(last.y, o.yDigits ?? 2)}</text>`;
+  });
+  s += `<line id="xh" class="axis" y1="${m.t}" y2="${H - m.b}" x1="0" x2="0" style="display:none" stroke-dasharray="3 3"/>`;
+  s += `<rect x="${m.l}" y="${m.t}" width="${W - m.l - m.r}" height="${H - m.t - m.b}" fill="transparent" class="hit"/></svg>`;
+  el.innerHTML = (series.length > 1 ? `<div class="legend">${series.map(se => `<span><i class="line" style="background:var(${se.color})"></i>${esc(se.name)}</span>`).join("")}</div>` : "") + `<div class="chart">${s}</div>`;
+  const svg = el.querySelector("svg"), hit = svg.querySelector(".hit"), xh = svg.querySelector("#xh");
+  hit.addEventListener("mousemove", ev => { const r = svg.getBoundingClientRect(), px = (ev.clientX - r.left) * W / r.width;
+    const xv = xMin + (px - m.l) / (W - m.l - m.r) * (xMax - xMin);
+    const rows = series.map(se => { let best = null; se.points.forEach(p => { if (!best || Math.abs(p.x - xv) < Math.abs(best.x - xv)) best = p; }); return {se, p: best}; }).filter(r => r.p);
+    if (!rows.length) return; const xs = rows[0].p.x; xh.setAttribute("x1", X(xs)); xh.setAttribute("x2", X(xs)); xh.style.display = "";
+    showTip(ev, `<div class="h">${esc(o.xName || "x")} ${fmtNum(xs)}</div>` + rows.map(r => `<div class="row"><span><i style="background:var(${r.se.color})"></i>${esc(r.se.name)}</span><b>${fmtNum(r.p.y, o.yDigits ?? 3)}</b></div>`).join("")); });
+  hit.addEventListener("mouseleave", () => { xh.style.display = "none"; hideTip(); });
+}
+
+// Vertical bars with 95% CI whiskers + optional target line. items: [{name,color,score,ci:[lo,hi],note}]
+function barCI(el, items, o = {}) {
+  const W = el.clientWidth || 500, H = o.height || 220, m = {l: 36, r: o.target != null ? 58 : 10, t: 16, b: 34};
+  const Y = v => H - m.b - v * (H - m.t - m.b), bw = Math.min(56, (W - m.l - m.r) / items.length * 0.55), gap = (W - m.l - m.r) / items.length;
+  let s = `<svg viewBox="0 0 ${W} ${H}" height="${H}" role="img" aria-label="${esc(o.aria || "scores")}">`;
+  [0, .25, .5, .75, 1].forEach(v => { s += `<line class="gridline" x1="${m.l}" x2="${W - m.r}" y1="${Y(v)}" y2="${Y(v)}"/><text x="${m.l - 6}" y="${Y(v) + 4}" text-anchor="end">${v * 100}%</text>`; });
+  items.forEach((it, i) => { const cx = m.l + gap * (i + .5), x = cx - bw / 2;
+    if (it.score == null) { s += `<text x="${cx}" y="${Y(0) - 6}" text-anchor="middle">pending</text>`; }
+    else { const y = Y(it.score), h = Y(0) - y, r = Math.min(4, h);
+      s += `<path d="M${x},${Y(0)} V${y + r} Q${x},${y} ${x + r},${y} H${x + bw - r} Q${x + bw},${y} ${x + bw},${y + r} V${Y(0)} Z" fill="var(${it.color})" opacity="${it.faded ? .45 : 1}" data-i="${i}" class="b"/>`;
+      if (it.ci) s += `<path d="M${cx},${Y(it.ci[0])} V${Y(it.ci[1])} M${cx - 6},${Y(it.ci[0])} H${cx + 6} M${cx - 6},${Y(it.ci[1])} H${cx + 6}" stroke="var(--ink)" stroke-width="1.3" opacity=".7"/>`;
+      s += `<text x="${cx}" y="${Y(it.ci ? it.ci[1] : it.score) - 6}" text-anchor="middle" class="val">${fmtPct(it.score)}</text>`; }
+    s += `<text x="${cx}" y="${H - 18}" text-anchor="middle" class="lbl">${esc(it.short || it.name)}</text>`;
+    if (it.note) s += `<text x="${cx}" y="${H - 4}" text-anchor="middle">${esc(it.note)}</text>`; });
+  s += `<line class="axis" x1="${m.l}" x2="${W - m.r}" y1="${Y(0)}" y2="${Y(0)}"/>`;
+  if (o.target != null) s += `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(o.target)}" y2="${Y(o.target)}" stroke="var(--ink-2)" stroke-dasharray="5 4" stroke-width="1.5"/><text x="${W - m.r + 4}" y="${Y(o.target) - 2}" class="lbl">target</text><text x="${W - m.r + 4}" y="${Y(o.target) + 11}" class="lbl">${fmtPct(o.target)}</text>`;
+  el.innerHTML = `<div class="chart">${s}</svg></div>`;
+  el.querySelectorAll(".b").forEach(b => { b.addEventListener("mousemove", ev => { const it = items[+b.dataset.i];
+    showTip(ev, `<div class="h"><i style="background:var(${it.color})"></i>${esc(it.name)}</div><div class="row"><span>score</span><b>${fmtPct(it.score)}</b></div>` +
+      (it.ci ? `<div class="row"><span>95% CI</span><b>${fmtPct(it.ci[0])} – ${fmtPct(it.ci[1])}</b></div>` : "") + (it.tipExtra || "")); });
+    b.addEventListener("mouseleave", hideTip); });
+}
+
+// Horizontal bars. rows: [{label, values:[{name,color,v}]}], one or two series.
+function hbars(el, rows, o = {}) {
+  if (!rows.length) { el.innerHTML = `<div class="muted">${esc(o.empty || "No data yet")}</div>`; return; }
+  const W = el.clientWidth || 500, labelW = Math.min(230, W * 0.42), nS = rows[0].values.length, bh = nS > 1 ? 9 : 12, rowH = nS * bh + (nS - 1) * 2 + 14;
+  const H = rows.length * rowH + 6, max = o.max ?? Math.max(1e-9, ...rows.flatMap(r => r.values.map(v => v.v || 0)));
+  const X = v => (v / max) * (W - labelW - 54);
+  let s = `<svg viewBox="0 0 ${W} ${H}" height="${H}" role="img" aria-label="${esc(o.aria || "bars")}">`;
+  rows.forEach((r, i) => { const y0 = i * rowH + 6;
+    const maxc = Math.floor((labelW - 8) / 6.4), lbl = r.label.length > maxc ? r.label.slice(0, maxc - 1) + "…" : r.label;
+    s += `<text x="0" y="${y0 + (rowH - 14) / 2 + 4}" class="lbl"><title>${esc(r.label)}</title>${esc(lbl)}</text>`;
+    r.values.forEach((v, j) => { const y = y0 + j * (bh + 2), w = Math.max(v.v ? 2 : 0, X(v.v || 0));
+      s += `<rect x="${labelW}" y="${y}" width="${w}" height="${bh}" rx="3" fill="var(${v.color})" class="b" data-i="${i}"/>`;
+      s += `<text x="${labelW + w + 5}" y="${y + bh - 1}" class="val" style="font-size:10.5px">${o.pct ? fmtPct(v.v) : fmtNum(v.v)}</text>`; }); });
+  el.innerHTML = (nS > 1 ? `<div class="legend">${rows[0].values.map(v => `<span><i style="background:var(${v.color})"></i>${esc(v.name)}</span>`).join("")}</div>` : "") + `<div class="chart">${s}</svg></div>`;
+  el.querySelectorAll(".b").forEach(b => { b.addEventListener("mousemove", ev => { const r = rows[+b.dataset.i];
+    showTip(ev, `<div class="h">${esc(r.label)}</div>` + r.values.map(v => `<div class="row"><span><i style="background:var(${v.color})"></i>${esc(v.name)}</span><b>${o.pct ? fmtPct(v.v) : fmtNum(v.v)}</b></div>`).join("") + (r.extra || "")); });
+    b.addEventListener("mouseleave", hideTip); });
+}
+
+// ---------------- state + live connection ----------------
+let S = null, PID = null, ES = null, SEL = null, USER_SEL = false;
+const STAGES = [
+  {key: "spec", name: "Task spec", sub: "M1 · prompt verification"},
+  {key: "data", name: "Training data", sub: "L1 · M2 generate · M3 verify · M4 format"},
+  {key: "bench", name: "Benchmark", sub: "L2 · M5 generate · M6 verify · splits"},
+  {key: "train", name: "Trainer", sub: "LoRA · finetune-submit / status"},
+  {key: "eval", name: "Evaluation", sub: "L3 · M7 task · M8 general"},
+  {key: "decide", name: "Iterate?", sub: "Evaluator"},
+  {key: "output", name: "Output", sub: "held-out · HF Hub · model card"},
+];
+
+async function loadPipelines(selectId) {
+  const r = await fetch("/api/pipelines").then(r => r.json()).catch(() => ({pipelines: []}));
+  const sel = $("pipeSel"); sel.innerHTML = "";
+  r.pipelines.forEach(p => { const o = document.createElement("option"); o.value = p.pipeline_id; o.textContent = `${p.title || p.pipeline_id} · ${p.pipeline_id.slice(-15)}`; sel.appendChild(o); });
+  if (!r.pipelines.length) { $("empty").style.display = ""; $("main").style.display = "none"; sel.style.display = "none"; return; }
+  sel.style.display = ""; $("empty").style.display = "none";
+  const want = selectId || new URLSearchParams(location.hash.slice(1)).get("p") || r.pipelines[0].pipeline_id;
+  sel.value = r.pipelines.some(p => p.pipeline_id === want) ? want : r.pipelines[0].pipeline_id;
+  connect(sel.value);
+}
+
+function connect(pid) {
+  const hp = new URLSearchParams(location.hash.slice(1));
+  if (ES) ES.close(); PID = pid; S = null; SEL = null; USER_SEL = false;
+  $("main").style.display = "";
+  if (hp.get("once") && hp.get("p") === pid) { // static snapshot (screenshots, slow links): no live stream
+    SEL = hp.get("stage") || null; USER_SEL = !!SEL; $("liveTxt").textContent = "snapshot";
+    fetch("/api/state?p=" + encodeURIComponent(pid)).then(r => r.json()).then(s => { S = s; render(); });
+    return;
+  }
+  history.replaceState(null, "", "#p=" + encodeURIComponent(pid));
+  ES = new EventSource("/api/stream?p=" + encodeURIComponent(pid));
+  ES.addEventListener("state", e => { S = JSON.parse(e.data); render(); setLive(true); });
+  ES.onerror = () => setLive(false);
+  ES.onopen = () => setLive(true);
+}
+function setLive(on) { $("live").classList.toggle("on", on); $("liveTxt").textContent = on ? "live" : "reconnecting…"; }
+
+// ---------------- derived helpers ----------------
+const curLoop = () => S.loops[S.loops.length - 1] || {};
+const latestJob = () => S.train[S.train.length - 1];
+function bestDev() { let b = null; S.loops.forEach(l => { const v = l.eval_report?.systems?.tuned?.score; if (v != null && (b == null || v > b)) b = v; }); return b; }
+function nodeSummary(k) {
+  const st = S.stages[k].status;
+  if (k === "spec") { const sp = S.spec; return {kv: `<b>${esc(sp.output?.type || "text")}</b> output · ${esc(sp.scoring?.method || "")}`, pct: st === "done" ? 1 : null}; }
+  if (k === "data") { const d = S.data; if (!d.target) return {kv: st === "done" ? esc(S.stages.data.msg) : "waiting for spec"};
+    return {kv: `<b>${fmtNum(d.kept)}</b> / ${fmtNum(d.target)} examples · ${fmtPct(d.reject_rate)} rejected`, pct: Math.min(1, d.kept / d.target)}; }
+  if (k === "bench") { const p = S.bench.progress || {}, sp = S.bench.splits || {};
+    if (sp.dev && sp.heldout) return {kv: `<b>${sp.dev.n}</b> dev · <b>${sp.heldout.n}</b> held-out`, pct: 1};
+    if (p.total) return {kv: `<b>${fmtNum(p.done)}</b> / ${fmtNum(p.total)} items`, pct: p.done / p.total}; return {kv: "waiting"}; }
+  if (k === "train") { const j = latestJob(); if (!j) return {kv: "waiting for data"};
+    const last = j.loss[j.loss.length - 1];
+    if (j.state === "done") return {kv: `loss <b>${fmtNum(j.metrics?.train_loss, 3)}</b> · ${fmtDur(j.elapsed_s)}`, pct: 1};
+    return {kv: `step <b>${fmtNum(j.step)}</b>/${fmtNum(j.max_steps)}${last ? ` · loss <b>${fmtNum(last.loss, 3)}</b>` : ""}`, pct: j.max_steps ? j.step / j.max_steps : null}; }
+  if (k === "eval") { const l = curLoop(), p = l.eval_progress, r = l.eval_report;
+    if (p && p.state === "running") return {kv: `${esc(p.phase || "")} · <b>${fmtNum(p.done)}</b>/${fmtNum(p.total)}`, pct: p.total ? p.done / p.total : null};
+    if (r) return {kv: `tuned <b>${fmtPct(r.systems.tuned.score)}</b> vs few-shot ${fmtPct(r.systems.base_fewshot.score)}`, pct: 1};
+    return {kv: "waiting for adapter"}; }
+  if (k === "decide") { const d = curLoop().decision; if (!d) return {kv: st === "running" ? "checking stop rules…" : "after evaluation"};
+    return {kv: `<b>${esc(d.action.replace(/_/g, " "))}</b>`, pct: 1}; }
+  if (k === "output") { if (S.final) return {kv: `held-out <b>${fmtPct(S.final.heldout?.systems?.tuned?.score)}</b>`, pct: 1};
+    return {kv: st === "running" ? esc(S.stages.output.msg) : "when the loop stops"}; }
+  return {kv: ""};
+}
+
+// ---------------- render ----------------
+function render() {
+  if (!S) return;
+  if (!USER_SEL) SEL = S.active_stages.find(s => s !== "spec") || (S.final ? "output" : lastDoneStage());
+  $("title").textContent = S.title || S.pipeline_id;
+  $("status").innerHTML = badge(S.status === "idle" ? "pending" : S.status).replace("Waiting", "Idle");
+  $("task").textContent = S.spec.task || "";
+  const sp = S.spec, mdl = sp.models || {};
+  $("chips").innerHTML = [
+    ["student", (mdl.student || "").split("/").pop()], ["generator", mdl.generator], ["verifier", mdl.verifier],
+    ["bench", mdl.bench_writer], ["judge", mdl.judge], ["target", sp.targets?.target_score != null ? fmtPct(sp.targets.target_score) : null],
+  ].filter(c => c[1]).map(c => `<span class="chip">${c[0]} <b>${esc(c[1])}</b></span>`).join("");
+  $("loopV").textContent = `${S.loop}${S.max_loops ? " / " + S.max_loops : ""}`;
+  $("bestV").textContent = fmtPct(bestDev());
+  renderMap(); renderPanel(); renderFeed(); renderLoops();
+}
+function lastDoneStage() { let last = "spec"; STAGES.forEach(s => { if (S.stages[s.key].status === "done") last = s.key; }); return last; }
+
+setInterval(() => { if (!S) return; const t0 = Date.parse(S.created_at);
+  if (S.status === "done" || S.status === "failed") $("elapsedV").textContent = fmtDur(S.elapsed_s);
+  else if (!isNaN(t0)) $("elapsedV").textContent = fmtDur((Date.now() - t0) / 1000); }, 1000);
+
+function renderMap() {
+  const cols = [["spec"], ["data", "bench"], ["train"], ["eval"], ["decide"], ["output"]];
+  const lanes = $("lanes");
+  if (!lanes.dataset.built) {
+    lanes.innerHTML = cols.map(c => `<div class="col">${c.map(k => { const s = STAGES.find(x => x.key === k);
+      return `<div class="node ${k === "decide" ? "decide" : ""}" id="n_${k}" data-k="${k}" tabindex="0" role="button" aria-label="${s.name}">
+        <div class="nm"><span>${s.name}</span><span class="st"></span></div><div class="sub">${s.sub}</div><div class="kv"></div><div class="bar"><i style="width:0"></i></div></div>`; }).join("")}</div>`).join("");
+    lanes.querySelectorAll(".node").forEach(n => { const pick = () => { SEL = n.dataset.k; USER_SEL = true; render(); };
+      n.addEventListener("click", pick); n.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } }); });
+    lanes.dataset.built = "1";
+    new ResizeObserver(() => S && drawEdges()).observe($("map"));
+  }
+  STAGES.forEach(s => { const n = $("n_" + s.key), st = S.stages[s.key].status, sum = nodeSummary(s.key);
+    n.className = `node ${s.key === "decide" ? "decide" : ""} ${st} ${SEL === s.key ? "sel" : ""}`;
+    n.querySelector(".st").innerHTML = badge(st);
+    n.querySelector(".kv").innerHTML = sum.kv || "";
+    const bar = n.querySelector(".bar"); bar.style.visibility = sum.pct == null ? "hidden" : "visible"; bar.className = "bar " + (st === "done" ? "done" : "");
+    bar.firstElementChild.style.width = ((sum.pct || 0) * 100).toFixed(1) + "%"; });
+  drawEdges();
+}
+
+function drawEdges() {
+  const svg = $("edges"), map = $("map").getBoundingClientRect();
+  const R = k => { const r = $("n_" + k).getBoundingClientRect(); return {l: r.left - map.left, r: r.right - map.left, t: r.top - map.top, b: r.bottom - map.top, cy: (r.top + r.bottom) / 2 - map.top, cx: (r.left + r.right) / 2 - map.left}; };
+  const st = k => S.stages[k].status;
+  const cls = (a, b) => st(b) === "running" ? "edge active" : (st(a) === "done" && st(b) !== "pending") ? "edge done" : "edge";
+  const curve = (a, b) => { const x1 = a.r, y1 = a.cy, x2 = b.l - 6, y2 = b.cy, mx = (x1 + x2) / 2; return `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`; };
+  const E = [["spec", "data"], ["spec", "bench"], ["data", "train"], ["train", "eval"], ["bench", "eval"], ["eval", "decide"], ["decide", "output"]];
+  let s = `<defs><marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--axis)"/></marker>
+           <marker id="ahA" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--s1)"/></marker>
+           <marker id="ahL" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--s2)"/></marker></defs>`;
+  E.forEach(([a, b]) => { const c = cls(a, b); s += `<path class="${c}" d="${curve(R(a), R(b))}" marker-end="url(#${c.includes("active") ? "ahA" : "ah"})"/>`; });
+  // loop-back paths under the map: decide -> train (training issue), decide -> data (data issue)
+  const d = R("decide"), tr = R("train"), da = R("data"), H = $("map").clientHeight;
+  const actions = S.loops.map(l => l.decision?.action).filter(Boolean);
+  const tookTrain = actions.includes("retrain"), tookData = actions.includes("regenerate_data");
+  const yT = H - 34, yD = H - 14;
+  s += `<path class="edge loop ${tookTrain ? "taken" : ""}" d="M${d.cx},${d.b} V${yT} H${tr.cx} V${tr.b + 6}" marker-end="url(#${tookTrain ? "ahL" : "ah"})"/>`;
+  s += `<text class="edge-label ${tookTrain ? "taken" : ""}" x="${(d.cx + tr.cx) / 2}" y="${yT - 5}" text-anchor="middle">training issue → new hyperparameters</text>`;
+  // data loop: under everything, up the gap left of the data/bench column, into the data node's left side
+  const xg = da.l - 14;
+  s += `<path class="edge loop ${tookData ? "taken" : ""}" d="M${d.cx + 10},${d.b} V${yD} H${xg} V${da.t + 18} H${da.l - 6}" marker-end="url(#${tookData ? "ahL" : "ah"})"/>`;
+  s += `<text class="edge-label ${tookData ? "taken" : ""}" x="${(d.cx + xg) / 2}" y="${yD - 5}" text-anchor="middle">data issue → failure categories only, never test items</text>`;
+  svg.innerHTML = s;
+}
+
+function renderFeed() {
+  const ev = S.events.slice().reverse().filter(e => e.type !== "progress" || e.msg);
+  $("feed").innerHTML = ev.map(e => `<div class="ev ${e.type}"><span class="ts">${timeOf(e.ts)}</span><span><span class="st">${esc(e.stage)}${e.loop ? " · L" + e.loop : ""}</span>${esc(e.type === "link" ? "linked " + e.key : e.msg)}</span></div>`).join("") || `<div class="muted">No events yet.</div>`;
+}
+
+function renderLoops() {
+  const pts = S.loops.filter(l => l.eval_report).map(l => ({x: l.loop, y: l.eval_report.systems.tuned.score}));
+  const r0 = S.loops.find(l => l.eval_report)?.eval_report;
+  const refs = [];
+  if (S.spec.targets?.target_score != null) refs.push({y: S.spec.targets.target_score, label: "target", color: "--ink-2"});
+  if (r0) refs.push({y: r0.systems.base_fewshot.score, label: "base few-shot", color: "--s2"});
+  lineChart($("loopChart"), [{name: "Tuned dev score", color: "--s1", points: pts, dots: true}],
+    {height: 200, xName: "loop", refs, xInt: true, endLabels: true, yDigits: 2, xMax: Math.max(S.max_loops || 3, 1), empty: "The first evaluation will appear here.", aria: "Tuned dev score per loop"});
+  $("loopList").innerHTML = S.loops.map(l => { const d = l.decision, r = l.eval_report;
+    const kind = !d ? "" : d.action === "stop" ? "stop" : "loop";
+    return `<div class="callout ${kind}" style="margin-bottom:8px"><b>Loop ${l.loop}</b> ${r ? `· tuned ${fmtPct(r.systems.tuned.score)}` : ""}
+      ${d ? `<div><b>${esc(d.action.replace(/_/g, " "))}</b>: ${esc(d.reason)}</div><div class="muted" style="font-size:12px">rule: ${esc(d.rule)}</div>` : `<div class="muted">${S.loop === l.loop ? "in progress…" : ""}</div>`}</div>`; }).join("");
+}
+
+// ---------------- stage panels ----------------
+function renderPanel() {
+  const k = SEL || "spec", s = STAGES.find(x => x.key === k), st = S.stages[k];
+  const head = `<div class="panel-head"><h2>${s.name}</h2>${badge(st.status)}<span class="muted">${esc(s.sub)}</span></div>`;
+  const body = {spec: pSpec, data: pData, bench: pBench, train: pTrain, eval: pEval, decide: pDecide, output: pOutput}[k]();
+  const scrollers = {}; document.querySelectorAll("#panel [data-keep]").forEach(e => scrollers[e.dataset.keep] = e.scrollTop);
+  $("panel").innerHTML = head + body.html;
+  document.querySelectorAll("#panel [data-keep]").forEach(e => e.scrollTop = scrollers[e.dataset.keep] || 0);
+  body.after && body.after();
+}
+
+function pSpec() {
+  const sp = S.spec, li = a => (a || []).map(x => `<li>${esc(x)}</li>`).join("");
+  return {html: `<dl class="kvlist">
+    <dt>Task</dt><dd>${esc(sp.task)}</dd>
+    <dt>Input</dt><dd>${esc(sp.input?.description || "–")}</dd>
+    <dt>Output type</dt><dd><b>${esc(sp.output?.type)}</b>${sp.output?.format_regex ? ` · regex <span class="mono">${esc(sp.output.format_regex)}</span>` : ""}</dd>
+    <dt>Reply format</dt><dd>${esc(sp.io_format)}</dd>
+    <dt>Scoring</dt><dd>${esc(sp.scoring?.method)} · format check: ${esc(sp.scoring?.format_check)}${sp.scoring?.judge_rubric ? `<div class="muted">${esc(sp.scoring.judge_rubric)}</div>` : ""}</dd>
+    <dt>Stop when</dt><dd>score ≥ ${fmtPct(sp.targets?.target_score)} · gain &lt; ${fmtPct(sp.targets?.min_gain)} · ${sp.targets?.max_loops} loops · budget $${sp.budget?.max_api_usd} / ${sp.budget?.max_gpu_hours} GPU h</dd>
+    <dt>Data / bench</dt><dd>${fmtNum(sp.n_examples)} training examples · ${sp.benchmark?.n_dev} dev · ${sp.benchmark?.n_heldout} held-out · ${(sp.seed_examples || []).length} real examples</dd>
+  </dl>
+  <div class="two sec"><div><h4>Success criteria</h4><ul class="plain">${li(sp.success_criteria)}</ul></div><div><h4>Edge cases</h4><ul class="plain">${li(sp.edge_cases)}</ul></div></div>
+  ${sp.output?.json_schema ? `<div class="sec"><h4>JSON schema</h4><pre class="cmd">${esc(JSON.stringify(sp.output.json_schema, null, 2))}</pre></div>` : ""}
+  <div class="sec muted mono">${esc(S.dir)}/task_spec.json</div>`};
+}
+
+function pData() {
+  const d = S.data;
+  if (!d.target) return {html: `<p class="muted">${esc(S.stages.data.msg || "No data run linked yet.")}</p><p class="muted">DataGen links its run with <span class="mono">python3 -m ftc.cli link &lt;pipeline&gt; data_run_dir &lt;run_dir&gt;</span>.</p>`};
+  const rate = d.sec_per_example, left = Math.max(0, d.target - d.kept);
+  const tiles = `<div class="tiles">
+    <div class="tile"><div class="v">${fmtNum(d.kept)}<small> / ${fmtNum(d.target)}</small></div><div class="l">verified examples</div><div class="bar ${d.done ? "done" : ""}"><i style="width:${Math.min(100, d.kept / d.target * 100)}%"></i></div></div>
+    <div class="tile"><div class="v">${fmtNum(d.rejected)}</div><div class="l">rejected by M3 (${fmtPct(d.reject_rate)})</div></div>
+    <div class="tile"><div class="v">${d.done ? "✓" : rate ? fmtDur(left * rate) : "–"}</div><div class="l">${d.done ? "complete" : "time left (est.)"}</div></div>
+    <div class="tile"><div class="v">${d.train_examples != null ? fmtNum(d.train_examples) : "–"}</div><div class="l">in train.jsonl after M4</div></div></div>`;
+  const fr = d.format_report ? `<div class="sec"><h4>M4 format &amp; contamination check</h4><table class="t"><tr><th>read</th><th class="n">exact dups</th><th class="n">near dups</th><th class="n">contaminated (vs benchmark)</th></tr>
+    <tr><td>${fmtNum(d.format_report.read)}</td><td class="n">${fmtNum(d.format_report.exact_duplicates)}</td><td class="n">${fmtNum(d.format_report.near_duplicates)}</td><td class="n">${fmtNum(d.format_report.contaminated)}</td></tr></table></div>` : "";
+  const ex = d.recent_examples.map(e => `<div class="ex"><div class="u">${esc(e.user)}</div><div class="a">${esc(e.assistant)}</div></div>`).join("") || `<div class="muted">–</div>`;
+  const rj = d.recent_rejects.map(e => `<div class="ex"><div class="r"><b>${esc(e.reason)}</b></div><div class="muted" style="font-size:12px">${esc(e.focus)} · ${esc(e.user)}</div></div>`).join("") || `<div class="muted">None yet.</div>`;
+  return {html: tiles + `<div class="two"><div><h4>Latest verified examples <span class="muted">(live)</span></h4><div data-keep="ex" style="max-height:330px;overflow:auto">${ex}</div></div>
+    <div><h4>Latest rejects and why</h4><div data-keep="rj" style="max-height:150px;overflow:auto">${rj}</div><h4 style="margin-top:12px">Rejects by edge case</h4><div id="rjChart"></div></div></div>` + fr +
+    `<div class="sec muted mono">${esc(d.run_dir)}</div>`,
+    after: () => hbars($("rjChart"), Object.entries(d.rejects_by_focus).sort((a, b) => b[1] - a[1]).map(([k, v]) => ({label: k, values: [{name: "rejects", color: "--s2", v}]})), {aria: "Rejected examples per edge case", empty: "No rejects yet."})};
+}
+
+function pBench() {
+  const b = S.bench, p = b.progress || {}, sp = b.splits || {}, rep = b.report;
+  let html = `<div class="tiles">
+    <div class="tile"><div class="v">${fmtNum(p.done)}<small> / ${fmtNum(p.total)}</small></div><div class="l">items written + checked</div><div class="bar ${p.state === "done" ? "done" : ""}"><i style="width:${p.total ? p.done / p.total * 100 : 0}%"></i></div></div>
+    <div class="tile"><div class="v">${fmtNum(p.metrics?.rejected ?? rep?.n_rejected)}</div><div class="l">rejected by M6</div></div>
+    <div class="tile"><div class="v">${p.metrics?.two_model_agreement != null ? fmtPct(p.metrics.two_model_agreement) : "–"}</div><div class="l">answer-key agreement</div></div>
+    <div class="tile"><div class="v">${sp.dev ? sp.dev.n : "–"} <small>/ ${sp.heldout ? sp.heldout.n : "–"}</small></div><div class="l">dev / held-out items</div></div></div>`;
+  if (rep) html += `<p class="muted">Written by <b>${esc(rep.writer_model)}</b>, answer keys checked by ${esc((rep.checker_models || []).join(" + "))}. ${rep.dropped_too_easy ? `Dropped ${rep.dropped_too_easy} items the base model always gets right.` : ""} Fixed across loops.</p>`;
+  html += `<div class="two"><div><h4>Dev items per category</h4><div id="bCat"></div></div><div><h4>Held-out items by source</h4><div id="bSrc"></div><p class="muted" style="font-size:12px">Real items (user examples, PubMed, HF datasets) keep the final score honest: they are not written by the same kind of model as the training data.</p></div></div>
+    <div class="sec"><h4>Sample dev items</h4><div id="bSample" class="muted">${sp.dev ? "Loading…" : "Available when the benchmark is ready."}</div></div>`;
+  return {html, after: () => {
+    hbars($("bCat"), Object.entries(sp.dev?.by_category || {}).map(([k, v]) => ({label: k, values: [{name: "items", color: "--s1", v}]})), {aria: "Dev items per category", empty: "–"});
+    hbars($("bSrc"), Object.entries(sp.heldout?.by_source || {}).map(([k, v]) => ({label: k, values: [{name: "items", color: "--s1", v}]})), {aria: "Held-out items by source", empty: "–"});
+    if (sp.dev) fetch(`/api/file?p=${encodeURIComponent(PID)}&path=bench/dev.jsonl&n=4`).then(r => r.json()).then(r => { const el = $("bSample"); if (!el || !r.lines) return;
+      el.classList.remove("muted"); el.innerHTML = r.lines.map(l => { try { const it = JSON.parse(l); return `<div class="ex"><div class="muted" style="font-size:11.5px">${esc(it.id)} · ${esc(it.category)} · ${esc(it.difficulty)} · ${esc(it.source)}</div><div class="u">${esc(it.question)}</div><div class="a">${esc(it.reference)}</div></div>`; } catch { return ""; } }).join(""); });
+  }};
+}
+
+function pTrain() {
+  if (!S.train.length) return {html: `<p class="muted">No training job yet. The Trainer starts when the training data is ready.</p>`};
+  const jobs = S.train, j = jobs[jobs.length - 1], c = j.config || {}, last = j.loss[j.loss.length - 1];
+  const tiles = `<div class="tiles">
+    <div class="tile"><div class="v">${fmtNum(j.step)}<small> / ${fmtNum(j.max_steps)}</small></div><div class="l">step · epoch ${fmtNum(j.epoch, 2)}</div><div class="bar ${j.state === "done" ? "done" : ""}"><i style="width:${j.max_steps ? j.step / j.max_steps * 100 : 0}%"></i></div></div>
+    <div class="tile"><div class="v">${last ? fmtNum(last.loss, 3) : "–"}</div><div class="l">latest train loss</div></div>
+    <div class="tile"><div class="v">${j.eval_loss.length ? fmtNum(j.eval_loss[j.eval_loss.length - 1].loss, 3) : "–"}</div><div class="l">latest eval loss</div></div>
+    <div class="tile"><div class="v">${j.state === "done" ? fmtDur(j.elapsed_s) : fmtDur(j.eta_s)}</div><div class="l">${j.state === "done" ? "runtime" : "time left (est.)"}</div></div></div>`;
+  const cfg = `<div class="chips">${[["model", (c.model || "").split("/").pop()], ["LoRA r", c.rank], ["α", c.alpha], ["lr", c.lr], ["epochs", c.epochs], ["batch", c.batch_size && `${c.batch_size}×${c.grad_accum}`], ["examples", j.dataset?.n_examples]].filter(x => x[1] != null).map(x => `<span class="chip">${x[0]} <b>${esc(x[1])}</b></span>`).join("")}</div>`;
+  const hist = `<table class="t" style="margin-top:12px"><tr><th>loop</th><th>job</th><th>config</th><th class="n">train loss</th><th class="n">eval loss</th><th>state</th></tr>${jobs.map(x =>
+    `<tr><td>${x.loop ?? "–"}</td><td class="mono">${esc(x.job_id)}</td><td>lr ${esc(x.config?.lr)} · ${esc(x.config?.epochs)} ep · r ${esc(x.config?.rank)}</td><td class="n">${fmtNum(x.metrics?.train_loss, 3)}</td><td class="n">${fmtNum(x.metrics?.eval_loss, 3)}</td><td>${badge({starting: "running", running: "running", done: "done", failed: "failed"}[x.state] || "pending")}</td></tr>`).join("")}</table>`;
+  const err = j.error ? `<div class="callout warn sec"><b>Training failed:</b> <span class="mono">${esc(j.error)}</span></div>` : "";
+  return {html: tiles + cfg + `<div class="sec"><h4>Loss by training step (live) · loop ${j.loop ?? "?"}</h4><div id="lossChart"></div></div>` + err + `<div class="sec"><h4>All training runs</h4>${hist}</div>`,
+    after: () => lineChart($("lossChart"), [
+      {name: "Train loss", color: "--s1", points: j.loss.map(p => ({x: p.step, y: p.loss}))},
+      {name: "Eval loss", color: "--s2", points: j.eval_loss.map(p => ({x: p.step, y: p.loss})), dots: true}],
+      {height: 240, xName: "step", xMax: j.max_steps, yDigits: 2, aria: "Training loss by step", empty: "Waiting for the first loss value…"})};
+}
+
+function pEval() {
+  const l = curLoop(), p = l.eval_progress, r = l.eval_report, sp = S.spec;
+  let html = "";
+  if (p && p.state === "running") {
+    const sysP = p.metrics?.systems || {};
+    html += `<div class="callout" style="margin-bottom:12px"><b>${esc(p.phase || "Scoring")}</b> on the ${esc(p.split || "dev")} split · ${fmtNum(p.done)}/${fmtNum(p.total)} ${esc(p.unit || "")}</div>
+      <table class="t"><tr><th>system</th><th style="width:45%">progress</th><th class="n">running score</th></tr>${SYSTEMS.map(s => { const v = sysP[s.key] || {};
+        return `<tr><td><i style="display:inline-block;width:9px;height:9px;border-radius:2px;background:var(${s.color});margin-right:6px"></i>${s.name}${v.cached ? ' <span class="muted">(cached)</span>' : ""}</td>
+        <td><div class="bar ${v.done === v.total && v.total ? "done" : ""}"><i style="width:${v.total ? v.done / v.total * 100 : 0}%"></i></div></td><td class="n"><b>${fmtPct(v.running_score)}</b></td></tr>`; }).join("")}</table>`;
+    const g = p.metrics?.general || [];
+    if (g.length) html += genTable(g);
+  }
+  const rep = r || (p && p.state === "running" ? null : null);
+  if (rep) {
+    const v = rep.verdict || {};
+    html += `<div class="two" style="margin-top:6px"><div><h4>Dev score (${rep.n_items} items, 95% CI)</h4><div id="eBars"></div>
+      <p style="font-size:12.5px">${v.beats_fewshot ? "✓ Beats base few-shot outside the confidence interval." : "✗ Not yet clearly better than base few-shot."} ${v.meets_target ? "✓ Target met." : ""} ${v.forgetting ? "<b>! General ability dropped (forgetting).</b>" : ""}</p></div>
+      <div><h4>Per category: base few-shot vs tuned</h4><div id="eCat"></div></div></div>
+      ${rep.general?.length ? genTable(rep.general) : ""}
+      <div class="two sec"><div><h4>By source</h4><div id="eSrc"></div></div>
+      <div><h4>Where the tuned model fails</h4><table class="t"><tr><th>category</th><th class="n">failures</th><th class="n">share</th></tr>${(rep.failure_categories || []).map(f => `<tr><td>${esc(f.category)}</td><td class="n">${fmtNum(f.n_fail)}</td><td class="n">${fmtPct(f.share)}</td></tr>`).join("")}</table>
+      <p class="muted" style="font-size:12px">Only category names go back to DataGen, never the test items.</p></div></div>`;
+  } else if (!p) html += `<p class="muted">Evaluation starts when the adapter is ready.</p>`;
+  return {html, after: () => { if (!rep) return;
+    barCI($("eBars"), SYSTEMS.map(s => ({name: s.name, short: s.short, color: s.color, score: rep.systems[s.key]?.score, ci: rep.systems[s.key]?.ci95,
+      tipExtra: `<div class="row"><span>format ok</span><b>${fmtPct(rep.systems[s.key]?.format_rate)}</b></div><div class="row"><span>model</span><b>${esc(rep.systems[s.key]?.model || "")}</b></div>`})),
+      {target: sp.targets?.target_score, aria: "Dev scores by system with confidence intervals"});
+    hbars($("eCat"), (rep.by_category || []).map(c => ({label: c.category, values: [{name: "Base few-shot", color: "--s2", v: c.base_fewshot}, {name: "Tuned", color: "--s1", v: c.tuned}], extra: `<div class="row"><span>items</span><b>${c.n}</b></div>`})), {pct: true, max: 1, aria: "Per-category scores"});
+    hbars($("eSrc"), (rep.by_source || []).map(c => ({label: c.source, values: [{name: "Base few-shot", color: "--s2", v: c.base_fewshot}, {name: "Tuned", color: "--s1", v: c.tuned}]})), {pct: true, max: 1, aria: "Scores by data source"}); }};
+}
+function genTable(g) {
+  const lim = S.spec.targets?.max_general_drop ?? 0.03;
+  return `<div class="sec"><h4>M8 general ability (lm-eval-harness) <span class="muted">flags forgetting if a drop exceeds ${fmtPct(lim)}</span></h4><table class="t"><tr><th>suite</th><th class="n">items</th><th class="n">base</th><th class="n">tuned</th><th class="n">change</th></tr>${g.map(x => {
+    const bad = x.delta < -lim; return `<tr><td>${esc(x.task.toUpperCase())}</td><td class="n">${fmtNum(x.n)}</td><td class="n">${fmtPct(x.base)}</td><td class="n">${fmtPct(x.tuned)}</td>
+    <td class="n ${bad ? "delta-bad" : x.delta >= 0 ? "delta-good" : ""}">${bad ? "▼ " : x.delta >= 0 ? "▲ " : ""}${(x.delta * 100).toFixed(1)} pts</td></tr>`; }).join("")}</table></div>`;
+}
+
+function pDecide() {
+  const items = S.loops.map(l => { const d = l.decision; if (!d) return "";
+    const nxt = d.retrain_config ? `<div class="sec"><h4>New hyperparameters → Trainer</h4><pre class="cmd">${esc(JSON.stringify(d.retrain_config, null, 2))}</pre></div>`
+      : d.data_feedback ? `<div class="sec"><h4>Feedback → DataGen</h4><pre class="cmd">${esc(JSON.stringify(d.data_feedback, null, 2))}</pre></div>` : "";
+    return `<div class="callout ${d.action === "stop" ? "stop" : "loop"}" style="margin-bottom:12px"><div><b>Loop ${d.loop}: ${esc(d.action.replace(/_/g, " "))}</b> <span class="muted">· rule: ${esc(d.rule)}</span></div><div>${esc(d.reason)}</div>${nxt}</div>`; }).join("");
+  return {html: (items || `<p class="muted">The Evaluator decides after each evaluation.</p>`) + `<div class="sec"><h4>Stop rules</h4><ul class="plain">
+    <li>tuned dev score ≥ target (${fmtPct(S.spec.targets?.target_score)})</li><li>gain over the last loop &lt; ${fmtPct(S.spec.targets?.min_gain)} (inside the dev CI)</li>
+    <li>${S.spec.targets?.max_loops} loops done</li><li>budget spent ($${S.spec.budget?.max_api_usd} API, ${S.spec.budget?.max_gpu_hours} GPU h)</li></ul></div>`};
+}
+
+function pOutput() {
+  const f = S.final;
+  if (!f) return {html: `<p class="muted">${esc(S.stages.output.msg || "When the loop stops, the held-out set is scored once and the adapter, eval report and model card are published.")}</p>`};
+  const ho = f.heldout?.systems || {};
+  return {html: `<div class="tiles"><div class="tile"><div class="v">${fmtPct(ho.tuned?.score)}</div><div class="l">held-out, tuned</div></div>
+      <div class="tile"><div class="v">${fmtPct(ho.base_fewshot?.score)}</div><div class="l">held-out, base few-shot</div></div>
+      <div class="tile"><div class="v">${fmtPct(ho.teacher?.score)}</div><div class="l">held-out, teacher</div></div>
+      <div class="tile"><div class="v">${f.best_loop}</div><div class="l">best loop</div></div></div>
+    <div class="two"><div><h4>Held-out score (scored once)</h4><div id="oBars"></div></div><div><h4>By source</h4><div id="oSrc"></div></div></div>
+    <dl class="kvlist sec"><dt>Adapter</dt><dd class="mono">${esc(f.adapter_path)}</dd><dt>Hugging Face</dt><dd>${f.hub_url ? `<a href="${esc(f.hub_url)}" target="_blank" rel="noopener">${esc(f.hub_url)}</a>` : "–"}</dd>
+    <dt>Model card</dt><dd class="mono">${esc(f.model_card_path)}</dd><dt>Infinite post</dt><dd>${f.infinite_post_url ? `<a href="${esc(f.infinite_post_url)}" target="_blank" rel="noopener">${esc(f.infinite_post_url)}</a>` : "–"}</dd></dl>`,
+    after: () => { barCI($("oBars"), SYSTEMS.map(s => ({name: s.name, short: s.short, color: s.color, score: ho[s.key]?.score, ci: ho[s.key]?.ci95})), {target: S.spec.targets?.target_score, aria: "Held-out scores"});
+      hbars($("oSrc"), (f.heldout?.by_source || []).map(c => ({label: c.source, values: [{name: "Base few-shot", color: "--s2", v: c.base_fewshot}, {name: "Tuned", color: "--s1", v: c.tuned}]})), {pct: true, max: 1}); }};
+}
+
+// ---------------- top bar actions ----------------
+$("pipeSel").addEventListener("change", e => connect(e.target.value));
+$("simBtn").addEventListener("click", () => simulate(null));
+async function simulate(spec) {
+  $("simBtn").disabled = true;
+  const r = await fetch("/api/simulate", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({spec, speed: 1.5})}).then(r => r.json());
+  $("simBtn").disabled = false;
+  if (r.pipeline_id) { closeOv(); loadPipelines(r.pipeline_id); } else alert(r.error || "Could not start the simulator");
+}
+setInterval(async () => { // pick up pipelines created elsewhere
+  const r = await fetch("/api/pipelines").then(r => r.json()).catch(() => null); if (!r) return;
+  const sel = $("pipeSel"); if (r.pipelines.length !== sel.options.length) loadPipelines(PID);
+}, 5000);
+
+// ---------------- New task (M1) ----------------
+let SPEC = null, QUESTIONS = [];
+const ov = $("ov");
+$("newBtn").addEventListener("click", () => { ov.classList.add("show"); $("goal").focus(); });
+$("closeOv").addEventListener("click", closeOv);
+function closeOv() { ov.classList.remove("show"); }
+fetch("/api/examples").then(r => r.json()).then(r => { Object.entries(r.examples || {}).forEach(([k, v]) => { const o = document.createElement("option"); o.value = k; o.textContent = v.title || k; $("exSel").appendChild(o); });
+  $("exSel").addEventListener("change", e => { const ex = r.examples[e.target.value]; if (!ex) return; $("goal").value = ex.task; SPEC = ex; QUESTIONS = []; $("qBox").innerHTML = ""; fillForm(ex); step(3); validate(); });
+  const hp = new URLSearchParams(location.hash.slice(1));   // #new=1&ex=chem_qa opens the form directly
+  if (hp.get("new")) { ov.classList.add("show"); if (hp.get("ex") && r.examples[hp.get("ex")]) { $("exSel").value = hp.get("ex"); $("exSel").dispatchEvent(new Event("change")); } } });
+function step(n) { [1, 2, 3, 4].forEach(i => $("st" + i).classList.toggle("on", i === n)); }
+
+$("draftBtn").addEventListener("click", async () => {
+  const goal = $("goal").value.trim(); if (!goal) { $("goal").focus(); return; }
+  $("draftBtn").disabled = true; $("draftMsg").textContent = "M1 is drafting the spec…";
+  const r = await fetch("/api/spec/draft", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({goal})}).then(r => r.json()).catch(e => ({error: String(e)}));
+  $("draftBtn").disabled = false;
+  if (r.error) { $("draftMsg").textContent = r.error; return; }
+  $("draftMsg").textContent = r.source === "llm" ? "Drafted by Claude. Answer the questions or edit the spec below." : "No LLM available on the server: template spec. Fill it in below.";
+  SPEC = r.spec; QUESTIONS = r.questions || []; fillForm(SPEC); renderQuestions(); showMsgs(r); step(QUESTIONS.length ? 2 : 3);
+});
+function renderQuestions() {
+  if (!QUESTIONS.length) { $("qBox").innerHTML = ""; return; }
+  $("qBox").innerHTML = `<h3 style="margin:0 0 8px">M1 questions <span class="muted" style="font-weight:400;font-size:12px">skip any: the default is used</span></h3>` +
+    QUESTIONS.map(q => `<div class="q"><b>${esc(q.question)}</b><div class="why">${esc(q.why || "")}</div><textarea data-q="${esc(q.id)}" placeholder="Default: ${esc(q.default || "")}" style="width:100%;min-height:44px;border:1px solid var(--border);border-radius:8px;padding:6px 8px;background:var(--page)"></textarea></div>`).join("") +
+    `<button class="btn primary" id="answerBtn" style="margin-bottom:16px">Apply answers</button>`;
+  $("answerBtn").addEventListener("click", async () => {
+    const answers = {}; document.querySelectorAll("[data-q]").forEach(t => { const q = QUESTIONS.find(x => x.id === t.dataset.q); answers[t.dataset.q] = `${q.question} -> ${t.value.trim() || q.default || ""}`; });
+    $("answerBtn").disabled = true; $("answerBtn").textContent = "Updating spec…";
+    const r = await fetch("/api/spec/draft", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({goal: $("goal").value, spec: readForm(), answers})}).then(r => r.json());
+    SPEC = r.spec; QUESTIONS = r.questions || []; fillForm(SPEC); renderQuestions(); showMsgs(r); step(3);
+  });
+}
+const lines = (s) => s.split("\n").map(x => x.trim()).filter(Boolean);
+const csv = (s) => s.split(",").map(x => x.trim()).filter(Boolean);
+function fillForm(sp) {
+  $("specForm").style.display = "";
+  const set = (id, v) => { $(id).value = v ?? ""; };
+  set("f_title", sp.title); set("f_domain", sp.domain); set("f_task", sp.task); set("f_in_desc", sp.input?.description);
+  set("f_out_type", sp.output?.type || "text"); set("f_regex", sp.output?.format_regex); set("f_schema", sp.output?.json_schema ? JSON.stringify(sp.output.json_schema, null, 2) : "");
+  set("f_labels", (sp.output?.labels || []).join(", ")); set("f_io", sp.io_format);
+  set("f_crit", (sp.success_criteria || []).join("\n")); set("f_edge", (sp.edge_cases || []).join("\n")); set("f_topics", (sp.coverage?.topics || []).join(", "));
+  set("f_method", sp.scoring?.method || "judge"); set("f_target", sp.targets?.target_score); set("f_rubric", sp.scoring?.judge_rubric); set("f_loops", sp.targets?.max_loops ?? 3);
+  set("f_n", sp.n_examples); set("f_ndev", sp.benchmark?.n_dev ?? 200); set("f_nho", sp.benchmark?.n_heldout ?? 100); set("f_usd", sp.budget?.max_api_usd ?? 20); set("f_gpu", sp.budget?.max_gpu_hours ?? 2);
+  set("f_seeds", (sp.seed_examples || []).map(e => `${e.input.replace(/\n/g, "\\n")} => ${e.output.replace(/\n/g, "\\n")}`).join("\n"));
+  const m = sp.models || {}; set("f_m_student", m.student); set("f_m_generator", m.generator); set("f_m_verifier", m.verifier); set("f_m_bench", m.bench_writer); set("f_m_judge", m.judge);
+  toggleFields();
+}
+function readForm() {
+  const sp = JSON.parse(JSON.stringify(SPEC || {})), num = id => $(id).value === "" ? null : Number($(id).value);
+  sp.title = $("f_title").value.trim(); sp.domain = $("f_domain").value.trim(); sp.task = $("f_task").value.trim(); sp.io_format = $("f_io").value.trim();
+  sp.input = Object.assign({}, sp.input, {description: $("f_in_desc").value.trim()});
+  let schema = null; const raw = $("f_schema").value.trim(); if (raw) { try { schema = JSON.parse(raw); } catch { schema = sp.output?.json_schema ?? null; } }
+  sp.output = Object.assign({}, sp.output, {type: $("f_out_type").value, format_regex: $("f_regex").value.trim() || null, json_schema: $("f_out_type").value === "json" ? schema : null,
+    labels: $("f_out_type").value === "label" ? csv($("f_labels").value) : null});
+  sp.success_criteria = lines($("f_crit").value); sp.edge_cases = lines($("f_edge").value);
+  sp.coverage = Object.assign({}, sp.coverage, {topics: csv($("f_topics").value)});
+  sp.scoring = Object.assign({}, sp.scoring, {method: $("f_method").value, judge_rubric: $("f_rubric").value.trim() || null, format_check: null});
+  if (sp.scoring.method !== "json_field_f1") sp.scoring.json_fields = null;
+  sp.targets = Object.assign({}, sp.targets, {target_score: num("f_target"), max_loops: num("f_loops")});
+  sp.n_examples = num("f_n"); sp.benchmark = Object.assign({}, sp.benchmark, {n_dev: num("f_ndev"), n_heldout: num("f_nho")});
+  sp.budget = Object.assign({}, sp.budget, {max_api_usd: num("f_usd"), max_gpu_hours: num("f_gpu")});
+  sp.seed_examples = lines($("f_seeds").value).filter(l => l.includes("=>")).map(l => { const i = l.indexOf("=>");
+    return {input: l.slice(0, i).trim().replace(/\\n/g, "\n"), output: l.slice(i + 2).trim().replace(/\\n/g, "\n"), source: "user"}; });
+  sp.models = {student: $("f_m_student").value.trim(), generator: $("f_m_generator").value.trim(), verifier: $("f_m_verifier").value.trim(), bench_writer: $("f_m_bench").value.trim(), judge: $("f_m_judge").value.trim()};
+  return sp;
+}
+function toggleFields() { const t = $("f_out_type").value; $("w_schema").style.display = t === "json" ? "" : "none"; $("w_labels").style.display = t === "label" ? "" : "none"; $("w_rubric").style.display = $("f_method").value === "judge" ? "" : "none"; }
+let vT = null;
+$("specForm").addEventListener("input", () => { toggleFields(); clearTimeout(vT); vT = setTimeout(validate, 350); });
+$("specForm").addEventListener("change", () => { toggleFields(); validate(); });
+async function validate() {
+  const r = await fetch("/api/spec/validate", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({spec: readForm()})}).then(r => r.json());
+  showMsgs(r); $("specPreview").textContent = JSON.stringify(r.spec, null, 2); $("createBtn").disabled = !!(r.errors && r.errors.length); return r;
+}
+function showMsgs(r) { $("valMsgs").innerHTML = (r.errors || []).map(e => `<div class="err">${esc(e)}</div>`).join("") + (r.warnings || []).map(w => `<div class="wrn">${esc(w)}</div>`).join("") || `<div style="color:var(--good-text)">✓ Spec is valid.</div>`; }
+$("createBtn").addEventListener("click", async () => {
+  const v = await validate(); if (v.errors?.length) return;
+  const r = await fetch("/api/pipelines", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({spec: v.spec})}).then(r => r.json());
+  if (r.errors) { showMsgs(r); return; }
+  step(4);
+  $("createOut").innerHTML = `<div class="callout stop"><b>Pipeline created:</b> <span class="mono">${esc(r.dir)}</span></div><h4>Next</h4>` +
+    r.commands.map(c => `<div style="margin-bottom:8px"><div class="muted" style="font-size:12px">${esc(c.label)}</div><pre class="cmd">${esc(c.cmd)}</pre></div>`).join("") +
+    `<button class="btn primary" id="goBtn">Open live view</button>`;
+  $("goBtn").addEventListener("click", () => { closeOv(); loadPipelines(r.pipeline_id); });
+});
+$("simSpecBtn").addEventListener("click", async () => { const v = await validate(); if (!v.errors?.length) simulate(v.spec); });
+$("dlBtn").addEventListener("click", async () => { const v = await validate(); const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(v.spec, null, 2)], {type: "application/json"})); a.download = "task_spec.json"; a.click(); });
+
+// theme: URL #theme=light|dark wins, then the saved choice, else the OS setting
+(function () { const t = new URLSearchParams(location.hash.slice(1)).get("theme") || localStorage.getItem("ftc-theme");
+  if (t) document.documentElement.dataset.theme = t; })();
+$("themeBtn").addEventListener("click", () => { const dark = document.documentElement.dataset.theme ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  document.documentElement.dataset.theme = dark ? "light" : "dark"; localStorage.setItem("ftc-theme", document.documentElement.dataset.theme); if (S) render(); });
+
+loadPipelines();
+</script>
+</body>
+</html>

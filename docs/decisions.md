@@ -105,6 +105,7 @@ Brev machine
 - Every run saves `run.json`: spec, model IDs + prompts, LoRA config, seeds, dataset SHA-256s, git commit, metrics, adapter location.
 - Eval report always shows: base zero-shot, **base few-shot (must beat this)**, teacher (ceiling), tuned, all with 95% confidence intervals.
 - **Ask a human before launching any GPU job.**
+- **Task spec v2, all hand-off file formats, the event log and the live dashboard:** `docs/spec_and_io.md`. Spec v2 is a superset of DataGen's v1 (`ftc/spec.py`); every pipeline gets a folder `~/finetuner/pipelines/<id>/` that links the DataGen run and Trainer jobs; `python3 dashboard/server.py` shows it live.
 
 ## Open: reconcile with `docs/setup-and-agent-plan.md` (Owen)
 

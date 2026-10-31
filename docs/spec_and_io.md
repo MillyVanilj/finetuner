@@ -1,0 +1,232 @@
+# Task spec, I/O formats and the live dashboard
+
+*Written 2026-10-31. This is the contract between the stages of wireframe v0.2. If you build a stage
+(BenchGen, Eval, Evaluator, ReportAgent, run_pipeline.py), read and write exactly these files. Change a format
+here first, then in code. Working reference for every format: `scripts/simulate_pipeline.py`
+(it writes all of them, without a GPU).*
+
+## 1. The big picture
+
+```
+ user goal ──M1──▶ task_spec.json ──┬──▶ DataGen (L1) ─ train.jsonl ─▶ Trainer ─ adapter ─┐
+                                    └──▶ BenchGen (L2) ─ dev.jsonl / heldout.jsonl ───────┴▶ Eval (L3) ─ eval_report.json
+                                                                                                  │
+                                         decision.json ◀── Evaluator ◀────────────────────────────┘
+                                         ├ retrain        → retrain_config.json  → Trainer
+                                         ├ regenerate_data→ data_feedback.json   → DataGen
+                                         └ stop           → held-out once → final_report.json + model card
+```
+
+Everything for one user goal lives in **one pipeline folder**. Existing run folders are *linked*, not moved:
+
+```
+$FINETUNER_DIR/pipelines/<pipeline_id>/        (FINETUNER_DIR defaults to ~/finetuner)
+  task_spec.json          the spec (v2, §2)                                   written by M1
+  pipeline.json           {pipeline_id, title, created_at, loop, links{...}}  written by ftc.pipeline
+  events.jsonl            what happened, one event per line (§4)              every stage
+  bench/                  dev.jsonl, heldout.jsonl, bench_report.json, progress.json   BenchGen
+  loops/<n>/eval/         progress.json, predictions_<system>.jsonl, eval_report.json  Eval
+  loops/<n>/              decision.json, retrain_config.json | data_feedback.json      Evaluator
+  final/                  final_report.json, model_card.md                    ReportAgent
+
+links in pipeline.json:
+  data_run_dir   [..]   ~/.scienceclaw/finetune/runs/<run_id>/   DataGen (Owen): state.json, raw.jsonl, rejects.jsonl, train.jsonl
+  train_job_id   [..]   ~/finetuner/runs/<job_id>/               Trainer: run.json, status.json, train_log.jsonl, metrics.json, adapter/
+  bench_dir             <pipeline>/bench
+```
+
+`pipeline_id` = `<spec id>-<YYYYmmdd-HHMMSS>`. A "loop" = one train + eval round; it starts at 1.
+
+## 2. Task spec v2 (`task_spec.json`)
+
+**v2 is a superset of DataGen's v1** (`skills/finetune-data-gen/examples/spec_chem.json`). The v1 fields keep their
+names and meaning, so `gen_data.py --spec task_spec.json` works unchanged. Everything new has a default, so a v1 file
+is a valid v2 file after `ftc.spec.upgrade()`.
+
+Validate / upgrade from the shell:
+```bash
+python3 -m ftc.spec path/to/spec.json             # {"ok", "errors", "warnings"}
+python3 -m ftc.spec path/to/spec_v1.json --upgrade
+```
+From Python (stdlib only): `from ftc.spec import load_spec` (returns the upgraded spec, raises on errors).
+
+| Field | Req. | Default | Read by | Meaning |
+|---|---|---|---|---|
+| `spec_version` | | `2` | all | |
+| `id`, `title`, `domain` | | from task | UI, folder name | |
+| `task` | **yes** (v1) | | M2, M3, M5, judge | What the model should learn, 1–2 sentences |
+| `io_format` | **yes** (v1) | built from `output` | M2, M3, M5 | Exact shape of the assistant reply, in words. Generators only read this string, so it must say everything |
+| `success_criteria` | **yes** (v1) | | M3, M6, judge | Checkable statements |
+| `edge_cases` | **yes** (v1) | | M2 (batch focus), M5 (category), Evaluator | Tricky situations. They double as the **failure categories** of the feedback loop |
+| `n_examples` | **yes** (v1) | | DataGen | Training examples after dedup (≥10) |
+| `system_prompt` | | `null` | DataGen, Eval | Added as a `system` message to every train and bench item |
+| `input` | | `{description, example}` | M2, M5, UI | What the model receives |
+| `output.type` | | `text` | scorer, M1 | `text` · `json` · `label` · `number` |
+| `output.json_schema` | if json | `null` | format check, field F1 | JSON Schema of the reply |
+| `output.labels` | if label | `null` | scorer | Allowed answers |
+| `output.format_regex` | | `null` | format check | e.g. `^ANSWER: .+\nWHY: .+$` |
+| `coverage.topics`, `coverage.difficulty` | | `[]`, easy/medium/hard | M2, M5 | Diversity grid |
+| `seed_examples` | | `[]` | BenchGen (held-out), M2 (few-shot) | `[{"input", "output", "source": "user"\|"real", "source_ref"}]`, the user's real examples |
+| `scoring.method` | | from output.type | Eval | `exact_match` · `label_accuracy` · `numeric` · `json_field_f1` · `regex` · `judge` |
+| `scoring.format_check` | | from output.type | Eval | `none` · `regex` · `json_schema` |
+| `scoring.json_fields` | | schema properties | Eval | Fields scored by `json_field_f1` |
+| `scoring.numeric_tolerance` | | `0.01` | Eval | Relative tolerance for `numeric` |
+| `scoring.judge_rubric` | if judge | `null` | judge | Grade against the reference with this rubric |
+| `scoring.pass_threshold` | | `0.5` | Eval | Item counts as passed if its score ≥ this |
+| `benchmark.n_dev` / `n_heldout` | | 200 / 100 | BenchGen | Dev = scored every loop. Held-out = scored once, at the end |
+| `benchmark.seed_examples_to_heldout` | | `true` | BenchGen | Put the user's real examples in held-out |
+| `benchmark.real_sources` | | `[]` | BenchGen | e.g. `["pubmed", "huggingface:<id>"]` |
+| `targets.target_score` | | `null` | Evaluator | Stop when tuned dev score ≥ this |
+| `targets.min_gain` | | `0.02` | Evaluator | Stop when gain over the last loop is smaller |
+| `targets.max_loops` | | `3` | Evaluator | |
+| `targets.max_general_drop` | | `0.03` | Evaluator | M8 drop above this = forgetting |
+| `budget.max_api_usd` / `max_gpu_hours` | | 20 / 2 | all | Hard stop |
+| `models.student/generator/verifier/bench_writer/judge` | | see `ftc/spec.py` | all | Different families per role (decisions.md, Decision 3). Validation warns if generator = judge |
+| `training` | | `{}` | Trainer (loop 1) | LoRA overrides: rank, alpha, lr, epochs… |
+| `m1` | | | UI | `{goal, answers, source}`: how M1 produced the spec |
+
+Examples: `examples/specs/chem_qa.json` (Owen's chemistry task, upgraded) and `examples/specs/pubmed_extract.json`
+(JSON extraction, field-F1 scoring).
+
+**M1 (prompt verification)** = `ftc/m1.py`. Use it from the dashboard's *New task* page, or with
+`python3 -m ftc.m1 "goal..."` in a terminal. It drafts the spec with Claude and asks at most 5 clarifying questions,
+each with a default, then applies the answers. It runs *before* the agents, because ScienceClaw can't pause to ask
+a human. Without an API key it returns a template.
+
+## 3. Hand-off files
+
+### 3.1 Training data (DataGen → Trainer): unchanged
+JSONL, one `{"messages": [{"role":"system"?}, {"role":"user"}, {"role":"assistant"}]}` per line.
+DataGen's result key is `train_path`; `finetune-submit` accepts it as `--train-path`.
+
+### 3.2 Benchmark items (BenchGen → Eval, and DataGen's contamination check)
+`bench/dev.jsonl` and `bench/heldout.jsonl`, one item per line:
+```json
+{"id": "dev-0007", "split": "dev",
+ "question": "What is the pH of 0.01 M HCl?",
+ "messages": [{"role": "system", "content": "..."}, {"role": "user", "content": "What is the pH of 0.01 M HCl?"}],
+ "reference": "ANSWER: 2.0\nWHY: HCl dissociates fully, so pH = -log(0.01) = 2.",
+ "category": "Calculations that need unit conversion",
+ "difficulty": "easy", "source": "synthetic", "source_ref": null, "base_pass_rate": null}
+```
+- `question` = plain user text. **Required**: `format_data.py --bench` reads it for the contamination check.
+- `messages` = exactly what the model is sent (no assistant turn). `reference` = the ideal reply, as a **string**
+  (for JSON tasks, the JSON text; the scorer parses it).
+- `category` ∈ `["typical cases"] + spec.edge_cases`. That makes failures map straight onto feedback categories.
+- `source`: `synthetic` · `user` (from seed_examples) · `real` (PubMed, HF…; put the id in `source_ref`).
+- `base_pass_rate`: optional, from M6's difficulty check (drop items the base model always gets right).
+
+`bench/bench_report.json`: `{n_generated, n_rejected, n_dev, n_heldout, writer_model, checker_models, dropped_too_easy, created_at}`.
+The benchmark is written **once** and stays fixed across loops.
+
+### 3.3 Predictions (Eval, optional but useful for debugging)
+`loops/<n>/eval/predictions_<system>.jsonl`: `{"id", "system", "output", "format_ok", "score", "judge": {...}|null, "latency_s"}`.
+Systems: `base_zeroshot`, `base_fewshot` (prompted with 3–5 train examples: **the baseline fine-tuning must beat**),
+`teacher` (the ceiling), `tuned`. Base and teacher scores are computed in loop 1 and reused (`"cached": true`).
+
+### 3.4 Eval report (Eval → Evaluator, UI): `loops/<n>/eval/eval_report.json`
+```json
+{"pipeline_id": "...", "loop": 2, "split": "dev", "n_items": 200, "train_job_id": "...", "adapter_path": "...",
+ "scoring": "json_field_f1",
+ "systems": {"tuned":        {"score": 0.79, "ci95": [0.73, 0.85], "format_rate": 0.97, "n": 200, "model": "...", "cached": false},
+             "base_fewshot": {...}, "base_zeroshot": {...}, "teacher": {...}},
+ "by_category": [{"category": "...", "n": 33, "base_fewshot": 0.48, "tuned": 0.71}],
+ "by_source":   [{"source": "real", "n": 60, "base_fewshot": 0.43, "tuned": 0.74}],
+ "general":     [{"task": "gsm8k", "n": 250, "base": 0.84, "tuned": 0.80, "delta": -0.04}],
+ "failure_categories": [{"category": "...", "n_fail": 12, "share": 0.29, "example_reason": "wrong value"}],
+ "verdict": {"beats_fewshot": true, "meets_target": false, "forgetting": true},
+ "created_at": "..."}
+```
+Scores are in 0–1. `ci95` = bootstrap (or normal-approximation) 95% interval. `general` is empty when M8 was skipped.
+The final held-out run writes the same shape to `heldout_report.json` with `"split": "heldout"`.
+
+### 3.5 Live eval progress (Eval → UI): `loops/<n>/eval/progress.json`
+Overwrite it every ~20 items (`Pipeline.progress("eval", ...)` does this):
+```json
+{"stage": "eval", "state": "running", "phase": "M7 task benchmark", "split": "dev", "done": 460, "total": 800,
+ "unit": "answers", "current_system": "tuned",
+ "metrics": {"systems": {"tuned": {"done": 60, "total": 200, "running_score": 0.62, "cached": false}, "...": {}},
+             "general": [ ...same rows as eval_report.general, filled as suites finish... ]},
+ "updated_at": "..."}
+```
+
+### 3.6 Evaluator decision: `loops/<n>/decision.json`
+```json
+{"loop": 1, "action": "regenerate_data", "rule": "failures concentrated in categories",
+ "reason": "58% of dev failures are in 2 categories: ...", "tuned_score": 0.66, "target_score": 0.8,
+ "data_feedback": {"categories": ["Phase not stated (phase must be null)"], "extra_examples": 150,
+                   "notes": "Category names only, never test items."},
+ "data_feedback_path": ".../loops/1/data_feedback.json"}
+```
+- `action`: `retrain` (writes `retrain_config.json` = finetune-submit's `--retrain-config-path` format:
+  `{lr, epochs, rank, …, parent_job_id, reason}`) · `regenerate_data` (writes `data_feedback.json`) · `stop`.
+- The skill's JSON output should include `retrain_config_path` or `data_feedback_path` so the ScienceClaw reactor
+  hands it to the right agent. For `stop`, output neither key.
+- `rule` names the deterministic rule that fired (table in `wireframe_v0.2_review.md` §3). The LLM only writes `reason`.
+
+### 3.7 Final report: `final/final_report.json`
+`{pipeline_id, best_loop, train_job_id, adapter_path, hub_url, infinite_post_url, heldout: {systems, by_source}, dev_history: [{loop, tuned}], model_card_path, created_at}`.
+
+### 3.8 Training progress (Trainer → UI): already exists
+`runs/<job_id>/status.json` (live), plus **new** `runs/<job_id>/train_log.jsonl`: `train_sft.py` now appends every
+Trainer log line (`{"loss", "learning_rate", "epoch", "step"}` or `{"eval_loss", ..., "step"}`), which drives the live loss curve.
+
+## 4. Events (`events.jsonl`): how a stage tells the UI what it's doing
+
+One JSON object per line, appended (never rewritten):
+```json
+{"ts": "2026-11-01T09:30:00.12Z", "stage": "train", "type": "start", "loop": 2,
+ "msg": "LoRA r=16 lr=0.0001 epochs=1 on 450 examples", "train_job_id": "20261101-093000-ab12cd"}
+```
+| key | values |
+|---|---|
+| `stage` | `spec` · `data` · `bench` · `train` · `eval` · `decide` · `output` · `pipeline` |
+| `type` | `start` · `progress` · `done` · `failed` · `link` · `metric` · `log` · `decision` |
+| `loop` | 1-based (0 for spec/bench, which run once) |
+| `msg` | one human-readable line (shown in the Activity feed) |
+| extra | anything; `link` events carry `key` + `value` |
+
+A stage needs at most **three calls**: `start`, `done`/`failed`, and one `link` to its run folder. The dashboard reads
+fine-grained progress from the files that already exist (DataGen `state.json`, Trainer `status.json` /
+`train_log.jsonl`, `progress.json`), so nobody has to emit progress events in a loop.
+
+From Python:
+```python
+import os, sys; sys.path.insert(0, os.environ.get("FINETUNER_DIR", os.path.expanduser("~/finetuner")))
+from ftc.pipeline import Pipeline
+pl = Pipeline.from_any(args.spec)          # finds the pipeline folder from the spec path (or $FTC_PIPELINE_DIR); no-op if none
+pl.emit("train", "start", "LoRA r=16 on 450 examples")
+pl.link("train_job_id", job_id, stage="train", append=True)
+pl.progress("eval", done=120, total=800, unit="answers", phase="M7 task benchmark", metrics={...})
+```
+From the shell: `python3 -m ftc.cli emit|link|loop|status <pipeline_dir> ...` (see `ftc/cli.py`).
+Calls never raise. Without a pipeline folder they do nothing, so the skills keep working stand-alone.
+
+## 5. The dashboard
+
+```bash
+cd ~/finetuner && python3 dashboard/server.py          # http://localhost:8765, stdlib only
+brev port-forward <instance> --port 8765:8765           # on your laptop, then open http://localhost:8765
+python3 scripts/simulate_pipeline.py --speed 2          # fake run to watch (or the ▶ button in the UI)
+```
+- **Pipeline map**: the wireframe as live nodes. Each node shows its status (icon + label), key number and progress
+  bar. The edge currently carrying work animates, and the two loop-back paths turn orange once the Evaluator takes
+  them. Click a node to open its panel.
+- **Stage panels**: *Data* shows verified/target, the reject rate, a live stream of the latest examples and rejects
+  with reasons, rejects per edge case, and the M4 dedup/contamination counts. *Benchmark* shows progress, items per
+  category and source, and sample items. *Trainer* shows step/ETA, a **live loss curve** (train + eval), config
+  chips and all runs. *Evaluation* shows per-system live progress with running scores, then scores with 95% CIs vs
+  target, per-category and per-source bars, M8 forgetting check and failure categories. *Iterate?* shows each
+  decision with its rule and the exact feedback sent back. *Output* shows held-out scores and links.
+- **Across loops**: tuned dev score per loop vs base few-shot and target, plus the decision history.
+- **Activity**: the event log, newest first.
+- **New task**: M1 in the browser: goal → draft → questions → editable spec form with live validation →
+  *Create pipeline* (shows the next commands) or *Simulate with this spec*.
+- `#p=<id>&once=1&stage=train&theme=light` in the URL gives a static snapshot (screenshots, slides).
+
+## 6. Open items for the team
+- BenchGen, Eval, Evaluator and ReportAgent are not built yet; build them against §3.
+- `gen_data.py` and `finetune-submit` don't emit events yet. Until they do, run them with a pipeline and link their
+  folders (`ftc.cli link`), or wrap them in `run_pipeline.py`, which can emit for them.
+- DataGen ignores the v2-only fields (seed examples, coverage topics) today. Using `seed_examples` as few-shot
+  examples and `coverage.topics` in the batch rotation is a cheap win.

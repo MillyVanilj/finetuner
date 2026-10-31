@@ -134,6 +134,9 @@ def main():
 
         class StatusCallback(TrainerCallback):
             def on_log(self, a, state, control, logs=None, **kw):
+                if logs:   # full history for the dashboard's live loss curve (status.json keeps only the last)
+                    with open(out / "train_log.jsonl", "a") as f:
+                        f.write(json.dumps({**logs, "step": state.global_step}) + "\n")
                 write_status(out, state="running", step=state.global_step, max_steps=state.max_steps,
                              epoch=state.epoch, last_log=logs or {}, elapsed_s=round(time.time() - t0))
 
