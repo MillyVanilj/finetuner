@@ -120,5 +120,5 @@ Things to fix in the setup plan (checked against ScienceClaw's code):
 - **`skills/finetune-data-gen/scripts/gen_data.py`:**
   - Defaults to `--format summary`, which prints plain text. ScienceClaw doesn't add `--format json` for you (`core/skill_executor.py:135-155`), so the output becomes `{"output": "..."}` and no next agent can chain on it. Default to JSON.
   - One LLM call for 20 examples with `max_tokens=8000` can exceed the **45 s** skill time limit. Generate in small batches, or run as a background job for larger sets.
-  - The output key `path` is too generic for chaining; use e.g. `train_jsonl_path`.
   - No verification (M3), dedup or contamination check yet: expected for a first version.
+  - *Update (Owen's db96ae9): the time limit, verification, dedup and contamination hook are now done, and the output key is `train_path` (adopted as the standard). The `--format summary` default still holds: check how it is called.*
