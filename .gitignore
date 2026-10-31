@@ -1,0 +1,19 @@
+# Secrets
+.env
+.env.*
+*_config.json
+.scienceclaw/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Large training outputs (store weights elsewhere; record their location in results/)
+*.safetensors
+*.bin
+*.pt
+checkpoints/
+wandb/
+
+.DS_Store
