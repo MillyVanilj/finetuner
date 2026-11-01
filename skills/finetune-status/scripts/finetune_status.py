@@ -116,6 +116,12 @@ def main():
         sys.exit(1)
     if args.require_done and state != "done":
         sys.exit(3)
+    # Still starting / queued / running: exit 1. The ScienceClaw reactor marks a hand-off consumed when the
+    # skill exits 0, so exiting 0 here meant the TrainAgent's train_job_id was used up by the first poll and
+    # nothing ever handed adapter_path to the EvalAgent. Exit 1 keeps it unconsumed: it is polled again next
+    # cycle until the job is done (scripts/run_pipeline.py reads "state", not the exit code).
+    if state not in ("done", "dry_run"):
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -873,36 +873,32 @@ def summary_line(r) -> str:
 
 
 def main():
-    p = argparse.ArgumentParser(description="BenchGen: verified benchmark with dev/held-out split")
-    p.add_argument("--spec", "--task-spec-path", dest="spec", default=None,
-                   help="Path to the task spec JSON (same file DataGen uses)")
-    p.add_argument("--query", default=None, help="Free-text request; a spec is drafted when --spec is not given")
-    p.add_argument("--n-items", type=int, default=None,
-                   help="Benchmark size, dev + held-out (default: spec benchmark.n_dev + n_heldout, else 200)")
-    p.add_argument("--heldout-frac", type=float, default=None,
-                   help="Share of items in held-out (default: from the spec, else 0.4)")
-    p.add_argument("--bench-dir", default=None,
-                   help="Write here (default: <pipeline>/bench inside a pipeline, else ~/.scienceclaw/finetune/bench/<run-id>)")
-    p.add_argument("--run-id", default=None, help="Benchmark name (default: spec file name or query slug)")
-    p.add_argument("--backend", default=os.environ.get("BENCHGEN_BACKEND") or "anthropic",
-                   help="LLM backend for M5/M6 (default: anthropic = Claude, team choice for the benchmark)")
-    p.add_argument("--model", default=os.environ.get("BENCHGEN_MODEL") or "claude-opus-5-5",
-                   help="Model for the anthropic backend (default: Claude Opus)")
-    p.add_argument("--verify-backend", default=os.environ.get("BENCHGEN_VERIFY_BACKEND"),
-                   help="LLM backend for M6 (default: same as --backend)")
-    p.add_argument("--batch-size", type=int, default=8)
-    p.add_argument("--time-budget", type=float,
-                   default=float(os.environ.get("BENCHGEN_TIME_BUDGET", SKILL_DEADLINE_S)),
-                   help="Seconds this call may use, from process start; 0 = no limit (run by hand)")
-    p.add_argument("--max-rounds", type=int, default=0, help="Stop after N rounds this call (0 = no limit)")
-    p.add_argument("--seed", type=int, default=1234, help="Seed for the dev/held-out split")
-    p.add_argument("--safety-file", default=None,
-                   help="Optional curated safety set (finetune-eval format, category should_refuse|should_help); "
-                        "validated and copied to bench_dir/safety.jsonl for M9")
-    p.add_argument("--foreground", action="store_true",
-                   help="Generate in this process (by hand / the background worker). "
-                        "Default: start or poll a background job")
-    p.add_argument("--format", default="json", choices=["summary", "json"])
+    # Only the pipeline hand-off input is visible in --help: the ScienceClaw reactor hands an artifact to a
+    # skill when ANY payload key matches a --flag in its --help text, and generic names (query, run_id,
+    # model, seed, ...) would match other skills' outputs and start or error-loop BenchGen. Every other
+    # option still works; they are documented in SKILL.md.
+    H = argparse.SUPPRESS
+    p = argparse.ArgumentParser(description="BenchGen (L2): task spec -> frozen dev/held-out benchmark (bench_dir). "
+                                            "Pipeline input below; all other options are listed in SKILL.md.")
+    p.add_argument("--task-spec-path", dest="spec", default=None, help="Task spec JSON (hand-off from M1)")
+    p.add_argument("--spec", dest="spec", default=None,
+                   help="Same as --task-spec-path (docs/spec_and_io.md: the spec is passed between skills as `spec`)")
+    p.add_argument("--query", default=None, help=H)
+    p.add_argument("--n-items", type=int, default=None, help=H)
+    p.add_argument("--heldout-frac", type=float, default=None, help=H)
+    p.add_argument("--bench-dir", default=None, help=H)
+    p.add_argument("--run-id", default=None, help=H)
+    p.add_argument("--backend", default=os.environ.get("BENCHGEN_BACKEND") or "anthropic", help=H)
+    p.add_argument("--model", default=os.environ.get("BENCHGEN_MODEL") or "claude-opus-5-5", help=H)
+    p.add_argument("--verify-backend", default=os.environ.get("BENCHGEN_VERIFY_BACKEND"), help=H)
+    p.add_argument("--batch-size", type=int, default=8, help=H)
+    p.add_argument("--time-budget", type=float, default=float(os.environ.get("BENCHGEN_TIME_BUDGET", SKILL_DEADLINE_S)),
+                   help=H)
+    p.add_argument("--max-rounds", type=int, default=0, help=H)
+    p.add_argument("--seed", type=int, default=1234, help=H)
+    p.add_argument("--safety-file", default=None, help=H)
+    p.add_argument("--foreground", action="store_true", help=H)
+    p.add_argument("--format", default="json", choices=["summary", "json"], help=H)
     a, unknown = p.parse_known_args()
 
     real_stdout, sys.stdout = sys.stdout, sys.stderr

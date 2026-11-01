@@ -82,9 +82,9 @@ for _ in range(6):
     sys.argv = ["gen_data.py", "--spec", str(spec_f), "--format", "json", "--parallel", "1"]
     dres = quiet(G.main)
     if dres["done"]: break
-check("DataGen auto-detected the benchmark by spec hash", dres["format"]["bench"] == str(tmp / "bench/arith"))
-check(f"contaminated rows dropped: {dres['format']['contaminated']} (exact dev, exact held-out, reworded)",
-      dres["format"]["contaminated"] == 3)
+check("DataGen auto-detected the benchmark by spec hash", dres["m4"]["bench"] == str(tmp / "bench/arith"))
+check(f"contaminated rows dropped: {dres['m4']['contaminated']} (exact dev, exact held-out, reworded)",
+      dres["m4"]["contaminated"] == 3)
 train = [json.loads(l)["messages"][0]["content"] for l in Path(dres["train_path"]).read_text().splitlines()]
 check("no benchmark prompt in train.jsonl, still 12 examples (top-up refilled)",
       not (set(train) & set(bench_prompts)) and len(train) == 12)
@@ -123,7 +123,7 @@ for f in ("dev.jsonl", "heldout.jsonl", "bench_meta.json"):
     shutil.copy(tmp / "bench/arith" / f, pipe / "bench" / f)
 r, code = run_g(["--spec", str(pspec), "--run-id", "pipe-data", "--parallel", "1"])
 check("benchmark frozen -> DataGen finishes with the pipeline benchmark", r["done"] and code == 0
-      and r["format"]["bench"] == str(pipe / "bench"))
+      and r["m4"]["bench"] == str(pipe / "bench"))
 
 # 5. stand-alone, DataGen finished BEFORE the benchmark existed -> warning; later call re-checks and refills
 G.BENCH_DIR = F.BENCH_DIR = tmp / "bench-later"
@@ -132,15 +132,43 @@ for _ in range(6):
     r, code = run_g(["--spec", str(spec_f), "--run-id", "early-data", "--parallel", "1"])
     if r["done"]: break
 check("no benchmark yet -> done, bench null, warning in the result",
-      r["done"] and r["format"]["bench"] is None and r["warnings"] and "contamination check skipped" in r["warnings"][0])
+      r["done"] and r["m4"]["bench"] is None and r["warnings"] and "contamination check skipped" in r["warnings"][0])
 shutil.copytree(tmp / "bench/arith", tmp / "bench-later/arith")
 for _ in range(6):
     r, code = run_g(["--spec", str(spec_f), "--run-id", "early-data", "--parallel", "1"])
     if r["done"] and r["batches_this_call"] == 0: break
 train2 = [json.loads(l)["messages"][0]["content"] for l in (tmp / "runs/early-data/train.jsonl").read_text().splitlines()]
 check("benchmark appears later -> next call re-checks (no LLM), drops the 2 leaks and refills to 12",
-      r["done"] and r["format"]["bench"] == str(tmp / "bench-later/arith") and not (set(train2) & set(bench_prompts))
+      r["done"] and r["m4"]["bench"] == str(tmp / "bench-later/arith") and not (set(train2) & set(bench_prompts))
       and len(train2) == 12 and not r.get("warnings"))
+
+# 6. data feedback (finetune-decide regenerate_data -> DataGen --data-feedback-path)
+fbpipe = tmp / "fbpipe"; (fbpipe / "loops" / "1").mkdir(parents=True); (fbpipe / "bench").mkdir()
+(fbpipe / "pipeline.json").write_text(json.dumps({"pipeline_id": "fbpipe", "links": {}}))
+(fbpipe / "task_spec.json").write_text(json.dumps(dict(SPEC, edge_cases=["Word problems", "Negative numbers"])))
+for f in ("dev.jsonl", "heldout.jsonl", "bench_meta.json"):
+    shutil.copy(tmp / "bench/arith" / f, fbpipe / "bench" / f)
+fbf = fbpipe / "loops" / "1" / "data_feedback.json"
+fbf.write_text(json.dumps({"categories": ["Negative numbers"], "extra_examples": 4,
+                           "notes": "More signed arithmetic. Category names only, never test items."}))
+G.BENCH_DIR = F.BENCH_DIR = tmp / "bench-none"
+leaks[:] = [bench_prompts[0]]; dfake.i = 0
+for _ in range(8):
+    r, code = run_g(["--data-feedback-path", str(fbf), "--parallel", "1"])
+    if r["done"]: break
+fspec = json.loads((fbpipe / "loops" / "2" / "task_spec_data.json").read_text())
+check("feedback spec = base + weak categories first (twice) + extra examples + notes (same as run_pipeline)",
+      fspec["edge_cases"] == ["Negative numbers", "Negative numbers", "Word problems"] and fspec["n_examples"] == 16
+      and fspec["success_criteria"][-1].startswith("More signed arithmetic") and fspec["m_feedback"]["from_loop"] == 1)
+check("feedback run id = <pipeline>-l2, the pipeline benchmark is used for the contamination check",
+      r["done"] and code == 0 and r["run_id"] == "fbpipe-l2" and r["m4"]["bench"] == str(fbpipe / "bench")
+      and r["m4"]["contaminated"] >= 1 and r["train_examples"] == 16)
+r2, code2 = run_g(["--data-feedback-path", str(fbf)])
+check("calling again with the same feedback returns the finished run (no new data)",
+      r2["done"] and r2["run_id"] == "fbpipe-l2" and r2["batches_this_call"] == 0)
+bad = tmp / "loose_feedback.json"; bad.write_text(json.dumps({"categories": ["x"]}))
+r3, code3 = run_g(["--data-feedback-path", str(bad)])
+check("feedback outside a pipeline without a spec -> clear error, exit 1", code3 == 1 and "no task spec" in r3["error"])
 
 print(f"\n{'ALL PASSED' if not fails else f'{fails} FAILED'}")
 sys.exit(1 if fails else 0)

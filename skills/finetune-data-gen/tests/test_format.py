@@ -118,6 +118,15 @@ check(f"3000 rows formatted in {dt:.2f}s (< 2 s)", dt < 2)
 
 # --- 9. gen_data top-up: M4 drops near-dups -> shortfall regenerated ---
 import gen_data
+
+# gen_data.main() exits 1 while a run is not done (the reactor contract); these tests only read stdout
+_gen_main = gen_data.main
+def _main_no_exit():
+    try:
+        _gen_main()
+    except SystemExit:
+        pass
+gen_data.main = _main_no_exit
 gen_data.RUNS_DIR = tmp / "runs"
 gen_data.jsonparse.BAD_OUTPUT_DIR = gen_data.RUNS_DIR   # bad-output log into the temp dir
 gen_data.BENCH_DIR = gen_data.RUNS_DIR / '_no_bench'   # never auto-detect real benchmarks
@@ -153,7 +162,7 @@ for _ in range(8):
 st = json.loads((tmp / "runs/topup/state.json").read_text())
 check("top-up: shortfall triggers more generation, capped at 2 top-ups, then done",
       outs[-1]["done"] and st["top_ups"] == 2 and st["raw_target"] > 10
-      and outs[-1]["train_path"] and outs[-1]["format"]["near_duplicates"] > 0)
+      and outs[-1]["train_path"] and outs[-1]["m4"]["near_duplicates"] > 0)
 print(f"      (raw targets: 10 -> {st['raw_target']}, final train_examples={outs[-1]['train_examples']})")
 
 print(f"\n{'ALL PASSED' if not fails else f'{fails} FAILED'}")

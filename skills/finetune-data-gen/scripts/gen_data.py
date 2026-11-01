@@ -314,7 +314,7 @@ def build_result(run_id, state, target, fmt, run_dir, extra=None) -> dict:
               "raw_kept": state["kept"], "rejected_total": state.get("rejected", 0),
               "unverified_total": state.get("unverified", 0),
               "pending_verify": len(read_jsonl(Path(run_dir) / "pending_verify.jsonl")),
-              "format": ({k: fmt.get(k) for k in ("read", "invalid", "exact_duplicates", "near_duplicates",
+              "m4": ({k: fmt.get(k) for k in ("read", "invalid", "exact_duplicates", "near_duplicates",
                                                   "contaminated", "bench")} if fmt else None),
               "run_dir": str(run_dir), "elapsed_s": round(time.time() - _T_START, 1)}
     result.update(extra or {})
@@ -338,33 +338,31 @@ def summary_line(result) -> str:
 
 
 def main():
-    p = argparse.ArgumentParser()
-    p.add_argument("--spec", "--task-spec-path", dest="spec", default=None,
-                   help="Path to task spec JSON (preferred; --task-spec-path is the pipeline hand-off name)")
-    p.add_argument("--query", default=None,
-                   help="Free-text fine-tuning request; used to draft a spec when --spec is not given")
-    p.add_argument("--n-examples", type=int, default=None,
-                   help="Number of training examples (overrides the spec; default 50 for --query)")
-    p.add_argument("--run-id", default=None,
-                   help="Run folder name under ~/.scienceclaw/finetune/runs (default: derived from spec/query)")
-    p.add_argument("--batch-size", type=int, default=10, help="Largest batch; smaller ones are planned near the deadline")
-    p.add_argument("--time-budget", type=float,
-                   default=float(os.environ.get("DATAGEN_TIME_BUDGET", SKILL_DEADLINE_S)),
-                   help="Seconds this call may use in total, from process start (default 27, "
-                        "or $DATAGEN_TIME_BUDGET)")
-    p.add_argument("--max-batches", type=int, default=0, help="Stop after N rounds this call (0 = no limit)")
-    p.add_argument("--parallel", type=int, default=1,
-                   help="Batches generated+verified at the same time (different focuses). "
-                        "Falls back to 1 automatically if parallel calls come back empty (rate limit)")
-    p.add_argument("--bench", default=None,
-                   help="Benchmark for the contamination check: BenchGen run id, folder or file. "
-                        "Default: a frozen BenchGen benchmark built from the same spec, if one exists. 'none' disables")
-    p.add_argument("--verify-backend", default=None,
-                   help="Optional different LLM backend for M3 (gemini/anthropic/openai). Default: same as M2 (gemini)")
-    # Default is JSON: core/skill_executor.py json.loads() stdout, and the agent never passes
-    # --format, so a text default turned every result into {"output": "<text>"}.
-    p.add_argument("--format", default="json", choices=["summary", "json"],
-                   help="json (default, machine-readable) or summary (one human-readable line)")
+    # The ScienceClaw reactor hands an artifact to a skill when ANY payload key matches a `--flag` it finds in
+    # the skill's --help text (artifacts/reactor.py _skill_input_params). Generic flags (query, run_id,
+    # n_examples, format, ...) then match other skills' outputs and start or error-loop DataGen. So --help
+    # shows ONLY the pipeline hand-off inputs; every other option still works but is documented in SKILL.md.
+    H = argparse.SUPPRESS
+    p = argparse.ArgumentParser(
+        description="DataGen (L1): task spec -> verified training data (train.jsonl). Pipeline inputs below; "
+                    "all other options are listed in SKILL.md.")
+    p.add_argument("--task-spec-path", dest="spec", default=None, help="Task spec JSON (hand-off from M1)")
+    p.add_argument("--data-feedback-path", default=None,
+                   help="data_feedback.json from finetune-decide (regenerate_data): more data for weak categories")
+    p.add_argument("--spec", dest="spec", default=None,
+                   help="Same as --task-spec-path (docs/spec_and_io.md: the spec is passed between skills as `spec`)")
+    p.add_argument("--query", default=None, help=H)
+    p.add_argument("--n-examples", type=int, default=None, help=H)
+    p.add_argument("--run-id", default=None, help=H)
+    p.add_argument("--batch-size", type=int, default=10, help=H)
+    p.add_argument("--time-budget", type=float, default=float(os.environ.get("DATAGEN_TIME_BUDGET", SKILL_DEADLINE_S)),
+                   help=H)
+    p.add_argument("--max-batches", type=int, default=0, help=H)
+    p.add_argument("--parallel", type=int, default=1, help=H)
+    p.add_argument("--bench", default=None, help=H)
+    p.add_argument("--verify-backend", default=None, help=H)
+    # Default is JSON: core/skill_executor.py json.loads() stdout, and the agent never passes --format.
+    p.add_argument("--format", default="json", choices=["summary", "json"], help=H)
     a, unknown = p.parse_known_args()   # agents sometimes add flags we don't use (e.g. --max-results)
 
     # Everything llm_client (or an abandoned call thread) prints goes to stderr; only the
@@ -386,11 +384,51 @@ def main():
         print(json.dumps(result, indent=2), flush=True)
     else:
         print(json.dumps(result, indent=2) if a.format == "json" else summary_line(result), flush=True)
-    if code or result.get("state") == "waiting_for_bench":
-        sys.exit(code or 1)        # exit 1: ScienceClaw keeps the hand-off unconsumed and calls again
+    # Not finished (or waiting for the benchmark) -> exit 1, so the ScienceClaw reactor keeps the hand-off
+    # unconsumed and calls again next cycle. Exit 0 only with a finished train_path.
+    if code or not result.get("done"):
+        sys.exit(code or 1)
+
+
+def feedback_spec(a):
+    """--data-feedback-path: build the next loop's spec exactly like scripts/run_pipeline.py regen_spec():
+    weak categories first (twice) in edge_cases, n_examples + extra_examples, notes as a success criterion.
+    data_feedback.json lives in <pipeline>/loops/<n>/, so the base spec is <pipeline>/task_spec.json and the
+    new run is <pipeline_id>-l<n+1> (the runner's naming). Category names only, never test items."""
+    fbp = Path(a.data_feedback_path).expanduser().resolve()
+    fb = json.loads(fbp.read_text())
+    pdir = next((d for d in fbp.parents if (d / "pipeline.json").exists()), None)
+    base = Path(a.spec).expanduser() if a.spec else (pdir / "task_spec.json" if pdir else None)
+    if not base or not base.exists():
+        raise ValueError(f"no task spec for {fbp}: not inside a pipeline folder; also pass --task-spec-path")
+    s = json.loads(base.read_text())
+    cats = [c for c in (fb.get("categories") or []) if c and c != "typical cases"]
+    rest = [e for e in s.get("edge_cases", []) if e not in cats]
+    s["edge_cases"] = cats + cats + rest            # listed twice: twice the batches for the weak ones
+    s["n_examples"] = int(s["n_examples"]) + int(fb.get("extra_examples") or 150)
+    if fb.get("notes"):
+        s["success_criteria"] = list(s.get("success_criteria", [])) + [str(fb["notes"])[:200]]
+    loop_dir = fbp.parent
+    try:
+        nxt = int(loop_dir.name) + 1
+    except ValueError:
+        nxt = None
+    s["m_feedback"] = {"from_loop": nxt - 1 if nxt else None, "categories": cats, "feedback_path": str(fbp)}
+    out = (pdir / "loops" / str(nxt) / "task_spec_data.json") if (pdir and nxt) else fbp.with_name("task_spec_data.json")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(s, indent=2))
+    a.spec = str(out)
+    if not a.run_id:
+        a.run_id = f"{pdir.name}-l{nxt}" if (pdir and nxt) else f"{base.stem}-fb-{__import__('hashlib').sha1(str(fbp).encode()).hexdigest()[:6]}"
+    if a.bench is None and pdir and (pdir / "bench" / "bench_meta.json").exists():
+        a.bench = str(pdir / "bench")             # the pipeline's benchmark (the spec copy's hash differs)
+    log(f"[feedback] loop {nxt}: +{int(fb.get('extra_examples') or 150)} examples, weak categories {cats}; "
+        f"spec {out}")
 
 
 def run(a) -> dict:
+    if getattr(a, "data_feedback_path", None):
+        feedback_spec(a)
     deadline = _T_START + a.time_budget
     jsonparse.BAD_OUTPUT_DIR = RUNS_DIR
     if not (a.spec or (a.query and a.query.strip())):

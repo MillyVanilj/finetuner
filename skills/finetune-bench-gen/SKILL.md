@@ -39,6 +39,15 @@ benchmark for the same spec and removes overlapping training examples.
 By hand, generate in the foreground (no time limit): add `--foreground --time-budget 0`.
 Expect roughly 10–20 minutes for 200 items with Opus.
 
+## How the ScienceClaw reactor sees this skill
+
+The reactor hands an artifact to a skill when **any** key of the artifact matches a `--flag` in the skill's
+`--help` text, and marks the artifact consumed when the skill exits 0. So `--help` shows only the pipeline
+hand-off inputs (`--spec` / `--task-spec-path`); every option in the table below still works but is hidden from `--help`, so generic
+names (`query`, `run_id`, `n_examples`, `format`, ...) in other skills' outputs can't start or error-loop this
+skill. The skill **exits 1 until it is done**, so its input hand-off stays unconsumed and it is called again
+next cycle. Checked by `tests/test_handoffs.py`.
+
 ## Parameters
 
 | Parameter | Description | Default |
