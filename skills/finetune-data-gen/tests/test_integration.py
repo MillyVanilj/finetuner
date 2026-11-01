@@ -9,6 +9,8 @@ sys.path.insert(0, str(HERE.parent / "scripts"))
 import gen_data
 
 tmp = Path(tempfile.mkdtemp()); gen_data.RUNS_DIR = tmp / "runs"
+gen_data.jsonparse.BAD_OUTPUT_DIR = gen_data.RUNS_DIR   # bad-output log into the temp dir
+gen_data.BENCH_DIR = gen_data.RUNS_DIR / '_no_bench'   # never auto-detect real benchmarks
 fails = 0
 def check(name, ok):
     global fails; fails += not ok; print(f"{'PASS' if ok else 'FAIL'}  {name}")

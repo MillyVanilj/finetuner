@@ -63,10 +63,12 @@ Same-family models favour their own outputs (self-preference bias), so:
 |---|---|
 | M2 generate training data | Gemini (Flash) |
 | M3 verify training data, M7 judge | Claude |
-| M5/M6 write + check benchmark | OpenAI |
+| M5/M6 write + check benchmark | Claude Opus (`claude-opus-5-5`), changed from OpenAI on Nov 1, see below |
 | Student (being trained) | Qwen |
 
 (This updates the review doc, which originally had Claude as the generator. Gemini's free high-volume key changed that.)
+
+*Update Nov 1:* the team chose **Claude Opus** for the benchmark (BenchGen, `skills/finetune-bench-gen`). Caveat: the Evaluator's judge and teacher are also Claude, so Claude may grade Claude-written items generously. Mitigations in place: an independent solve (M6a) checks every answer key, the benchmark is frozen, and the decision rule is "tuned must beat base few-shot", which compares two non-Claude systems on the same items.
 
 ## Decision 4: always include real data where possible
 

@@ -1,0 +1,147 @@
+"""LLM access with hard time limits. All output goes to stderr (stdout is the skill's result)."""
+import importlib.util, os, sys, threading, time
+from pathlib import Path
+
+def _find_scienceclaw_root() -> Path:
+    """Walk up from here to the folder that has core/llm_client.py (works wherever the skill is
+    installed: <scienceclaw>/skills/finetune-data-gen/scripts/finetune_common/llm.py)."""
+    for d in Path(__file__).resolve().parents:
+        if (d / "core" / "llm_client.py").exists():
+            return d
+    # not installed inside ScienceClaw (e.g. running from the finetuner repo checkout)
+    for d in (os.environ.get("SCIENCECLAW_DIR"), str(Path.home() / "scienceclaw")):
+        if d and (Path(d) / "core" / "llm_client.py").exists():
+            return Path(d)
+    raise ImportError("ScienceClaw not found above " + str(Path(__file__).resolve()) +
+                      " (set SCIENCECLAW_DIR)")
+
+
+REPO_ROOT = _find_scienceclaw_root()
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+LLM_CALL_CAP_S = 18.0     # hard limit for any single LLM call
+MIN_CALL_S = 2.0          # don't start an LLM call with less than this much time left
+CALL_MARGIN_S = 0.5       # keep this much time after a call for writing files
+
+
+def _load_llm_client():
+    """Load core/llm_client.py by file path. A normal `import core.llm_client` first runs
+    core/__init__.py, which imports ScienceClaw's whole skill system (registry, executor, DAG,
+    tree search, ...) - several seconds on /mnt/c in WSL, out of a 30 s budget."""
+    if "core.llm_client" in sys.modules:
+        return sys.modules["core.llm_client"]
+    spec = importlib.util.spec_from_file_location("datagen_llm_client", REPO_ROOT / "core" / "llm_client.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_llm_mod = _load_llm_client()
+LLMClient = _llm_mod.LLMClient
+
+# All finetune skills (DataGen, BenchGen, Evaluator) run on Gemini by default, regardless of
+# ScienceClaw's global LLM_BACKEND / ~/.scienceclaw/llm_config.json (which may point at Anthropic
+# for the rest of ScienceClaw). Override for these skills only with FINETUNE_LLM_BACKEND.
+# Gemini settings come from llm_client: GEMINI_API_KEY (or GOOGLE_API_KEY, or gemini_api_key in
+# llm_config.json), GEMINI_MODEL (default gemini-3.6-flash).
+DEFAULT_BACKEND = os.environ.get("FINETUNE_LLM_BACKEND") or "gemini"
+
+_clients = {}
+_clients_lock = threading.Lock()
+
+
+def get_llm_client(agent_name: str = "Finetune"):
+    """Shared client on DEFAULT_BACKEND (one per process, like llm_client.get_llm_client)."""
+    with _clients_lock:
+        if DEFAULT_BACKEND not in _clients:
+            _clients[DEFAULT_BACKEND] = LLMClient(agent_name=agent_name, backend=DEFAULT_BACKEND)
+        return _clients[DEFAULT_BACKEND]
+
+
+class AnthropicClient:
+    """Claude via the Anthropic SDK directly, with llm_client's interface (.call -> text, "" on error).
+
+    Why not llm_client's anthropic backend: it always sends `temperature`, which current Claude models
+    (Opus) and the current SDK reject ("unexpected keyword argument 'temperature'"). We must not edit
+    ScienceClaw's source, so finetune skills use this instead (same approach as finetune-eval)."""
+    backend = "anthropic"
+
+    def __init__(self, agent_name: str = "Finetune", model: str = None):
+        import anthropic
+        key = os.environ.get("ANTHROPIC_API_KEY")
+        if not key:
+            raise ValueError("ANTHROPIC_API_KEY not set")
+        self.agent_name = agent_name
+        self.anthropic_model = model or os.environ.get("ANTHROPIC_MODEL") or "claude-opus-5-5"
+        self._client = anthropic.Anthropic(api_key=key, max_retries=2)
+
+    def call(self, prompt: str, max_tokens: int = 1000, temperature: float = None, **_ignored) -> str:
+        """temperature is accepted for interface compatibility and NOT sent."""
+        try:
+            r = self._client.messages.create(model=self.anthropic_model, max_tokens=max_tokens,
+                                             messages=[{"role": "user", "content": prompt}])
+            if getattr(r, "stop_reason", None) == "refusal":
+                print("Anthropic: model declined this request")
+                return ""
+            return "".join(b.text for b in r.content if getattr(b, "type", "") == "text")
+        except Exception as e:                    # same contract as llm_client: print, return ""
+            print(f"Anthropic API error: {type(e).__name__}: {e}")
+            return ""
+
+
+def make_client(agent_name: str, backend: str = None, model: str = None):
+    """Client for a specific backend (None -> the shared DEFAULT_BACKEND client).
+    anthropic -> AnthropicClient (see its docstring); `model` only applies to anthropic."""
+    backend = backend or DEFAULT_BACKEND
+    if backend == "anthropic":
+        return AnthropicClient(agent_name, model)
+    if backend == DEFAULT_BACKEND:
+        return get_llm_client(agent_name)
+    return LLMClient(agent_name=agent_name, backend=backend)
+
+
+class Abandoned(str):
+    """Empty result returned when WE cut a call off at its time limit (not an API failure)."""
+
+def call_llm(llm, prompt: str, max_tokens: int, temperature: float, timeout: float = None) -> str:
+    """Call the shared ScienceClaw client with a HARD time limit.
+    - llm_client ignores its own timeout argument and can sleep through retries, so the call runs
+      in a daemon thread and is abandoned after `timeout` seconds (it dies when the process exits).
+    - llm_client never raises on API errors; it returns "". Exceptions are caught too -> "".
+    - llm_client prints errors to stdout; main() points sys.stdout at stderr while it runs,
+      so even a late print from an abandoned thread cannot corrupt the JSON result."""
+    box = {}
+    def run():
+        try:
+            box["out"] = llm.call(prompt, max_tokens=max_tokens, temperature=temperature)
+        except Exception as e:                      # defensive: llm_client normally doesn't raise
+            box["err"] = e
+    th = threading.Thread(target=run, daemon=True)
+    th.start()
+    th.join(timeout)
+    if th.is_alive():
+        log(f"[LLM] call abandoned after {timeout:.1f}s (hard per-call limit)")
+        return Abandoned("")
+    if "err" in box:
+        log(f"[LLM] call raised {type(box['err']).__name__}: {box['err']}")
+        return ""
+    return box.get("out") or ""
+
+
+EMPTY_REPLIES = [0]               # empty LLM replies seen (rate-limit signal for --parallel)
+
+_EMPTY_LOCK = threading.Lock()
+
+
+
+def call_timeout(deadline) -> float:
+    """Time allowed for the next LLM call: capped, and leaving a margin before the deadline."""
+    if deadline is None:
+        return LLM_CALL_CAP_S
+    return min(LLM_CALL_CAP_S, deadline - time.time() - CALL_MARGIN_S)
+
+def log(msg: str) -> None:
+    """Progress messages go to stderr so stdout stays clean JSON for ScienceClaw."""
+    print(msg, file=sys.stderr, flush=True)
+

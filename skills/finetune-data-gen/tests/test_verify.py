@@ -7,6 +7,8 @@ import gen_data
 from gen_data import verify_batch, generate_and_verify, load_spec, regen_fits
 
 gen_data.RUNS_DIR = Path(tempfile.mkdtemp())
+gen_data.jsonparse.BAD_OUTPUT_DIR = gen_data.RUNS_DIR   # bad-output log into the temp dir
+gen_data.BENCH_DIR = gen_data.RUNS_DIR / '_no_bench'   # never auto-detect real benchmarks
 SPEC = load_spec(str(Path(__file__).resolve().parents[1] / "examples/spec_chem.json"))
 ex = lambda q: {"messages": [{"role": "user", "content": q}, {"role": "assistant", "content": "ANSWER: x\nWHY: y."}]}
 fails = 0

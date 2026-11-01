@@ -19,12 +19,14 @@ Steps, in order:
 Writes <run_dir>/train.jsonl and <run_dir>/format_report.json.
 Usable as a CLI or imported (format_run) from gen_data.py.
 """
-import argparse, json, re, sys, time
-from collections import defaultdict
+import argparse, json, sys, time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))   # shared finetune_common
+# normalize / near-duplicate index are shared with BenchGen (re-exported here for the tests)
+from finetune_common.textsim import NEAR_DEFAULT, normalize, signature, NearIndex, is_near  # noqa: F401
+
 RUNS_DIR = Path.home() / ".scienceclaw/finetune/runs"
-NEAR_DEFAULT = 0.70
 SAMPLES_PER_REASON = 3          # dropped examples kept in the report for inspection
 
 
@@ -61,61 +63,41 @@ def add_system_prompt(row, system_prompt):
 
 
 # ---------- 2. dedup ----------
-_WS = re.compile(r"\s+")
-_PUNCT = re.compile(r"(?<!\d)\.|\.(?!\d)|[^\w\s.]")   # drop punctuation, keep decimal points
-
-def normalize(text):
-    """lowercase, drop punctuation, collapse whitespace. Numbers and units are kept."""
-    return _WS.sub(" ", _PUNCT.sub(" ", text.lower())).strip()
 
 
 def user_text(row):
     return " ".join(m["content"] for m in row["messages"] if m["role"] == "user")
 
 
-_TOKEN = re.compile(r"\d+(?:\.\d+)?|[a-z]+")
-STOPWORDS = set("""a an the of in on at to for from by with and or is are was were be been being do does did
-what which who whom whose how why when where can could would should will shall may might must i you
-he she it we they me my your our their this that these those there here please tell explain give find
-calculate determine compute s t""".split())
-
-
-def signature(norm_text):
-    """(numbers, content-word set) for a normalized text. Words get a crude plural strip."""
-    toks = _TOKEN.findall(norm_text)
-    nums = tuple(sorted(t for t in toks if t[0].isdigit()))
-    words = {(t[:-1] if len(t) > 3 and t.endswith("s") else t) for t in toks if t not in STOPWORDS}
-    return nums, frozenset(words)
-
-
-def _jaccard(a, b):
-    return len(a & b) / len(a | b) if (a or b) else 1.0
-
-
-class NearIndex:
-    """Near-duplicate lookup. Only texts with identical numbers are compared, so this stays fast."""
-    def __init__(self, threshold):
-        self.threshold, self.buckets = threshold, defaultdict(list)
-    def add(self, norm_text):
-        nums, words = signature(norm_text)
-        self.buckets[nums].append((words, norm_text))
-    def find(self, norm_text):
-        nums, words = signature(norm_text)
-        for other_words, other_text in self.buckets.get(nums, ()):
-            if _jaccard(words, other_words) >= self.threshold:
-                return other_text
-        return None
-
-
-def is_near(a, b, threshold=NEAR_DEFAULT):
-    idx = NearIndex(threshold); idx.add(a)
-    return idx.find(b) is not None
-
-
 # ---------- 3. benchmark loading (contamination hook) ----------
+BENCH_DIR = Path.home() / ".scienceclaw/finetune/bench"
+BENCH_FILES = ("dev.jsonl", "heldout.jsonl")   # the Evaluator's file names
+
+
+def resolve_bench(path):
+    """A file, a BenchGen run folder, or a BenchGen run id -> list of files with benchmark items.
+    Held-out items are included on purpose: training data must not overlap ANY benchmark item."""
+    p = Path(path)
+    if not p.exists() and (BENCH_DIR / str(path)).exists():
+        p = BENCH_DIR / str(path)
+    if p.is_dir():
+        files = [p / f for f in BENCH_FILES if (p / f).exists()] or \
+                ([p / "items.jsonl"] if (p / "items.jsonl").exists() else [])
+        if not files:
+            raise FileNotFoundError(f"no benchmark files in {p}")
+        return files
+    if not p.exists():
+        raise FileNotFoundError(f"benchmark not found: {path}")
+    return [p]
+
+
 def load_bench_texts(path):
-    """Accept JSONL or a JSON list. Item text from 'question' / 'prompt' / 'input' / messages (user)."""
-    raw = Path(path).read_text()
+    """Accept a file (JSONL or JSON list), a BenchGen run folder, or a BenchGen run id.
+    Item text from 'question' / 'prompt' / 'input' / messages (user)."""
+    files = resolve_bench(path)
+    if len(files) > 1:
+        return [t for f in files for t in load_bench_texts(f)]
+    raw = files[0].read_text()
     try:
         items = json.loads(raw)
         items = items if isinstance(items, list) else [items]
@@ -220,7 +202,7 @@ def main():
     p.add_argument("--near", type=float, default=NEAR_DEFAULT,
                    help="Near-duplicate word-overlap threshold (0-1); numbers must also match")
     p.add_argument("--bench", default=None, help="Benchmark JSON/JSONL for the contamination check")
-    p.add_argument("--format", default="summary", choices=["summary", "json"])
+    p.add_argument("--format", default="json", choices=["summary", "json"])
     a = p.parse_args()
     run_dir = Path(a.run_dir) if a.run_dir else RUNS_DIR / a.run_id
     try:

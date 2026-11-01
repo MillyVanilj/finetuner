@@ -45,9 +45,10 @@ repeated calls resume the same run.
 | `--query` | Free-text fine-tuning request; used to draft a spec when no `--spec` is given | one of `--spec` / `--query` |
 | `--n-examples` | Number of training examples (overrides the spec) | spec value, or 50 for `--query` |
 | `--run-id` | Name of this run; progress lives in `~/.scienceclaw/finetune/runs/<run-id>/` | spec file name, or slug of the query |
-| `--format` | `json` (machine-readable result) or `summary` (one line) | summary |
+| `--format` | `json` (machine-readable result) or `summary` (one line) | json |
 | `--batch-size` | Largest batch; smaller ones are planned automatically near the time limit | 10 |
 | `--time-budget` | Seconds one call may use, from process start. Set it a few seconds below the executor's timeout | 27, or `$DATAGEN_TIME_BUDGET` |
+| `--bench` | Benchmark for the contamination check: BenchGen run id, folder or file; `none` disables | a frozen BenchGen benchmark with the same spec, if any |
 | `--verify-backend` | Use a different LLM backend for M3, e.g. `anthropic` (different model family checks more strictly; slower) | same as M2 |
 | `--parallel` | Batches generated at the same time. Falls back to 1 on API rate limits | 1 |
 | `--max-batches` | Stop after N rounds in this call (debugging) | 0 (no limit) |
@@ -77,7 +78,7 @@ Example: `{baseDir}/examples/spec_chem.json`
 | `n_examples` | yes | Number of training examples to produce (after dedup) |
 | `system_prompt` | no | If set, added as a `system` message to every example |
 
-## Output (`--format json`)
+## Output (default `--format json`; also saved to `<run_dir>/result.json`)
 
 ```json
 {
@@ -112,6 +113,7 @@ Example: `{baseDir}/examples/spec_chem.json`
 | `state.json` | Progress, timing model, carried-over reject feedback |
 | `train.jsonl` | Final training data (M4 output) |
 | `format_report.json` | M4 counts plus sample dropped rows per reason |
+| `result.json` | The last call's result (same JSON as stdout) |
 
 ## Examples
 
@@ -128,11 +130,16 @@ python3 {baseDir}/lib/format_data.py --run-id chem-v1 --bench path/to/benchmark.
 
 ## Notes
 
+- Run `finetune-bench-gen` first: DataGen then finds the frozen benchmark for the same spec
+  automatically and drops training examples that overlap any benchmark item (dev or held-out).
+
 - Executor timeouts differ: the plain skill executor uses 30 s (keep the default 27), while the
   deep-investigation agent path allows longer. With a longer limit, set `DATAGEN_TIME_BUDGET`
   (for example `280` for a 300 s limit) so one call can finish the whole run.
 - Unknown extra flags are ignored, and errors are returned as `{"error": ...}` JSON with exit code 1.
 
+- Runs on **Gemini** by default (ignores ScienceClaw's global `LLM_BACKEND`; override for the
+  finetune skills only with `FINETUNE_LLM_BACKEND`). Needs `GEMINI_API_KEY` (or `GOOGLE_API_KEY`).
 - Recommended environment: `LLM_TIMEOUT=20`, `GEMINI_MAX_RETRIES=1` (the script enforces its own
   per-call limits; long client-side retries waste the 30 s budget).
 - Only `scripts/gen_data.py` may live in `scripts/`: the executor runs the first `*.py` there.
