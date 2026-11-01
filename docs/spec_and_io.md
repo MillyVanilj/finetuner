@@ -308,13 +308,51 @@ Test without GPU or API: `python3 tests/test_run_pipeline.py` (stand-in skills, 
 
 ## 7. Open items for the team
 - Status per box: `docs/wireframe_v0.2.md`. BenchGen is on main (`skills/finetune-bench-gen`, see
-  `docs/benchgen-progress.md`). The Evaluator on main is `skills/finetune-decide` from `feat/evaluator`;
-  `worktree-evaluator-decide` is an alternative version of the same skill.
-- `finetune-eval` writes its own `report.json`, not §3.4. `run_pipeline.py` converts it (`ftc/report_convert.py`), but
-  under the ScienceClaw reactor nothing does, and `finetune-decide` reads §3.4 only. Either Eval writes
-  `loops/<n>/eval/eval_report.json` itself, or the Evaluator calls `report_convert`.
-- ReportAgent (HF push, model card, Infinite post) is not built; the runner writes `final/final_report.json` for it.
+  `docs/benchgen-progress.md`), and so is the Evaluator (`skills/finetune-decide`).
+- `finetune-eval` writes the §3.4 `eval_report.json` itself (filed under the pipeline's current loop) and hands it on;
+  `run_pipeline.py` passes it through unchanged.
+- Output: `skills/finetune-report` (agent mode) and `run_pipeline.py` both score held-out once and write
+  `final/final_report.json` + `final/model_card.md` (`ftc/report.py`). Not built: Hugging Face push (train with
+  `--push-to-hub`) and the Infinite post.
 - DataGen reads `--data-feedback-path` (agent mode; builds the same spec copy as the runner's `regen_spec`). It
   still ignores the v2-only fields (seed examples, coverage topics); using `seed_examples` as few-shot is a cheap win.
 - `finetune-eval` reports only a stage name while running (no item counts), so the Evaluation panel shows its
   stage list.
+
+## 8. Agent mode (ScienceClaw agents)
+
+The same chain without `run_pipeline.py`: each stage is a ScienceClaw agent (a heartbeat daemon) whose reactor runs
+its skill when a peer's artifact carries a key that matches one of the skill's `--flags` (§6's keys).
+
+```bash
+bash scripts/install.sh                                # skills/ -> ~/scienceclaw/skills, agents/*/agent_profile.json -> ~/.scienceclaw/profiles
+set -a; source .env; set +a                            # the skills read API keys from the environment
+python3 -m ftc.cli agents start --interval 60          # 7 daemons, one per profile in agents/
+python3 -m ftc.cli new examples/specs/chem_qa.json     # a pipeline folder (or the dashboard's New task page)
+python3 -m ftc.cli agents kickoff <pipeline_dir>       # the first artifact: {"spec": "<pipeline>/task_spec.json"}
+python3 -m ftc.cli agents status                       # running? + each agent's last log line; the dashboard shows progress
+python3 -m ftc.cli agents stop
+```
+
+| Agent (`agents/<Name>`) | Skill | Wakes on | Hands on |
+|---|---|---|---|
+| DataAgent | finetune-data-gen | `spec` (kickoff), `data_feedback_path` | `train_path` |
+| BenchAgent | finetune-bench-gen | `spec` (kickoff) | `bench_dir` |
+| TrainAgent | finetune-submit | `train_path` (+ `retrain_config_path`) | `train_job_id` |
+| StatusAgent | finetune-status | `train_job_id` | `adapter_path` |
+| EvalAgent | finetune-eval | `adapter_path` (+ `bench_dir`) | `eval_report_path` |
+| DecideAgent | finetune-decide | `eval_report_path` | `retrain_config_path` + `train_path` · `data_feedback_path` (+ `spec`) · `best_adapter_path` |
+| ReportAgent | finetune-report | `best_adapter_path` (+ `best_loop`, `best_job_id`) | `final_report_path` (end of the chain) |
+
+- Profiles: one skill each in `preferred_tools`, no `interests` (so no LLM investigation: the agents only react),
+  `disable_llm` and `disable_platform` (no Infinite comments or upvotes). ScienceClaw's heartbeat still only runs a beat
+  when `~/.scienceclaw/infinite_config.json` has an `api_key`; `agents start` refuses without one.
+- The kickoff (`ftc/agents.py`) saves the artifact with ScienceClaw's own `ArtifactStore` as producer `Kickoff`,
+  `investigation_id` = the pipeline id (every child inherits it), and doesn't publish it to Infinite. Its payload is
+  only `spec`: another key could wake a skill with half its inputs (e.g. `finetune-submit --pipeline-dir`).
+- `tests/test_handoffs.py` checks every key match, including the kickoff's; `tests/test_agent_mode.py` drives the whole
+  chain with ScienceClaw's real `ArtifactReactor` (stand-ins for the GPU/API skills; needs ScienceClaw + pyyaml).
+- One pipeline at a time: when two artifacts for the same skill are waiting, the reactor merges the two oldest
+  (newest values win) and marks both used, so a second kickoff could swallow the first.
+- Skill help text matters: the reactor treats every `--word` in a skill's `--help` output (description included) as
+  an input flag. Keep flag names out of descriptions, and hide internal flags with `help=argparse.SUPPRESS`.

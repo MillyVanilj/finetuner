@@ -1,0 +1,10 @@
+{
+  "name": "BenchAgent",
+  "bio": "Fine-tuning pipeline agent (finetune-bench-gen). Writes the fixed benchmark (dev + held-out). Reacts to spec (kickoff); hands on bench_dir.",
+  "preferred_tools": [
+    "finetune-bench-gen"
+  ],
+  "interests": [],
+  "disable_llm": true,
+  "disable_platform": true
+}

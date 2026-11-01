@@ -40,7 +40,7 @@ flowchart TD
     EV -->|"retrain: retrain_config_path + train_path<br/>(training issue → new hyperparameters)"| TR
     EV -.->|"regenerate_data: data_feedback_path<br/>(failure categories only; DataGen doesn't read it yet)"| M2
     EV -->|"stop: best_adapter_path<br/>(target met · gain below min_gain · 3 loops)"| OUT
-    HO --> OUT["Output · ReportAgent (not built)<br/>held-out once + final_report.json: run_pipeline.py<br/>adapter on HF Hub · model card · Infinite post: not yet"]
+    HO --> OUT["Output · skills/finetune-report (ReportAgent)<br/>held-out once · final_report.json · model card<br/>HF Hub push · Infinite post: not yet"]
 
     DASH[["Live dashboard · dashboard/server.py<br/>reads the pipeline folder and events.jsonl"]]
     RUN[["scripts/run_pipeline.py<br/>runs the whole chain without agents (dashboard ▶ Start)"]]
@@ -72,6 +72,7 @@ flowchart TD
 | Trainer | `skills/finetune-submit`, `skills/finetune-status`, `scripts/brev-smoke/train_sft.py` | Built, with automatic pre-flight checks |
 | L3 · M7–M9 | `skills/finetune-eval` | Built and smoke-tested. Writes its own report format; `run_pipeline.py` converts it to §3.4 (`ftc/report_convert.py`). M9 needs a team-written `safety.jsonl` |
 | Iterate? · Evaluator | `skills/finetune-decide` | Built (rules: `docs/evaluator-notes.md`) |
-| Output | (`ReportAgent`, planned) | **Partly:** `run_pipeline.py` scores held-out once and writes `final/final_report.json`. HF push (`train_sft.py --push-to-hub` exists), model card and Infinite post aren't built |
+| Output | `skills/finetune-report` (ReportAgent); `run_pipeline.py` uses the same `ftc/report.py` | **Partly:** held-out once, `final/final_report.json`, `final/model_card.md`. HF push (`train_sft.py --push-to-hub` exists) and the Infinite post aren't built |
 | *(not in the wireframe)* Live view | `dashboard/`, `ftc/pipeline.py` event log, `scripts/simulate_pipeline.py` | Built |
 | *(not in the wireframe)* Runner | `scripts/run_pipeline.py` | Built: the whole chain as subprocesses, no agents |
+| *(not in the wireframe)* Agent mode | `agents/` (7 profiles), `ftc/agents.py` (`ftc.cli agents start / kickoff / status / stop`) | Built: kickoff artifact + one ScienceClaw agent per skill; tested with ScienceClaw's reactor, not yet on the Brev machine |

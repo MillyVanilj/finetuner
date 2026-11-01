@@ -18,7 +18,8 @@ Hackathon ends Sunday night. Favor working demos over perfect code. Keep things 
 | Trainer | `skills/finetune-submit`, `skills/finetune-status` | `train_path` (+ `retrain_config_path`) → `train_job_id` → `adapter_path` |
 | L3 eval (M7–M9) | `skills/finetune-eval` | `adapter_path` + `bench_dir` → `eval_report_path` |
 | Iterate? (Evaluator) | `skills/finetune-decide` | `eval_report_path` → `retrain_config_path` + `train_path` · `data_feedback_path` · stop (`best_adapter_path`) |
-| Output | not built (`run_pipeline.py` scores held-out once and writes `final/final_report.json`) | best adapter → HF Hub, model card, Infinite post |
+| Output | `skills/finetune-report` (agent mode); `run_pipeline.py` does the same (`ftc/report.py`) | `best_adapter_path` → held-out once → `final/final_report.json` + model card (HF push, Infinite post: not built) |
+| Agent mode | `agents/` (7 profiles), `python3 -m ftc.cli agents start / kickoff / status / stop` (`ftc/agents.py`) | the stages above as ScienceClaw agents; `docs/spec_and_io.md` §8 |
 | Runner without agents | `scripts/run_pipeline.py` (dashboard ▶ Start) | runs the stages above in order, converts Eval's report to §3.4 |
 | Live view | `dashboard/`, `ftc/pipeline.py`, `scripts/simulate_pipeline.py` | reads the pipeline folder |
 | Poster wall | `ftc/wall.py`, `skills/finetune-wall`, dashboard 📌 card | agents (and humans) pin notes for each other in `wall.jsonl` |
@@ -70,7 +71,7 @@ Our repo is separate from ScienceClaw (ScienceClaw is installed next to it, not 
 ```
 finetuner/
   skills/     # our ScienceClaw skills (finetune-*); scripts/install.sh copies them into ScienceClaw
-  agents/     # agent profiles (<Name>/agent_profile.json), copied to ~/.scienceclaw/profiles (none yet)
+  agents/     # 7 agent profiles (<Name>/agent_profile.json), copied to ~/.scienceclaw/profiles by install.sh
   ftc/        # shared Python: task spec, pipeline folder + event log, M1, dashboard state
   dashboard/  # live pipeline view (python3 dashboard/server.py)
   scripts/    # setup_brev.sh, install.sh, train_sft.py (brev-smoke/), simulate_pipeline.py

@@ -46,7 +46,11 @@ OUTPUTS = {
                         "stop_reason", "next_step"},
     # the poster wall: called on purpose by agents, must neither take nor feed any hand-off
     "finetune-wall": {"ok", "id", "wall", "agent", "n", "posts", "summary", "error"},
+    # the end of the chain: held-out once + final report (agent mode's Output box)
+    "finetune-report": {"state", "final_report_path", "model_card_path", "heldout_tuned_score", "summary", "error"},
 }
+# `python3 -m ftc.cli agents kickoff` posts the first artifact (ftc/agents.py); its payload is only this key
+KICKOFF_OUTPUT = {"spec"}
 # Intended chain: producer -> {consumer: key(s) that should carry it}
 INTENDED = {
     "finetune-data-gen": {"finetune-submit": {"train_path"}},
@@ -57,7 +61,8 @@ INTENDED = {
     "finetune-decide": {"finetune-submit": {"train_path", "retrain_config_path"},
                         "finetune-data-gen": {"data_feedback_path", "spec"},
                         # harmless: BenchGen answers a frozen benchmark instantly without API calls
-                        "finetune-bench-gen": {"spec"}},
+                        "finetune-bench-gen": {"spec"},
+                        "finetune-report": {"best_adapter_path", "best_loop", "best_job_id"}},
 }
 
 
@@ -80,7 +85,7 @@ def installed():
         names += ["finetune-data-gen", "finetune-bench-gen"]
     if (SKILLS / "finetune-decide").exists():
         names.append("finetune-decide")
-    names.append("finetune-wall")
+    names += ["finetune-wall", "finetune-report"]
     return names
 
 
@@ -99,6 +104,14 @@ def test_output_keys_only_reach_the_intended_skill():
             elif want and not want <= hit:
                 problems.append(f"{prod} -> {cons}: {sorted(want - hit)} not accepted by {cons}")
     assert not problems, "hand-off key problems:\n  " + "\n  ".join(problems)
+
+
+def test_kickoff_reaches_only_the_generators():
+    """The kickoff artifact must wake DataGen and BenchGen and nothing else (e.g. not finetune-decide, which
+    would fail without a report and retry every heartbeat)."""
+    names = installed()
+    reached = {n for n in names if KICKOFF_OUTPUT & (help_params(n) - {"help"})}
+    assert reached == {n for n in names if n in ("finetune-data-gen", "finetune-bench-gen")}, reached
 
 
 def test_wall_takes_no_artifacts():
