@@ -179,15 +179,19 @@ def main():
         result = {"state": "failed", "error": f"{TRAIN_PY} not found; run scripts/setup_brev.sh or set FINETUNER_DIR"}
     else:
         out.mkdir(parents=True, exist_ok=True)
-        cmd = [str(TRAIN_PY), str(HERE / "eval" / "run_eval.py"), "--adapter-path", a.adapter_path,
-               "--bench-dir", a.bench_dir, "--split", a.split, "--out-dir", str(out)]
+        cmd = [str(TRAIN_PY.absolute()), str(HERE / "eval" / "run_eval.py"),
+               "--adapter-path", str(Path(a.adapter_path).resolve()),
+               "--bench-dir", str(Path(a.bench_dir).expanduser().resolve()), "--split", a.split, "--out-dir", str(out)]
         if a.skip_general:
             cmd.append("--skip-general")
         judge = _spec_judge(a.adapter_path)
         if judge:
             cmd += ["--judge-model", judge]
         with open(log_f, "ab") as log:
-            proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            # cwd=out: the job must not run inside the installed skill folder, which install.sh may replace
+            # mid-run (lm_eval/datasets call os.getcwd() and crash with FileNotFoundError if it's gone).
+            proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
+                                    cwd=str(out))
         if not status_f.exists():  # the job writes its own status; this only covers its first moments
             status_f.write_text(json.dumps({"state": "starting", "pid": proc.pid}))
         result = {"state": "started", "pid": proc.pid, "eval_dir": str(out), "log": str(log_f),

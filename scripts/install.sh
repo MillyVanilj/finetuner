@@ -36,6 +36,13 @@ for src in "$REPO_DIR"/skills/*/; do
     echo "  ⚠️  $name has $n_py top-level .py files in scripts/; it needs exactly 1 (put helpers in a subfolder)"
   fi
 
+  # Unchanged -> leave the folder alone. Deleting it would pull the working directory out from under
+  # jobs running from it (a running eval crashed with FileNotFoundError when a pull+install loop re-copied it).
+  if [ -d "$dest" ] && diff -rq -x "$MARKER" -x __pycache__ "$src" "$dest" >/dev/null 2>&1; then
+    echo "  = $name (unchanged)"
+    continue
+  fi
+
   rm -rf "$dest"          # only ever our own previous copy (checked via marker above)
   cp -R "$src" "$dest"
   touch "$dest/$MARKER"
