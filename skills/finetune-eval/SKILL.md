@@ -20,7 +20,7 @@ Scores a LoRA adapter from `train_sft.py` against its base model. The job takes 
 
 Unknown flags (e.g. a `--query` ScienceClaw adds) are ignored.
 
-Needs `ANTHROPIC_API_KEY` in the environment (Claude judges free-text items and safety items and plays the teacher; which Claude model: `$FINETUNE_JUDGE_MODEL` if set, else the pipeline's task spec `models.judge`, else the default. Here one `--claude-model` serves as judge and teacher) and the training venv at `$FINETUNER_DIR/.venv-train` (default `~/finetuner`).
+Needs `OPENAI_API_KEY` (OpenAI Sol judges free-text items and safety items) and `ANTHROPIC_API_KEY` (Claude plays the teacher) in the environment, and the training venv at `$FINETUNER_DIR/.venv-train` (default `~/finetuner`) with the `openai` and `anthropic` packages. Missing keys or packages stop the eval at the start, before any GPU work. Which judge model: `$FINETUNE_JUDGE_MODEL` if set, else the pipeline's task spec `models.judge` (a `gpt-*` or `claude-*` name), else the default `gpt-6.1-sol`. The teacher is set separately (`$FINETUNE_TEACHER_MODEL`, default Claude Sonnet).
 
 ## Benchmark item format (what L2 must write)
 
@@ -31,7 +31,7 @@ One JSON object per line:
  "scoring": "json", "category": "methods-extraction", "source": "real"}
 ```
 
-- `scoring`: `exact` (normalized string match), `json` (output must parse; score = field-level F1 against `reference`, which is an object or a JSON string) or `judge` (default: Claude grades pass/fail against `reference`).
+- `scoring`: `exact` (normalized string match), `json` (output must parse; score = field-level F1 against `reference`, which is an object or a JSON string) or `judge` (default: OpenAI Sol grades pass/fail against `reference`).
 - `category`: a coverage-axis cell. The report breaks scores down by it, so the Evaluator can send failing categories (never items) back to L1.
 - `source`: `real` or `synthetic`. The report scores each separately.
 - `safety.jsonl` (M9): same format with `judge` scoring. `reference` describes the expected behaviour, e.g. "should decline" or "should answer normally" (to catch over-refusal). Use `category` values `should_refuse` / `should_help`. If the file is missing, M9 is skipped and the report says so.
@@ -41,6 +41,8 @@ One JSON object per line:
 - **M7 task:** four systems on the split: `base_zero_shot`, `base_few_shot` (3 training examples as prior turns: **tuning must beat this**), `teacher` (Claude, the ceiling) and `tuned`. Each gets a mean with a bootstrap 95% CI, the format-failure rate, and breakdowns by category and source. `gain_vs_base_few_shot` is a paired CI: if it includes 0, the gain may be noise.
 - **M8 general:** lm-eval MMLU (5/subtask ≈ 285 questions), GSM8K and IFEval (250 each), base vs tuned. `general.max_drop_points` > 3 means forgetting.
 - **M9 safety:** pass rate on `safety.jsonl`, base vs tuned.
+
+Models: the judge is **OpenAI Sol** (`gpt-6.1-sol`; override with `--judge-model` or `$FINETUNE_JUDGE_MODEL`, and a `claude-*` name uses Claude instead; needs `OPENAI_API_KEY`). Sol is a different family from the Claude-written benchmark and the Claude teacher, so Claude never grades Claude. The teacher is **Claude Sonnet** (`claude-sonnet-5-5`, `$FINETUNE_TEACHER_MODEL`). Only BenchGen uses Opus. Changing the judge model re-judges everything once (the cache key includes the model), so do not change it in the middle of a pipeline.
 
 Base-model outputs and scores, teacher answers and judge verdicts are cached in `<bench-dir>/.eval_cache/`, so each loop pays only for the tuned model.
 

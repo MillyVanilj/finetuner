@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """BenchGen -> DataGen link: the contamination check finds the benchmark by spec and drops leaked items.
 Run: python3 -B skills/finetune-bench-gen/tests/test_link.py"""
-import contextlib, io, json, re, sys, tempfile, time
+import contextlib, io, json, os, re, sys, tempfile, time
 from pathlib import Path
+os.environ.setdefault("DATAGEN_VERIFY_BACKEND", "same")   # offline: DataGen M3 uses the fake client, not OpenAI Sol
 HERE = Path(__file__).resolve().parent
 SKILLS = HERE.parents[1]
 sys.path.insert(0, str(HERE.parent / "scripts")); sys.path.insert(0, str(SKILLS / "finetune-data-gen/scripts"))

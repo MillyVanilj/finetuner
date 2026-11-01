@@ -10,7 +10,7 @@ Round 2: draft(goal, spec, answers)   -> {"spec": {...updated...}, "questions": 
 
 Uses Claude via the anthropic SDK when ANTHROPIC_API_KEY (or an `ant auth` profile) is available;
 otherwise returns a template spec and generic questions so the UI still works offline.
-Model: $FTC_M1_MODEL (default claude-opus-5-5).
+Model: $FTC_M1_MODEL (default claude-sonnet-5-5; one call per pipeline).
 """
 import json
 import os
@@ -19,7 +19,7 @@ import sys
 
 from .spec import DEFAULTS, OUTPUT_TYPES, SCORING_METHODS, check_spec
 
-MODEL = os.environ.get("FTC_M1_MODEL", "claude-opus-5-5")
+MODEL = os.environ.get("FTC_M1_MODEL", "claude-sonnet-5-5")
 MAX_QUESTIONS = 5
 
 SYSTEM = f"""You are M1, the prompt-verification step of an automated LLM fine-tuning pipeline.

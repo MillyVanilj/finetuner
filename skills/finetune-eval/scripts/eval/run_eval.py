@@ -5,7 +5,7 @@ Started in the background by the finetune-eval skill (../finetune_eval.py); can 
 
   M7 task benchmark   <bench-dir>/<split>.jsonl. Systems: base zero-shot, base few-shot (k training
                       examples as prior turns: the baseline tuning must beat), teacher (Claude, the
-                      ceiling) and tuned. Code scoring first, Claude judge only for "judge" items.
+                      ceiling) and tuned. Code scoring first, OpenAI Sol judge only for "judge" items.
   M8 general ability  lm-eval-harness MMLU / GSM8K / IFEval subsets, base vs tuned (flags forgetting).
   M9 behaviour        <bench-dir>/safety.jsonl (optional, same item format, "judge" scoring, reference =
                       expected behaviour): refuse harmful asks, don't over-refuse benign ones. Base vs tuned.
@@ -61,7 +61,13 @@ def parse_args():
     p.add_argument("--split", choices=["dev", "heldout"], default="dev")
     p.add_argument("--out-dir", help="default: <run dir>/eval_<split>")
     p.add_argument("--model", help="base model; default: the one in the run's metrics.json")
-    p.add_argument("--claude-model", default="claude-opus-5-5", help="judge and teacher")
+    # Judge = OpenAI Sol: a different family from the Claude-written benchmark and the Claude teacher, so
+    # Claude never grades Claude. A "claude-*" name switches the judge back to Claude. docs/decisions.md Decision 3.
+    p.add_argument("--judge-model", "--claude-model", dest="judge_model",
+                   default=os.environ.get("FINETUNE_JUDGE_MODEL") or "gpt-6.1-sol",
+                   help="judge (M7); $FINETUNE_JUDGE_MODEL; OpenAI unless the name starts with claude")
+    p.add_argument("--teacher-model", default=os.environ.get("FINETUNE_TEACHER_MODEL") or "claude-sonnet-5-5",
+                   help="teacher system (M7 ceiling); $FINETUNE_TEACHER_MODEL")
     p.add_argument("--few-shot", type=int, default=3)
     p.add_argument("--max-new-tokens", type=int, default=512)
     p.add_argument("--batch-size", type=int, default=16)
@@ -138,6 +144,22 @@ def claude(client, model, msgs, effort, schema=None):
     return next((b.text for b in r.content if b.type == "text"), "")
 
 
+def openai_judge(client, model, prompt):
+    """One OpenAI (Sol) judge call with structured output -> JSON text, or None if it refused."""
+    r = client.responses.create(
+        model=model,
+        input=prompt,
+        reasoning={"effort": "low"},
+        max_output_tokens=16000,
+        text={"format": {"type": "json_schema", "name": "verdict", "schema": JUDGE_SCHEMA, "strict": True}},
+    )
+    for item in r.output:
+        for c in getattr(item, "content", None) or []:
+            if getattr(c, "type", "") == "refusal":
+                return None
+    return r.output_text or None
+
+
 def score_all(items, outputs, judge, pool):
     """-> per item {"score", "format_ok"[, "judge_reason"]}. score is None if the judge refused."""
     def one(item, out):
@@ -167,6 +189,23 @@ def gain(tuned, base):
     return mean_ci([t["score"] - b["score"] for t, b in zip(tuned, base) if None not in (t["score"], b["score"])])
 
 
+def preflight(a):
+    """Keys and packages the judge and teacher need, checked at the start: the API calls only happen after
+    the GPU work, and a crash there loses the tuned model's answers (they are not cached)."""
+    import importlib.util
+    problems = []
+    need = {"anthropic"} if not a.skip_teacher else set()
+    need.add("anthropic" if a.judge_model.startswith("claude") else "openai")
+    for pkg, key in (("anthropic", "ANTHROPIC_API_KEY"), ("openai", "OPENAI_API_KEY")):
+        if pkg not in need:
+            continue
+        if importlib.util.find_spec(pkg) is None:
+            problems.append(f"python package '{pkg}' is not installed in this env (pip install {pkg})")
+        if not os.environ.get(key):
+            problems.append(f"{key} is not set (needed for the {'judge' if pkg == 'openai' else 'judge/teacher'})")
+    return problems
+
+
 def main():
     a = parse_args()
     adapter = Path(a.adapter_path).resolve()
@@ -184,6 +223,10 @@ def main():
         (out / "status.json").write_text(json.dumps({"pid": os.getpid(), "updated_at": time.time(), **kw}, indent=2))
 
     try:
+        status(state="running", stage="checking API keys")
+        problems = preflight(a)               # before any GPU work: a missing key used to crash after it
+        if problems:
+            raise RuntimeError("cannot run the eval: " + "; ".join(problems))
         status(state="running", stage="loading model")
         import anthropic
         import torch
@@ -246,22 +289,31 @@ def main():
         if cuda:
             torch.cuda.empty_cache()
 
-        client = anthropic.Anthropic(max_retries=5)
+        judge_is_claude = a.judge_model.startswith("claude")
+        # Claude only when the teacher or the judge uses it (preflight checked the key for exactly these)
+        client = anthropic.Anthropic(max_retries=5) if (not a.skip_teacher or judge_is_claude) else None
         pool = ThreadPoolExecutor(8)
         if not a.skip_teacher:
             status(state="running", stage="M7 teacher (Claude)")
             outputs["teacher"] = list(pool.map(
-                lambda m: cache.get(["teacher", a.claude_model, m], lambda: claude(client, a.claude_model, m, "medium") or ""),
+                lambda m: cache.get(["teacher", a.teacher_model, m], lambda: claude(client, a.teacher_model, m, "medium") or ""),
                 prompts))
+
+        if not judge_is_claude:
+            import openai
+            oai = openai.OpenAI(max_retries=5)    # OPENAI_API_KEY from the environment
 
         def judge(item, output):
             conv = "\n\n".join(f"[{m['role']}]\n{m['content']}" for m in item["messages"])
             prompt = JUDGE_PROMPT.format(conversation=conv, reference=item["reference"], output=output)
 
             def ask():
-                text = claude(client, a.claude_model, [{"role": "user", "content": prompt}], "low", JUDGE_SCHEMA)
+                if judge_is_claude:
+                    text = claude(client, a.judge_model, [{"role": "user", "content": prompt}], "low", JUDGE_SCHEMA)
+                else:
+                    text = openai_judge(oai, a.judge_model, prompt)
                 return json.loads(text) if text else None
-            return cache.get(["judge", a.claude_model, prompt], ask)
+            return cache.get(["judge", a.judge_model, prompt], ask)
 
         status(state="running", stage="scoring")
         scored = {name: score_all(items, outs, judge, pool) for name, outs in outputs.items()}
@@ -277,7 +329,8 @@ def main():
             "bench_file": str(bench_file.resolve()),
             "bench_sha256": hashlib.sha256(bench_file.read_bytes()).hexdigest(),
             "n_items": len(items),
-            "judge_model": a.claude_model,
+            "judge_model": a.judge_model,
+            "teacher_model": None if a.skip_teacher else a.teacher_model,
             "few_shot_k": a.few_shot if shots else 0,
             "task": {name: summarize(items, s) for name, s in scored.items()},
             "gain_vs_base_few_shot": gain(scored["tuned"], scored["base_few_shot"]) if shots else None,

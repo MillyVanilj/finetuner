@@ -26,6 +26,7 @@ SCORING_METHODS = ["exact_match", "label_accuracy", "numeric", "json_field_f1", 
 FORMAT_CHECKS = ["none", "regex", "json_schema"]
 DIFFICULTIES = ["easy", "medium", "hard"]
 ROLES = ["student", "generator", "verifier", "bench_writer", "judge"]
+JUDGE_PREFIXES = ("claude-", "gpt-")   # judges finetune-eval can call: Claude (Anthropic) or OpenAI (e.g. Sol)
 
 # Defaults for everything that is not required. Kept deliberately small and sane for the demo.
 DEFAULTS = {
@@ -52,9 +53,9 @@ DEFAULTS = {
     "budget": {"max_api_usd": 20.0, "max_gpu_hours": 2.0},
     "models": {"student": "Qwen/Qwen3-4B-Instruct-2507",
                "generator": "gemini-3.6-flash",
-               "verifier": "claude-sonnet-5-5",
+               "verifier": "gpt-6.1-sol",            # DataGen M3 (OpenAI Sol, docs/decisions.md Decision 3)
                "bench_writer": "claude-opus-5-5",   # BenchGen's model (team choice Nov 1, docs/decisions.md Decision 3)
-               "judge": "claude-sonnet-5-5"},
+               "judge": "gpt-6.1-sol"},             # finetune-eval M7 judge (OpenAI Sol)
     "training": {},                # optional LoRA overrides for the first run: rank, alpha, lr, epochs ...
 }
 
@@ -266,8 +267,9 @@ def validate_spec(spec: dict) -> tuple[list[str], list[str]]:
             want = "text" if k == "model" else "a number > 0" if k in ("lr", "epochs") else "a whole number"
             errors.append(f"training.{k} must be {want} (got {v!r})")
     judge = (spec.get("models") or {}).get("judge")
-    if judge and not str(judge).startswith("claude-"):
-        warnings.append(f"models.judge '{judge}' is not a Claude model: the eval judge stays on its default Claude model")
+    if judge and not str(judge).startswith(JUDGE_PREFIXES):
+        warnings.append(f"models.judge '{judge}' is not a Claude or OpenAI model: "
+                        f"the eval judge stays on its default ({DEFAULTS['models']['judge']})")
 
     unused = [p for p in UNUSED_FIELDS if _get(spec, p) not in (None, "", []) and _get(spec, p) != _get(DEFAULTS, p)]
     if unused:

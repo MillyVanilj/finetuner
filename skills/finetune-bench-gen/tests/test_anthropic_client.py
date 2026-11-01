@@ -40,8 +40,10 @@ with contextlib.redirect_stdout(buf):
     r1, r2 = c.call("REFUSE"), c.call("BOOM")
 check("refusal -> '' (logged)", r1 == "" and "declined" in buf.getvalue())
 check("API error -> '' (printed like llm_client, never raised)", r2 == "" and "overloaded" in buf.getvalue())
+os.environ.pop("FINETUNE_ANTHROPIC_MODEL", None)
+os.environ["ANTHROPIC_MODEL"] = "claude-opus-5-5"   # ScienceClaw's own setting must not leak in
+check("default model without a pinned model is Sonnet (only BenchGen pins Opus)", L.AnthropicClient().anthropic_model == "claude-sonnet-5-5")
 os.environ.pop("ANTHROPIC_MODEL", None)
-check("default model without --model / ANTHROPIC_MODEL is Opus", L.AnthropicClient().anthropic_model == "claude-opus-5-5")
 del os.environ["ANTHROPIC_API_KEY"]
 try:
     L.AnthropicClient(); ok = False

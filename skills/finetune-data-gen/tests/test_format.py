@@ -6,6 +6,7 @@ HERE = Path(__file__).resolve().parent
 SCRIPTS = HERE.parent / "scripts"
 LIB = HERE.parent / "lib"
 sys.path.insert(0, str(SCRIPTS)); sys.path.insert(0, str(LIB))
+import os; os.environ.setdefault("DATAGEN_VERIFY_BACKEND", "same")   # offline: no OpenAI Sol verifier
 from format_data import validate, format_rows, format_run, normalize, is_near
 
 fails = 0
