@@ -21,6 +21,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
@@ -105,7 +106,7 @@ class Cache:
         return v
 
 
-def generate(model, tok, convs, a, tmpl_kw):
+def generate(model, tok, convs, a, tmpl_kw, tick=None):
     import torch
 
     tok.padding_side = "left"
@@ -117,6 +118,8 @@ def generate(model, tok, convs, a, tmpl_kw):
         with torch.no_grad():
             gen = model.generate(**enc, max_new_tokens=a.max_new_tokens, do_sample=False, pad_token_id=tok.pad_token_id)
         outs += tok.batch_decode(gen[:, enc["input_ids"].shape[1]:], skip_special_tokens=True)
+        if tick:
+            tick(len(texts))
     return [o.strip() for o in outs]
 
 
@@ -182,11 +185,17 @@ def format_regex(bench_dir):
         return None
 
 
-def score_all(items, outputs, judge, pool, fmt_rx=None):
+def score_all(items, outputs, judge, pool, fmt_rx=None, tick=None):
     """-> per item {"score", "format_ok", "graded_by"[, "judge_reason"]}. score is None if the judge refused.
     graded_by: sql (ran the query) | exact | json | empty | judge. The judge grades substance only; for
     judge items, format_ok comes from the benchmark's format regex (True if there is none)."""
     def one(item, out):
+        r = _one(item, out)
+        if tick:
+            tick()
+        return r
+
+    def _one(item, out):
         g = grade(item, out)
         if g is not None:
             return {"score": g[0], "format_ok": g[1], "graded_by": g[2]}
@@ -251,12 +260,31 @@ def main():
     def status(**kw):
         (out / "status.json").write_text(json.dumps({"pid": os.getpid(), "updated_at": time.time(), **kw}, indent=2))
 
+    # Progress inside a stage (items generated / answers graded), for the dashboard's progress bar.
+    # total=None: no item count for this stage (lm-eval). Written at most every 2 s; threads share it.
+    prog = {"done": 0, "total": None, "stage": None, "t": 0.0}
+    lock = threading.Lock()
+
+    def stage(name, total=None):
+        with lock:
+            prog.update(done=0, total=total, stage=name, started=time.time(), t=time.time())
+            status(state="running", stage=name, done=0, total=total, stage_started_at=prog["started"])
+
+    def tick(n=1):
+        with lock:
+            prog["done"] += n
+            now = time.time()
+            if now - prog["t"] >= 2 or prog["done"] == prog["total"]:
+                prog["t"] = now
+                status(state="running", stage=prog["stage"], done=prog["done"], total=prog["total"],
+                       stage_started_at=prog["started"])
+
     try:
-        status(state="running", stage="checking API keys")
+        stage("checking API keys")
         problems = preflight(a)               # before any GPU work: a missing key used to crash after it
         if problems:
             raise RuntimeError("cannot run the eval: " + "; ".join(problems))
-        status(state="running", stage="loading model")
+        stage("loading model")
         import anthropic
         import torch
         from peft import PeftModel
@@ -288,31 +316,35 @@ def main():
         model = model.to("cuda" if cuda else "cpu").eval()
 
         def base_gen(convs):
-            return cache.get(["gen", base_id, a.max_new_tokens, tmpl_kw, convs],
-                             lambda: generate(model, tok, convs, a, tmpl_kw))
+            made = []
+            r = cache.get(["gen", base_id, a.max_new_tokens, tmpl_kw, convs],
+                          lambda: made.append(1) or generate(model, tok, convs, a, tmpl_kw, tick))
+            if not made:          # came from the cache: count it as done at once
+                tick(len(convs))
+            return r
 
         prompts = [it["messages"] for it in items]
         safety_prompts = [s["messages"] for s in safety]
         outputs, safety_out, general = {}, {}, {}
 
-        status(state="running", stage="M7/M9 base model")
+        stage("M7/M9 base model", len(prompts) * (2 if shots else 1) + len(safety_prompts))
         outputs["base_zero_shot"] = base_gen(prompts)
         if shots:
             outputs["base_few_shot"] = base_gen([with_shots(m) for m in prompts])
         if safety:
             safety_out["base"] = base_gen(safety_prompts)
         if not a.skip_general:
-            status(state="running", stage="M8 base model (lm-eval)")
+            stage("M8 base model (lm-eval)")
             general["base"] = cache.get(["general", base_id, GENERAL, METRICS, tmpl_kw],
                                         lambda: general_scores(model, tok, tmpl_kw, a.batch_size))
 
-        status(state="running", stage="M7/M9 tuned model")
+        stage("M7/M9 tuned model", len(prompts) + len(safety_prompts))
         model = PeftModel.from_pretrained(model, str(adapter)).eval()
-        outputs["tuned"] = generate(model, tok, prompts, a, tmpl_kw)
+        outputs["tuned"] = generate(model, tok, prompts, a, tmpl_kw, tick)
         if safety:
-            safety_out["tuned"] = generate(model, tok, safety_prompts, a, tmpl_kw)
+            safety_out["tuned"] = generate(model, tok, safety_prompts, a, tmpl_kw, tick)
         if not a.skip_general:
-            status(state="running", stage="M8 tuned model (lm-eval)")
+            stage("M8 tuned model (lm-eval)")
             general["tuned"] = general_scores(model, tok, tmpl_kw, a.batch_size)
         del model
         if cuda:
@@ -323,10 +355,13 @@ def main():
         client = anthropic.Anthropic(max_retries=5) if (not a.skip_teacher or judge_is_claude) else None
         pool = ThreadPoolExecutor(8)
         if not a.skip_teacher:
-            status(state="running", stage="M7 teacher (Claude)")
-            outputs["teacher"] = list(pool.map(
-                lambda m: cache.get(["teacher", a.teacher_model, m], lambda: claude(client, a.teacher_model, m, "medium") or ""),
-                prompts))
+            stage("M7 teacher (Claude)", len(prompts))
+
+            def teach(m):
+                r = cache.get(["teacher", a.teacher_model, m], lambda: claude(client, a.teacher_model, m, "medium") or "")
+                tick()
+                return r
+            outputs["teacher"] = list(pool.map(teach, prompts))
 
         if not judge_is_claude:
             import openai
@@ -344,10 +379,10 @@ def main():
                 return json.loads(text) if text else None
             return cache.get(["judge", a.judge_model, prompt], ask)
 
-        status(state="running", stage="scoring")
+        stage("scoring", len(items) * len(outputs) + len(safety) * len(safety_out))
         fmt_rx = format_regex(a.bench_dir)
-        scored = {name: score_all(items, outs, judge, pool, fmt_rx) for name, outs in outputs.items()}
-        safety_scored = {name: score_all(safety, outs, judge, pool) for name, outs in safety_out.items()}
+        scored = {name: score_all(items, outs, judge, pool, fmt_rx, tick) for name, outs in outputs.items()}
+        safety_scored = {name: score_all(safety, outs, judge, pool, tick=tick) for name, outs in safety_out.items()}
 
         if general:
             delta = {t: round(general["tuned"][t] - general["base"][t], 2) for t in general["base"]}

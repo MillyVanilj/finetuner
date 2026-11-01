@@ -342,8 +342,10 @@ def evaluate(pl: Pipeline, adapter: str, bench_dir: str, split: str, loop: int, 
         state = out.get("state")
         if state == "failed" or (not out and rc != 0):
             raise RunnerError(f"Evaluation failed: {out.get('error') or err} (log: {out.get('log', '?')})")
-        if state in ("started", "running"):   # finetune-eval only reports a stage name, no item counts
-            pl.progress("eval", loop=loop, split=split, phase=out.get("stage") or "starting", unit="stage")
+        if state in ("started", "running"):   # stage name + items done/total inside that stage (if it counts them)
+            pl.progress("eval", loop=loop, split=split, phase=out.get("stage") or "starting", unit="stage",
+                        stage_done=out.get("done"), stage_total=out.get("total"),
+                        stage_started_at=out.get("stage_started_at"))
         sleep(POLL_EVAL_S)
     conv = convert_report(json.loads(rp.read_text()), pl, loop, split, job_id, adapter)
     name = {"dev": "eval_report.json", "probe": "probe_report.json"}.get(split, "heldout_report.json")
