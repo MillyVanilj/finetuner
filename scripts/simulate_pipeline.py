@@ -28,6 +28,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ftc.pipeline import Pipeline, now_iso      # noqa: E402
 from ftc.report import build_final              # noqa: E402
+from ftc.report_convert import forgotten        # noqa: E402
 from ftc.spec import load_spec                  # noqa: E402
 from ftc.wall import Wall                       # noqa: E402
 
@@ -299,7 +300,7 @@ def run_eval(pl: Pipeline, spec, loop, job_id, adapter, tuned_score, cat_scores,
         for t, base in (("mmlu", 0.69), ("gsm8k", 0.84), ("ifeval", 0.78)):
             nap(1.0)
             tuned = round(base - general_drop * R.uniform(0.6, 1.3) + R.uniform(-0.01, 0.01), 3)
-            general.append({"task": t, "n": 285 if t == "mmlu" else 250, "base": base, "tuned": tuned,
+            general.append({"task": t, "n": 57 if t == "mmlu" else 60, "base": base, "tuned": tuned,
                             "delta": round(tuned - base, 3)})
             pl.progress("eval", loop=loop, phase="M8 general ability", done=len(general), total=3, unit="suites",
                         split=split, metrics={"systems": sys_prog, "general": general})
@@ -359,7 +360,7 @@ def run_eval(pl: Pipeline, spec, loop, job_id, adapter, tuned_score, cat_scores,
               "gain_vs_base_few_shot": gain,
               "verdict": {"beats_fewshot": systems["tuned"]["ci95"][0] > systems["base_fewshot"]["score"],
                           "meets_target": target is not None and systems["tuned"]["score"] >= target,
-                          "forgetting": any(g["delta"] < -spec["targets"]["max_general_drop"] for g in general)},
+                          "forgetting": bool(forgotten(general, spec["targets"]["max_general_drop"]))},
               "created_at": now_iso()}
     name = "eval_report.json" if split == "dev" else "heldout_report.json"
     wjson(ed / name, report)
@@ -438,11 +439,11 @@ def main():
     pl.set_loop(2, "more data for weak categories")
     train_path = run_data(pl, spec, 2, spec["n_examples"] + 150, focus_extra=weak)
     job, res = run_train(pl, spec, 2, train_path, cfg, overfit=True, parent=job)
-    rep = run_eval(pl, spec, 2, job, res["adapter_path"], T - 0.07, {edge[0]: T - 0.1, edge[1]: T - 0.11}, general_drop=0.04)
-    decide(pl, spec, 2, rep, "retrain", "train loss << eval loss and general drop > 3 points",
-           "Overfitting: eval loss rose in epoch 2 and GSM8K fell 4 points; fewer epochs, lower lr",
+    rep = run_eval(pl, spec, 2, job, res["adapter_path"], T - 0.07, {edge[0]: T - 0.1, edge[1]: T - 0.11}, general_drop=0.12)
+    decide(pl, spec, 2, rep, "retrain", "train loss << eval loss and general drop > limit",
+           "Overfitting: eval loss rose in epoch 2 and GSM8K fell about 12 points; fewer epochs, lower lr",
            {"retrain_config": {"lr": 1e-4, "epochs": 1, "parent_job_id": job, "reason": "overfitting"}})
-    rq = w.post("Evaluator", "Looks like overfitting: eval loss went up in epoch 2 and GSM8K fell 4 points. "
+    rq = w.post("Evaluator", "Looks like overfitting: eval loss went up in epoch 2 and GSM8K fell about 12 points. "
                 "Can you retrain on the same data with lr 1e-4 and 1 epoch?", to="TrainAgent", kind="request", loop=2)
     nap(1)
     q = w.reply(rq, "TrainAgent", "Sure. Should I keep rank 16?", kind="question", loop=2)

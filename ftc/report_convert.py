@@ -7,7 +7,21 @@ finetune-eval (skills/finetune-eval/scripts/eval/run_eval.py) writes:
 """
 
 SYSTEM_MAP = {"tuned": "tuned", "base_few_shot": "base_fewshot", "base_zero_shot": "base_zeroshot", "teacher": "teacher"}
-GENERAL_N = {"mmlu": 285, "gsm8k": 250, "ifeval": 250}
+GENERAL_N = {"mmlu": 57, "gsm8k": 60, "ifeval": 60}   # fallback when a report has no general.n (run_eval.py sizes)
+# A general-skills drop only counts as forgetting if it is at least this many answers' worth. On a 60-question test one
+# answer is ~1.7 points, so a fixed 3-point limit would fire on 2 lucky flips. Same rule in finetune_decide.py.
+FORGET_MIN_QUESTIONS = 4
+
+
+def forgetting_limit(max_drop, n):
+    """Drop (0-1 scale) that counts as forgetting on a test of n questions: max_general_drop, but never less than
+    FORGET_MIN_QUESTIONS answers' worth. n unknown -> max_drop."""
+    return max(max_drop, FORGET_MIN_QUESTIONS / n) if n else max_drop
+
+
+def forgotten(general, max_drop):
+    """The general-skills entries ({task, n, delta}) that dropped past their size-aware limit."""
+    return [g for g in general or [] if (g.get("delta") or 0) < -forgetting_limit(max_drop, g.get("n"))]
 
 
 def _mean(d):
@@ -51,7 +65,8 @@ def to_spec_io(r: dict, pipeline_id=None, loop=None, split=None, job_id=None, ad
         tuned = (g.get("tuned") or {}).get(t)
         if base is None or tuned is None:
             continue
-        general.append({"task": t, "n": GENERAL_N.get(t), "base": round(base / 100, 4), "tuned": round(tuned / 100, 4),
+        n = (g.get("n") or {}).get(t) or GENERAL_N.get(t)
+        general.append({"task": t, "n": n, "base": round(base / 100, 4), "tuned": round(tuned / 100, 4),
                         "delta": round((tuned - base) / 100, 4)})
 
     fails = []
@@ -67,7 +82,6 @@ def to_spec_io(r: dict, pipeline_id=None, loop=None, split=None, job_id=None, ad
     targets = spec.get("targets") or {}
     tuned = _mean(task.get("tuned"))
     gfs = r.get("gain_vs_base_few_shot") or {}
-    max_drop = (g.get("max_drop_points") or 0) / 100
     return {
         "pipeline_id": pipeline_id, "loop": loop, "split": split or r.get("split"), "n_items": r.get("n_items"),
         "train_job_id": job_id, "adapter_path": adapter or r.get("adapter_path"),
@@ -76,7 +90,7 @@ def to_spec_io(r: dict, pipeline_id=None, loop=None, split=None, job_id=None, ad
         "verdict": {"beats_fewshot": bool(gfs.get("ci95")) and gfs["ci95"][0] > 0,
                     "meets_target": targets.get("target_score") is not None and tuned is not None
                     and tuned >= targets["target_score"],
-                    "forgetting": bool(general) and max_drop > (targets.get("max_general_drop") or 0.03)},
+                    "forgetting": bool(forgotten(general, targets.get("max_general_drop") or 0.03))},
         "gain_vs_base_few_shot": gfs or None,
         "train_metrics": r.get("train_metrics"), "notes": r.get("notes") or [],
         "source_report": "finetune-eval report.json",

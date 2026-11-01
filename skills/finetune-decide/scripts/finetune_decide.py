@@ -113,10 +113,22 @@ def item_scores(orig_report):
             if o.get("system") == "tuned" and o.get("id") is not None}
 
 
+# Same rule as ftc/report_convert.py (kept here so decide() works without ftc on the path): a general-skills drop
+# counts as forgetting only past max_general_drop AND at least FORGET_MIN_QUESTIONS answers' worth on that test.
+FORGET_MIN_QUESTIONS = 4
+
+
+def forgetting_limit(max_drop, n):
+    return max(max_drop, FORGET_MIN_QUESTIONS / n) if n else max_drop
+
+
+def forgotten(general, max_drop):
+    return [g for g in general or [] if (g.get("delta") or 0) < -forgetting_limit(max_drop, g.get("n"))]
+
+
 def pick_best(reports, max_drop):
     """Best loop: an adapter that kept its general skills beats a slightly higher dev score that forgot them."""
-    return max(reports, key=lambda r: (not any(g["delta"] < -max_drop for g in r.get("general") or []),
-                                       r["systems"]["tuned"]["score"]))
+    return max(reports, key=lambda r: (not forgotten(r.get("general"), max_drop), r["systems"]["tuned"]["score"]))
 
 
 def decide(report, targets, history, cfg, signals, n_examples, ctx=None):
@@ -128,7 +140,7 @@ def decide(report, targets, history, cfg, signals, n_examples, ctx=None):
     tuned, few = report["systems"]["tuned"], report["systems"].get("base_fewshot") or {}
     loop, t, target = report.get("loop") or len(history) + 1, tuned["score"], targets["target_score"]
     beats = tuned["ci95"][0] > few.get("score", 0)
-    forgot = [g for g in report.get("general") or [] if g["delta"] < -targets["max_general_drop"]]
+    forgot = forgotten(report.get("general"), targets["max_general_drop"])
     fails = sorted(report.get("failure_categories") or [], key=lambda f: -f["n_fail"])
     n_cats = len(report.get("by_category") or []) or len(fails)
     # epoch changes go from what was actually trained, not from a budget-clamped request
@@ -188,7 +200,8 @@ def decide(report, targets, history, cfg, signals, n_examples, ctx=None):
                            lr=float(f"{lr / 3:.2g}"))
         if forgot:
             worst = min(forgot, key=lambda g: g["delta"])
-            why = f"Forgetting: {worst['task']} {worst['delta']:+.2f} vs base (limit -{targets['max_general_drop']})"
+            limit = forgetting_limit(targets["max_general_drop"], worst.get("n"))
+            why = f"Forgetting: {worst['task']} {worst['delta']:+.2f} vs base (limit -{limit:.3g})"
             if int(cfg.get("rank", DEFAULT_RANK)) > DEFAULT_RANK:
                 return retrain("general drop after rank increase", f"{why}; back to r={DEFAULT_RANK}, fix the data next",
                                rank=DEFAULT_RANK)
