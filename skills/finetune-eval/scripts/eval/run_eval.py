@@ -30,8 +30,12 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from scoring import grade, mean_ci  # noqa: E402
 
-# lm-eval's limit is per subtask and MMLU has 57 of them, so it gets a much smaller limit.
-GENERAL = [(["mmlu"], 5), (["gsm8k", "ifeval"], 250)]
+# M8 general ability, ~177 questions per model: MMLU 1 per subject (lm-eval's limit is per subtask, and MMLU has
+# 57 of them, so every subject is still covered), GSM8K and IFEval 60 each. Was 785 (5 per subject + 250 + 250);
+# cut for time. Base and tuned answer the same questions, so the delta is paired, but one question is ~1.7 points.
+GENERAL = [(["mmlu"], 1), (["gsm8k", "ifeval"], 60)]
+MMLU_SUBJECTS = 57
+GENERAL_N = {"mmlu": MMLU_SUBJECTS * 1, "gsm8k": 60, "ifeval": 60}   # questions per task (reported as "n")
 METRICS = {"mmlu": "acc,none", "gsm8k": "exact_match,flexible-extract", "ifeval": "prompt_level_strict_acc,none"}
 
 JUDGE_SCHEMA = {
@@ -347,7 +351,8 @@ def main():
 
         if general:
             delta = {t: round(general["tuned"][t] - general["base"][t], 2) for t in general["base"]}
-            general |= {"delta": delta, "max_drop_points": max(0, -min(delta.values()))}
+            general |= {"delta": delta, "max_drop_points": max(0, -min(delta.values())),
+                        "n": {t: GENERAL_N.get(t) for t in general["base"]}}
         report = {
             "split": a.split,
             "base_model": base_id,

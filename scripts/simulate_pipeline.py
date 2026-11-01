@@ -299,7 +299,7 @@ def run_eval(pl: Pipeline, spec, loop, job_id, adapter, tuned_score, cat_scores,
         for t, base in (("mmlu", 0.69), ("gsm8k", 0.84), ("ifeval", 0.78)):
             nap(1.0)
             tuned = round(base - general_drop * R.uniform(0.6, 1.3) + R.uniform(-0.01, 0.01), 3)
-            general.append({"task": t, "n": 285 if t == "mmlu" else 250, "base": base, "tuned": tuned,
+            general.append({"task": t, "n": 57 if t == "mmlu" else 60, "base": base, "tuned": tuned,
                             "delta": round(tuned - base, 3)})
             pl.progress("eval", loop=loop, phase="M8 general ability", done=len(general), total=3, unit="suites",
                         split=split, metrics={"systems": sys_prog, "general": general})

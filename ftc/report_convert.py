@@ -7,7 +7,7 @@ finetune-eval (skills/finetune-eval/scripts/eval/run_eval.py) writes:
 """
 
 SYSTEM_MAP = {"tuned": "tuned", "base_few_shot": "base_fewshot", "base_zero_shot": "base_zeroshot", "teacher": "teacher"}
-GENERAL_N = {"mmlu": 285, "gsm8k": 250, "ifeval": 250}
+GENERAL_N = {"mmlu": 57, "gsm8k": 60, "ifeval": 60}   # fallback when a report has no general.n (run_eval.py sizes)
 
 
 def _mean(d):
@@ -51,7 +51,8 @@ def to_spec_io(r: dict, pipeline_id=None, loop=None, split=None, job_id=None, ad
         tuned = (g.get("tuned") or {}).get(t)
         if base is None or tuned is None:
             continue
-        general.append({"task": t, "n": GENERAL_N.get(t), "base": round(base / 100, 4), "tuned": round(tuned / 100, 4),
+        n = (g.get("n") or {}).get(t) or GENERAL_N.get(t)
+        general.append({"task": t, "n": n, "base": round(base / 100, 4), "tuned": round(tuned / 100, 4),
                         "delta": round((tuned - base) / 100, 4)})
 
     fails = []
