@@ -25,6 +25,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .pipeline import Pipeline, _atomic_write, now_iso
+from .report_convert import forgetting_limit, forgotten
 from .spec import assumptions
 from .state import _read_json, _read_jsonl, read_data, runs_dir
 
@@ -221,13 +222,16 @@ def verdict(systems, gain, general, spec, n_items, by_source_counts, base, count
         warnings.append({"level": "info", "text": f"The {SYSTEM_LABEL[base]} already reaches the target ({pct(b)}): "
                          "a prompt may be enough for this task."})
     if general:
-        worst = min(general, key=lambda g: g.get("delta") or 0)
+        forgot = forgotten(general, max_drop)
+        worst = min(forgot or general, key=lambda g: g.get("delta") or 0)
         drop = -(worst.get("delta") or 0)
         names = "/".join(g["task"].upper() for g in general)
-        if drop > max_drop:
+        if forgot:
+            limit = forgetting_limit(max_drop, worst.get("n"))
             details.append(f"General skills ({names}): {worst['task'].upper()} fell {pts(drop).lstrip('+')}.")
             warnings.append({"level": "warn", "text": f"Forgetting: {worst['task'].upper()} dropped {pts(drop).lstrip('+')} "
-                             f"(limit {pts(max_drop).lstrip('+')}). The model got worse at things outside this task."})
+                             f"(limit {pts(limit).lstrip('+')} on {worst.get('n') or '?'} questions). "
+                             "The model got worse at things outside this task."})
         else:
             details.append(f"General skills held up ({names}): " + (f"the biggest drop is {pts(drop, 1).lstrip('+')}." if drop > 0
                            else "no drop."))

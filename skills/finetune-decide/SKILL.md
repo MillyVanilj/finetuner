@@ -24,7 +24,7 @@ Everything else is found from the report: the pipeline folder (searched in every
 
 1. **Stop:** held-out report (the final word) · base few-shot already meets the target (loop 1) · tuned meets `targets.target_score` with no forgetting · `targets.max_loops` reached · `budget.max_gpu_hours` used (training + eval runtimes) · gain over the last loop < `targets.min_gain`, **or its paired 95% CI includes 0** (same benchmark items scored in both loops, from `outputs.jsonl`; falls back to the raw difference).
 2. **Retrain:** train loss NaN or not falling → lr ÷ 3.
-3. **Retrain:** forgetting (an M8 task dropped more than `targets.max_general_drop`) → back to r=16 if the rank was raised, otherwise one epoch fewer (or lr ÷ 2 at 1 epoch).
+3. **Retrain:** forgetting (an M8 task dropped more than `targets.max_general_drop` **and** at least 4 answers' worth on that test, e.g. 6.7 points on 60 questions, so a couple of lucky flips don't count) → back to r=16 if the rank was raised, otherwise one epoch fewer (or lr ÷ 2 at 1 epoch).
 4. **Retrain:** overfitting (eval loss rising, or train loss < half the eval loss) → one epoch fewer (or lr ÷ 2).
 5. **Regenerate data:** tuned format rate < 90% → the top 3 failure categories, with a note to follow `io_format` exactly.
 6. **Regenerate data:** the top 2 failure categories hold ≥ 50% of failures **and** ≥ 10 points more than an even spread would give them → those 2 categories.

@@ -300,3 +300,28 @@ def test_best_adapter_prefers_no_forgetting():
     kept = report(tuned=0.80, general=[("gsm8k", -0.01)], loop=3)
     assert fd.pick_best([forgot, kept], 0.03) is kept
     assert fd.pick_best([report(tuned=0.7, loop=1), kept], 0.03) is kept       # no forgetting: higher score wins
+
+
+def test_forgetting_limit_scales_with_test_size():
+    # 60 questions: 1 answer = 1.7 pts, so the limit is 4 answers (6.7 pts), not the spec's 3 pts
+    assert abs(fd.forgetting_limit(0.03, 60) - 4 / 60) < 1e-9
+    assert fd.forgetting_limit(0.03, 250) == 0.03          # big test: the spec's limit applies
+    assert fd.forgetting_limit(0.03, None) == 0.03         # n unknown: old behaviour
+
+    def rep(delta, n):
+        r = report(tuned=0.6, loop=2, fails=SPREAD)
+        r["general"] = [{"task": "ifeval", "n": n, "base": 0.8, "tuned": 0.8 + delta, "delta": delta}]
+        return r
+    assert run(rep(-2 / 60, 60))["rule"] != "general drop > max_general_drop"    # 2 lucky flips: not forgetting
+    d = run(rep(-5 / 60, 60))                                                     # 5 answers: forgetting
+    assert d["rule"] == "general drop > max_general_drop" and "limit -0.0667" in d["reason"]
+    assert run(rep(-0.05, 250))["rule"] == "general drop > max_general_drop"     # 12 answers on 250: forgetting
+    assert fd.pick_best([rep(-2 / 60, 60), report(tuned=0.5, loop=1)], 0.03)["systems"]["tuned"]["score"] == 0.6
+
+
+def test_forgetting_rule_same_in_ftc():
+    sys.path.insert(0, str(ROOT))
+    from ftc import report_convert as rc
+    assert rc.FORGET_MIN_QUESTIONS == fd.FORGET_MIN_QUESTIONS
+    for n in (None, 57, 60, 250):
+        assert rc.forgetting_limit(0.03, n) == fd.forgetting_limit(0.03, n)
