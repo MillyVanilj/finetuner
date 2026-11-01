@@ -25,6 +25,9 @@ if git -C "$TMP/repo" diff --cached --quiet; then
   echo "Nothing changed since the last deploy."
   exit 0
 fi
+# a fresh box (Brev) may have no git name/email: fall back to a neutral one instead of failing
+git -C "$TMP/repo" config user.name >/dev/null || git -C "$TMP/repo" config user.name "finetuner-deploy"
+git -C "$TMP/repo" config user.email >/dev/null || git -C "$TMP/repo" config user.email "finetuner-deploy@users.noreply.github.com"
 git -C "$TMP/repo" commit -q -m "Dashboard snapshot $(date -u +%Y-%m-%dT%H:%MZ)"
 git -C "$TMP/repo" push -q origin gh-pages
 echo "Published. Live in ~1 minute at https://millyvanilj.github.io/finetuner/"
