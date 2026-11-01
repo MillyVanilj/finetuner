@@ -59,7 +59,7 @@ next cycle. Checked by `tests/test_handoffs.py`.
 | `--batch-size` | Largest batch; smaller ones are planned automatically near the time limit | 10 |
 | `--time-budget` | Seconds one call may use, from process start. Set it a few seconds below the executor's timeout | 27, or `$DATAGEN_TIME_BUDGET` |
 | `--bench` | Benchmark for the contamination check: BenchGen run id, folder or file; `none` disables | a frozen BenchGen benchmark with the same spec, if any |
-| `--verify-backend` | LLM backend for M3: `openai` (Sol, a different family from the Gemini generator, so it checks more strictly; model `$FINETUNE_OPENAI_MODEL`), `anthropic`, or `same` (= M2's backend) | `openai` (Sol), or `$DATAGEN_VERIFY_BACKEND` |
+| `--verify-backend` | LLM backend for M3: `openai` (Sol, a different family from the Gemini generator, so it checks more strictly; model `$FINETUNE_OPENAI_MODEL`), `anthropic`, or `same` (= M2's backend). Needs `OPENAI_API_KEY` + the `openai` package; without them M3 falls back to M2's backend and the result's `warnings` says so | `openai` (Sol), or `$DATAGEN_VERIFY_BACKEND` |
 | `--parallel` | Batches generated at the same time. Falls back to 1 on API rate limits | 1 |
 | `--max-batches` | Stop after N rounds in this call (debugging) | 0 (no limit) |
 

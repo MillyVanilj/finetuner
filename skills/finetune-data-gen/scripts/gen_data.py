@@ -481,7 +481,14 @@ def run(a) -> dict:
     target = int(spec["n_examples"])
     # Separate instance for the verifier: get_llm_client caches ONE global client, so switching
     # backends through it would also switch M2's client.
-    llm_v = make_client("DataGenVerify", a.verify_backend) if a.verify_backend not in (None, "", "same") else llm
+    llm_v, verify_warning = llm, None
+    if a.verify_backend not in (None, "", "same"):
+        try:
+            llm_v = make_client("DataGenVerify", a.verify_backend)
+        except (ValueError, ImportError) as e:   # no OPENAI_API_KEY / openai package: keep going, but say so
+            verify_warning = (f"M3 verifier '{a.verify_backend}' unavailable ({e}); verified with the M2 model instead "
+                              "(same family, less strict). Fix: OPENAI_API_KEY in .env + pip install openai")
+            log(f"[warning] {verify_warning}")
     for k in ("rejected", "unverified"):
         state.setdefault(k, 0)
     timing = state.setdefault("timing", {"per_ex": PER_EX_INIT, "rounds": 0})
@@ -580,6 +587,8 @@ def run(a) -> dict:
             state["done"] = True
     save_state(run_dir, state)
     warnings = [NO_BENCH_WARNING] if fmt and fmt.get("bench") is None and (a.bench or "").lower() != "none" else []
+    if verify_warning:
+        warnings.append(verify_warning)
     return build_result(a.run_id, state, target, fmt, run_dir,
                         {"batches_this_call": batches, "stop_reason": stop_reason if not state["done"] else "done",
                          "sec_per_example": timing["per_ex"], "parallel": parallel, "warnings": warnings})

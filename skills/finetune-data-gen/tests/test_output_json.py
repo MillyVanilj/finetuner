@@ -43,4 +43,11 @@ try: json.loads(r.stdout); okf = True
 except Exception: okf = False
 check("format_data.py CLI defaults to JSON too", r.returncode == 0 and okf)
 
+# M3 on OpenAI Sol without OPENAI_API_KEY: falls back to the M2 model, finishes, and warns
+os.environ.pop("OPENAI_API_KEY", None)
+p2 = tmp / "spec_sol.json"; p2.write_text(json.dumps(spec))
+res2 = json.loads(call({"spec": str(p2), "run_id": "sol-fallback", "verify_backend": "openai"}))
+check("no OpenAI key: DataGen still finishes (M3 falls back to the M2 model)", res2.get("done") is True)
+check("...and its warnings say so", any("unavailable" in w and "OPENAI_API_KEY" in w for w in res2.get("warnings", [])))
+
 print(f"\n{'ALL PASS' if not fails else f'{fails} FAILED'}"); sys.exit(1 if fails else 0)

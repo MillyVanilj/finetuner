@@ -21,7 +21,8 @@ LAST_BENCH = RUNS / ".last_bench_dir"      # last bench_dir this skill was hande
 
 
 def _spec_judge(adapter_path):
-    """models.judge from the run's task spec, when it names a Claude model (judge and teacher call Claude).
+    """models.judge from the run's task spec, when it names a model run_eval can call: Claude (claude-*) or
+    OpenAI (gpt-*, e.g. Sol). It sets only the judge; the teacher stays on run_eval's teacher model.
     None when $FINETUNE_JUDGE_MODEL is set: that machine-wide override (e.g. to save credits) beats the spec,
     and run_eval.py reads it itself. Order: $FINETUNE_JUDGE_MODEL > spec models.judge > run_eval's default."""
     if os.environ.get("FINETUNE_JUDGE_MODEL"):
@@ -32,7 +33,7 @@ def _spec_judge(adapter_path):
         judge = (json.loads((Path(pdir) / "task_spec.json").read_text()).get("models") or {}).get("judge")
     except (OSError, ValueError, TypeError):
         return None
-    return judge if isinstance(judge, str) and judge.startswith("claude-") else None
+    return judge if isinstance(judge, str) and judge.startswith(("claude-", "gpt-")) else None
 
 
 def _pipeline_bench(pdir):
@@ -184,7 +185,7 @@ def main():
             cmd.append("--skip-general")
         judge = _spec_judge(a.adapter_path)
         if judge:
-            cmd += ["--claude-model", judge]
+            cmd += ["--judge-model", judge]
         with open(log_f, "ab") as log:
             proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         if not status_f.exists():  # the job writes its own status; this only covers its first moments

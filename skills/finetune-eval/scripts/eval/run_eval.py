@@ -189,6 +189,23 @@ def gain(tuned, base):
     return mean_ci([t["score"] - b["score"] for t, b in zip(tuned, base) if None not in (t["score"], b["score"])])
 
 
+def preflight(a):
+    """Keys and packages the judge and teacher need, checked at the start: the API calls only happen after
+    the GPU work, and a crash there loses the tuned model's answers (they are not cached)."""
+    import importlib.util
+    problems = []
+    need = {"anthropic"} if not a.skip_teacher else set()
+    need.add("anthropic" if a.judge_model.startswith("claude") else "openai")
+    for pkg, key in (("anthropic", "ANTHROPIC_API_KEY"), ("openai", "OPENAI_API_KEY")):
+        if pkg not in need:
+            continue
+        if importlib.util.find_spec(pkg) is None:
+            problems.append(f"python package '{pkg}' is not installed in this env (pip install {pkg})")
+        if not os.environ.get(key):
+            problems.append(f"{key} is not set (needed for the {'judge' if pkg == 'openai' else 'judge/teacher'})")
+    return problems
+
+
 def main():
     a = parse_args()
     adapter = Path(a.adapter_path).resolve()
@@ -206,6 +223,10 @@ def main():
         (out / "status.json").write_text(json.dumps({"pid": os.getpid(), "updated_at": time.time(), **kw}, indent=2))
 
     try:
+        status(state="running", stage="checking API keys")
+        problems = preflight(a)               # before any GPU work: a missing key used to crash after it
+        if problems:
+            raise RuntimeError("cannot run the eval: " + "; ".join(problems))
         status(state="running", stage="loading model")
         import anthropic
         import torch
@@ -268,7 +289,9 @@ def main():
         if cuda:
             torch.cuda.empty_cache()
 
-        client = anthropic.Anthropic(max_retries=5)
+        judge_is_claude = a.judge_model.startswith("claude")
+        # Claude only when the teacher or the judge uses it (preflight checked the key for exactly these)
+        client = anthropic.Anthropic(max_retries=5) if (not a.skip_teacher or judge_is_claude) else None
         pool = ThreadPoolExecutor(8)
         if not a.skip_teacher:
             status(state="running", stage="M7 teacher (Claude)")
@@ -276,7 +299,6 @@ def main():
                 lambda m: cache.get(["teacher", a.teacher_model, m], lambda: claude(client, a.teacher_model, m, "medium") or ""),
                 prompts))
 
-        judge_is_claude = a.judge_model.startswith("claude")
         if not judge_is_claude:
             import openai
             oai = openai.OpenAI(max_retries=5)    # OPENAI_API_KEY from the environment
