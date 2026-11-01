@@ -67,6 +67,37 @@ def skill_script(name: str) -> Path:
     raise RunnerError(f"skill {name} not found in {[str(r) for r in roots]} (run scripts/install.sh, or pull the branch that has it)")
 
 
+def skill_python() -> str:
+    """Skills need ScienceClaw's packages (LLM SDKs etc.), so run them with ScienceClaw's venv like its executor
+    does, not with whatever python started the dashboard. Override with $SCIENCECLAW_PYTHON."""
+    if os.environ.get("SCIENCECLAW_PYTHON"):
+        return os.environ["SCIENCECLAW_PYTHON"]
+    sc = Path(os.environ.get("SCIENCECLAW_DIR", Path.home() / "scienceclaw")).expanduser()
+    for p in (sc / ".venv" / "bin" / "python", sc / ".venv" / "bin" / "python3"):
+        if p.exists():
+            return str(p)
+    return sys.executable
+
+
+def dotenv_vars() -> dict:
+    """KEY=VALUE pairs from $FINETUNER_DIR/.env (default: this repo), so ▶ Start works even when the dashboard
+    was started without `source .env`. Variables already set in the environment win."""
+    f = Path(os.environ.get("FINETUNER_DIR", REPO)).expanduser() / ".env"
+    out = {}
+    try:
+        for line in f.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.removeprefix("export ").split("=", 1)
+            k, v = k.strip(), v.strip().strip('"').strip("'")
+            if k and v and k not in os.environ:
+                out[k] = v
+    except OSError:
+        pass
+    return out
+
+
 def last_json(text: str):
     """The skill contract: one JSON object on stdout. Be lenient: take the last parseable object."""
     text = text.strip()
@@ -86,9 +117,9 @@ def last_json(text: str):
 def call(pl: Pipeline, name: str, args: list, timeout: int = 900):
     """Run a skill script. Returns (exit_code, json_or_None, stderr_tail)."""
     script = skill_script(name)
-    env = dict(os.environ, FTC_PIPELINE_DIR=str(pl.dir), FINETUNER_DIR=os.environ.get("FINETUNER_DIR", str(REPO)),
+    env = dict(os.environ, **dotenv_vars(), FTC_PIPELINE_DIR=str(pl.dir), FINETUNER_DIR=os.environ.get("FINETUNER_DIR", str(REPO)),
                PYTHONPATH=os.pathsep.join([str(REPO), os.environ.get("PYTHONPATH", "")]).rstrip(os.pathsep))
-    cmd = [sys.executable, str(script), *[str(a) for a in args], "--format", "json"]
+    cmd = [skill_python(), str(script), *[str(a) for a in args], "--format", "json"]
     log(pl, "$ " + " ".join(cmd[1:]))
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env, cwd=str(script.parent))
@@ -180,7 +211,7 @@ def decontaminate(pl: Pipeline, data_run_id: str, bench_dir: str):
                 p = Path(bench_dir).expanduser() / f"{split}.jsonl"
                 if p.exists():
                     f.write(p.read_text())
-        p = subprocess.run([sys.executable, str(fmt), "--run-id", data_run_id, "--bench", str(allb), "--format", "json"],
+        p = subprocess.run([skill_python(), str(fmt), "--run-id", data_run_id, "--bench", str(allb), "--format", "json"],
                            capture_output=True, text=True, timeout=300, cwd=str(fmt.parent))
         out = last_json(p.stdout) or {}
         c = out.get("contaminated", (out.get("report") or {}).get("contaminated"))
@@ -282,6 +313,10 @@ def run(pl: Pipeline, max_loops_cap: int, skip_general: bool):
     max_loops = min(int(spec["targets"].get("max_loops") or 3), max_loops_cap)
     write_runner_state(pl, state="running", pid=os.getpid(), started_at=now_iso(), step="bench+data")
     pl.emit("pipeline", "log", f"Runner started (pid {os.getpid()}); up to {max_loops} loops", loop=pl.current_loop())
+    env = {**os.environ, **dotenv_vars()}   # names only, never values
+    keys = ", ".join(f"{k} {'✓' if env.get(k) else '✗ MISSING'}" for k in
+                     ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY", "HF_TOKEN"))
+    pl.emit("pipeline", "log", f"Skills run with {skill_python()}; keys: {keys}", loop=pl.current_loop())
 
     # Benchmark (once) in the background, training data in the foreground
     bench = {}
