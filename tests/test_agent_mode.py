@@ -61,6 +61,14 @@ def fake_run(runs, job, pdir, tuned=0.7):
     return d
 
 
+def install_profiles(home):
+    """What scripts/install.sh does with agents/: copy each profile to ~/.scienceclaw/profiles/<Name>/."""
+    for p in (ROOT / "agents").glob("*/agent_profile.json"):
+        d = home / ".scienceclaw" / "profiles" / p.parent.name
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "agent_profile.json").write_text(p.read_text())
+
+
 def test_profiles_cover_the_chain():
     profs = [json.loads(p.read_text()) for p in sorted((ROOT / "agents").glob("*/agent_profile.json"))]
     names = [p["name"] for p in profs]
@@ -124,19 +132,66 @@ def test_agents_start_status_stop_with_a_stub_daemon():
         (home / ".scienceclaw" / "infinite_config.json").write_text('{"api_key": "test"}')
         r = run("start")
         assert r.returncode == 1 and "install.sh" in r.stderr, r.stderr   # profiles not installed yet
-        for p in (ROOT / "agents").glob("*/agent_profile.json"):
-            d = home / ".scienceclaw" / "profiles" / p.parent.name
-            d.mkdir(parents=True)
-            (d / "agent_profile.json").write_text(p.read_text())
+        install_profiles(home)
+        r = run("start")
+        assert r.returncode == 1 and "kickoff" in r.stderr, r.stderr   # unscoped agents would act on old hand-offs
+        subprocess.run([sys.executable, "-c", "from ftc.agents import scope; scope('pipe-1')"], cwd=ROOT, env=env,
+                       check=True, timeout=60)   # what `agents kickoff` does first
         r = run("start", "--interval", "30")
         assert r.returncode == 0 and all(v.startswith("started") for v in json.loads(r.stdout).values()), r.stdout
         time.sleep(1)
         st = json.loads(run("status").stdout)
-        assert len(st) == 7 and all(v["running"] and v["last_log"] == "beat every 30s" for v in st.values()), st
+        assert len(st) == 7 and all(v["running"] and v["pipeline"] == "pipe-1" and v["last_log"] == "beat every 30s"
+                                    for v in st.values()), st
         assert all(v.startswith("already running") for v in json.loads(run("start").stdout).values())
-        assert all(v.startswith("stopped") for v in json.loads(run("stop").stdout).values())
+        # a stale pid file (e.g. after a reboot) whose number now belongs to an unrelated process: never kill it
+        bystander = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        pidf = home / ".scienceclaw/profiles/DataAgent/ftc_daemon.pid"
+        real = int(pidf.read_text())
+        pidf.write_text(str(bystander.pid))
+        try:
+            out = json.loads(run("stop").stdout)
+            assert out["DataAgent"] == "not running" and bystander.poll() is None, out   # bystander still alive
+            assert sum(v.startswith("stopped") for v in out.values()) == 6, out
+        finally:
+            bystander.kill()
+            os.kill(real, 9)   # the real DataAgent stub, orphaned by the swapped pid file
         time.sleep(0.5)
         assert not any(v["running"] for v in json.loads(run("status").stdout).values())
+
+
+def test_skills_do_nothing_on_a_bare_describe_schema_call():
+    """ScienceClaw's reactor calls every skill once with only `--describe-schema` (artifacts/reactor.py
+    _get_skill_schema). Our skills ignore unknown flags, so that call must not start any work."""
+    names = ["finetune-submit", "finetune-status", "finetune-eval", "finetune-decide", "finetune-report"]
+    if HAVE_SC:
+        names += ["finetune-data-gen", "finetune-bench-gen"]
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp).resolve()
+        env = {k: v for k, v in os.environ.items() if not k.endswith("_API_KEY")}
+        env.update(HOME=str(tmp), FINETUNER_RUNS=str(tmp / "runs"), FINETUNER_DIR=str(ROOT), SCIENCECLAW_DIR=str(SC))
+        for name in names:
+            script = next((ROOT / "skills" / name / "scripts").glob("*.py"))
+            r = subprocess.run([sys.executable, str(script), "--describe-schema"], cwd=tmp, env=env,
+                               capture_output=True, text=True, timeout=30)
+            assert r.returncode != 0, (name, r.stdout[-300:])   # missing hand-off input: refuse, don't run
+        assert not [p for p in tmp.rglob("*") if p.is_file()], "a bare --describe-schema call wrote files"
+
+
+def test_install_keeps_the_pipeline_scope():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp).resolve()
+        (tmp / "sc" / "skills").mkdir(parents=True)
+        env = {**os.environ, "HOME": str(tmp / "home"), "SCIENCECLAW_DIR": str(tmp / "sc")}
+        sh = lambda: subprocess.run(["bash", str(ROOT / "scripts/install.sh")], env=env, capture_output=True,
+                                    text=True, timeout=120)
+        assert sh().returncode == 0
+        prof = tmp / "home/.scienceclaw/profiles/TrainAgent/agent_profile.json"
+        assert "investigation_id_filter" not in json.loads(prof.read_text())
+        prof.write_text(json.dumps({**json.loads(prof.read_text()), "investigation_id_filter": "pipe-7"}))
+        assert sh().returncode == 0   # re-installed after a git pull, while the agents run
+        new = json.loads(prof.read_text())
+        assert new["investigation_id_filter"] == "pipe-7" and new["preferred_tools"] == ["finetune-submit"], new
 
 
 def test_kickoff_posts_a_scienceclaw_artifact():
@@ -146,6 +201,7 @@ def test_kickoff_posts_a_scienceclaw_artifact():
         tmp = Path(tmp).resolve()
         pl = Pipeline.create(load_spec(ROOT / "examples/specs/chem_qa.json"), root=tmp / "pipelines")
         env = {**os.environ, "HOME": str(tmp / "home"), "SCIENCECLAW_DIR": str(SC)}
+        install_profiles(tmp / "home")
         r = subprocess.run([sys.executable, "-m", "ftc.cli", "agents", "kickoff", str(pl.dir)], cwd=ROOT,
                            capture_output=True, text=True, env=env, timeout=60)
         assert r.returncode == 0, r.stdout + r.stderr
@@ -155,31 +211,35 @@ def test_kickoff_posts_a_scienceclaw_artifact():
         assert art["payload"] == {"spec": str(pl.dir / "task_spec.json")} == out["payload"]
         assert art["investigation_id"] == pl.id and idx["artifact_id"] == art["artifact_id"] == out["artifact_id"]
         assert json.loads((pl.dir / "pipeline.json").read_text())["links"]["kickoff_artifact_id"] == art["artifact_id"]
+        assert len(out["scoped_agents"]) == 7
+        for p in (tmp / "home/.scienceclaw/profiles").glob("*/agent_profile.json"):
+            assert json.loads(p.read_text())["investigation_id_filter"] == pl.id, p
 
 
-# Stand-ins for the skills that need a GPU or API keys. They take the same hand-off flags as the real skills and
-# print the same keys; finetune-eval, finetune-decide and finetune-report run for real.
+# Stand-ins for the skills that need a GPU or API keys. They take the same hand-off flags as the real skills (main
+# one required, so a bare `--describe-schema` call from the reactor does nothing, as with the real skills) and print
+# the same keys; finetune-eval, finetune-decide and finetune-report run for real.
 STANDINS = {
     "finetune-data-gen": """
-        p.add_argument("--spec"); p.add_argument("--data-feedback-path"); a, _ = p.parse_known_args()
+        p.add_argument("--spec", required=True); p.add_argument("--data-feedback-path"); a, _ = p.parse_known_args()
         out = Path(os.environ["FINETUNER_RUNS"]) / "train.jsonl"; out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text('{"messages": []}\\n')
         print(json.dumps({"done": True, "train_path": str(out)}))""",
     "finetune-bench-gen": """
-        p.add_argument("--spec"); a, _ = p.parse_known_args()
+        p.add_argument("--spec", required=True); a, _ = p.parse_known_args()
         pdir = Path(a.spec).parent; bench = pdir / "bench"; bench.mkdir(exist_ok=True)
         (bench / "dev.jsonl").write_text("{}\\n"); (bench / "heldout.jsonl").write_text("{}\\n")
         meta = json.loads((pdir / "pipeline.json").read_text()); meta["links"]["bench_dir"] = str(bench)
         (pdir / "pipeline.json").write_text(json.dumps(meta))
         print(json.dumps({"done": True, "bench_dir": str(bench)}))""",
     "finetune-submit": """
-        p.add_argument("--train-path"); p.add_argument("--retrain-config-path"); a, _ = p.parse_known_args()
+        p.add_argument("--train-path", required=True); p.add_argument("--retrain-config-path"); a, _ = p.parse_known_args()
         runs = Path(os.environ["FINETUNER_RUNS"]); job = f"j{len(list(runs.glob('j*'))) + 1}"
         sys.path.insert(0, os.environ["TEST_DIR"]); from test_agent_mode import fake_run
         fake_run(runs, job, Path(os.environ["TEST_PIPELINE"]))
         print(json.dumps({"status": "submitted", "train_job_id": job}))""",
     "finetune-status": """
-        p.add_argument("--train-job-id"); a, _ = p.parse_known_args()
+        p.add_argument("--train-job-id", required=True); a, _ = p.parse_known_args()
         print(json.dumps({"state": "done", "train_job_id": a.train_job_id,
                           "adapter_path": str(Path(os.environ["FINETUNER_RUNS"]) / a.train_job_id / "adapter")}))""",
 }
@@ -192,8 +252,15 @@ from artifacts.artifact import ArtifactStore
 from artifacts.reactor import ArtifactReactor
 from ftc.agents import kickoff
 pdir, repo = Path(sys.argv[3]), Path(sys.argv[2])
-kickoff(pdir)
-profiles = [json.loads(p.read_text()) for p in sorted((repo / "agents").glob("*/agent_profile.json"))]
+# A leftover from an earlier run on this machine: a train_path no agent ever used, from another investigation.
+old = ArtifactStore("OldDataAgent").create_and_save(skill_used="finetune-data-gen", investigation_id="old-test-run",
+                                                    payload={"done": True, "train_path": "/old/stale/train.jsonl"})
+unscoped = json.loads((repo / "agents/TrainAgent/agent_profile.json").read_text())
+saw_old_unscoped = old.artifact_id in [a.artifact_id for a in
+                                       ArtifactReactor("TrainAgent", unscoped, ArtifactStore("TrainAgent")).scan_available()]
+kickoff(pdir)                                       # scopes the installed profiles to this pipeline, then posts
+home = Path.home() / ".scienceclaw" / "profiles"
+profiles = [json.loads(p.read_text()) for p in sorted(home.glob("*/agent_profile.json"))]   # as the daemons load them
 log = []
 for beat in range(1, 9):                            # each beat: every agent's reactor runs once, like a heartbeat
     for prof in profiles:
@@ -201,7 +268,9 @@ for beat in range(1, 9):                            # each beat: every agent's r
             log.append({"beat": beat, "agent": prof["name"], "skill": child.skill_used, "keys": sorted(child.payload)})
     if (pdir / "final" / "final_report.json").exists():
         break
-print("RESULT " + json.dumps(log))
+consumed = (Path.home() / ".scienceclaw/artifacts/TrainAgent/consumed.txt")
+print("RESULT " + json.dumps({"log": log, "saw_old_unscoped": saw_old_unscoped,
+                              "old_consumed": consumed.exists() and old.artifact_id in consumed.read_text()}))
 """
 
 
@@ -226,6 +295,7 @@ def test_full_agent_chain_with_the_scienceclaw_reactor():
                 shutil.copytree(ROOT / "skills" / name, sc / "skills" / name)
         spec = {**load_spec(ROOT / "examples/specs/chem_qa.json"), "targets": {"target_score": 0.6}}
         pl = Pipeline.create(spec, root=tmp / "pipelines")
+        install_profiles(tmp / "home")
         env = {**os.environ, "HOME": str(tmp / "home"), "FINETUNER_DIR": str(ROOT), "FINETUNER_RUNS": str(tmp / "runs"),
                "SCIENCECLAW_DIR": str(sc), "TEST_DIR": str(Path(__file__).parent), "TEST_PIPELINE": str(pl.dir),
                "SCIENCECLAW_DISABLE_SKILL_AUTO_REFRESH": "1"}
@@ -235,8 +305,12 @@ def test_full_agent_chain_with_the_scienceclaw_reactor():
             return skip("ScienceClaw's Python deps are missing: " + r.stderr.strip().splitlines()[-1])
         line = next((x for x in r.stdout.splitlines() if x.startswith("RESULT ")), None)
         assert line, r.stdout[-3000:] + r.stderr[-3000:]
-        log = json.loads(line[7:])
+        res = json.loads(line[7:])
+        log = res["log"]
         order = [(e["agent"], e["skill"]) for e in log]
+        assert res["saw_old_unscoped"], "control: an unscoped TrainAgent does see the stale train_path"
+        assert not res["old_consumed"] and order.count(("TrainAgent", "finetune-submit")) == 1, res
+        assert sorted(p.name for p in (tmp / "runs").glob("j*")) == ["j1"]   # only this pipeline's job, no stale one
         for step in [("DataAgent", "finetune-data-gen"), ("BenchAgent", "finetune-bench-gen"),
                      ("TrainAgent", "finetune-submit"), ("StatusAgent", "finetune-status"),
                      ("EvalAgent", "finetune-eval"), ("DecideAgent", "finetune-decide"),

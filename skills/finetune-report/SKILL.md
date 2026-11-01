@@ -21,7 +21,7 @@ Called again after that, it answers at once from the existing report.
 | `--best-loop` | finetune-decide's `best_loop` (shown in the report) | the pipeline's loop |
 | `--best-job-id` | finetune-decide's `best_job_id` | from the run's `run.json` |
 
-Unknown flags are ignored. Needs `$FINETUNER_DIR` (default `~/finetuner`) for the `ftc` package, and everything `finetune-eval` needs (training venv, `ANTHROPIC_API_KEY`).
+Unknown flags are ignored. Needs `$FINETUNER_DIR` (default `~/finetuner`) for the `ftc` package, and everything `finetune-eval` needs for the held-out run: the training venv and the API key of its judge and teacher models. Which keys exactly is listed in `finetune-eval`'s SKILL.md, the one place to keep up to date when the judge model changes.
 
 ## Output
 

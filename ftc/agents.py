@@ -2,10 +2,16 @@
 
     bash scripts/install.sh                                # copy skills/ and agents/*/agent_profile.json into ScienceClaw
     set -a; source .env; set +a                            # the agents' skills read API keys from the environment
+    python3 -m ftc.cli agents kickoff <pipeline_dir>       # scope the agents to this pipeline + post its first artifact
     python3 -m ftc.cli agents start [--interval 60]        # one ScienceClaw heartbeat daemon per profile in agents/
-    python3 -m ftc.cli agents kickoff <pipeline_dir>       # the first artifact: {"spec": "<pipeline>/task_spec.json"}
-    python3 -m ftc.cli agents status                       # running? + each agent's last log line
+    python3 -m ftc.cli agents status                       # running? scoped to which pipeline? + last log line
     python3 -m ftc.cli agents stop
+
+Scope: ~/.scienceclaw/artifacts/global_index.jsonl is shared by every agent on the machine, so an unscoped agent would
+also act on old, never-used hand-offs (e.g. a stale train_path from an earlier test would start a GPU job). kickoff
+therefore sets investigation_id_filter = the pipeline id in each installed profile (ScienceClaw's reactor then skips
+every artifact from another pipeline; the kickoff and all its children carry that id), and start refuses to run
+agents that aren't scoped. A new kickoff moves running agents to the new pipeline at their next beat.
 
 The chain (each arrow = an artifact key the reactor matches to the next skill's --flag):
   Kickoff ─spec→ DataAgent (finetune-data-gen) ─train_path→ TrainAgent (finetune-submit) ─train_job_id→
@@ -43,12 +49,30 @@ def profile_names() -> list:
     return sorted(p.parent.name for p in (REPO / "agents").glob("*/agent_profile.json"))
 
 
+def _installed(name) -> Path:
+    return sc_home() / "profiles" / name / "agent_profile.json"
+
+
+def scope(pipeline_id: str) -> list:
+    """Limit every installed agent to one pipeline's artifacts (ScienceClaw's investigation_id_filter)."""
+    missing = [n for n in profile_names() if not _installed(n).exists()]
+    if missing:
+        raise ValueError(f"profiles not installed: {missing}; run scripts/install.sh")
+    for name in profile_names():
+        prof = json.loads(_installed(name).read_text())
+        prof["investigation_id_filter"] = pipeline_id
+        _installed(name).write_text(json.dumps(prof, indent=2) + "\n")
+    return profile_names()
+
+
 def kickoff(pipeline_dir) -> dict:
-    """Post the artifact that starts agent mode. Its payload holds ONLY `spec`: any other key could match another
-    skill's flag (e.g. finetune-submit's --pipeline-dir) and wake it with half its inputs."""
+    """Scope the agents to this pipeline, then post the artifact that starts agent mode. Its payload holds ONLY
+    `spec`: any other key could match another skill's flag (e.g. finetune-submit's --pipeline-dir) and wake it
+    with half its inputs."""
     pl = Pipeline.from_any(pipeline_dir)
     if not pl.active:
         raise ValueError(f"not a pipeline folder: {pipeline_dir}")
+    scoped = scope(pl.id)   # first: an agent that is already running must not wake on another pipeline's leftovers
     sys.path.insert(0, str(scienceclaw_dir()))
     try:
         from artifacts.artifact import ArtifactStore
@@ -61,7 +85,7 @@ def kickoff(pipeline_dir) -> dict:
     pl.link("kickoff_artifact_id", art.artifact_id, stage="pipeline")
     pl.emit("pipeline", "log", "Agent mode: kickoff posted (spec → DataAgent and BenchAgent)", loop=pl.current_loop())
     return {"artifact_id": art.artifact_id, "producer_agent": KICKOFF_AGENT, "payload": art.payload,
-            "store": str(store.store_path)}
+            "store": str(store.store_path), "scoped_agents": scoped, "investigation_id": pl.id}
 
 
 def _pidfile(name) -> Path:
@@ -69,12 +93,15 @@ def _pidfile(name) -> Path:
 
 
 def _alive(name):
+    """The pid in the agent's pid file, only if that process really is its heartbeat daemon. After a reboot the
+    file can be stale and the number reused by an unrelated process, which must never be killed."""
     try:
         pid = int(_pidfile(name).read_text())
         os.kill(pid, 0)
-        return pid
+        cmd = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True).stdout
     except (OSError, ValueError):
         return None
+    return pid if "heartbeat_daemon.py" in cmd and f"--profile {name}" in cmd else None
 
 
 def start(interval: int = 60) -> dict:
@@ -91,9 +118,12 @@ def start(interval: int = 60) -> dict:
         raise ValueError(f"{sc_home() / 'infinite_config.json'} has no api_key: ScienceClaw's heartbeat won't run "
                          "(set one up with ScienceClaw's setup.py; the agents themselves don't post)")
     names = profile_names()
-    missing = [n for n in names if not (sc_home() / "profiles" / n / "agent_profile.json").exists()]
+    missing = [n for n in names if not _installed(n).exists()]
     if missing:
         raise ValueError(f"profiles not installed: {missing}; run scripts/install.sh")
+    unscoped = [n for n in names if not json.loads(_installed(n).read_text()).get("investigation_id_filter")]
+    if unscoped:   # unscoped agents would act on every never-used hand-off on this machine
+        raise ValueError(f"agents not scoped to a pipeline: {unscoped}; run `ftc.cli agents kickoff <pipeline_dir>` first")
     env = {**os.environ, "FINETUNER_DIR": os.environ.get("FINETUNER_DIR", str(REPO))}
     out = {}
     for name in names:
@@ -130,7 +160,11 @@ def status() -> dict:
             last = log.read_text(errors="replace").strip().splitlines()[-1]
         except (OSError, IndexError):
             last = ""
-        out[name] = {"running": bool(_alive(name)), "last_log": last[-200:]}
+        try:
+            pipeline = json.loads(_installed(name).read_text()).get("investigation_id_filter")
+        except (OSError, ValueError):
+            pipeline = None
+        out[name] = {"running": bool(_alive(name)), "pipeline": pipeline, "last_log": last[-200:]}
     return out
 
 

@@ -327,9 +327,9 @@ its skill when a peer's artifact carries a key that matches one of the skill's `
 ```bash
 bash scripts/install.sh                                # skills/ -> ~/scienceclaw/skills, agents/*/agent_profile.json -> ~/.scienceclaw/profiles
 set -a; source .env; set +a                            # the skills read API keys from the environment
-python3 -m ftc.cli agents start --interval 60          # 7 daemons, one per profile in agents/
 python3 -m ftc.cli new examples/specs/chem_qa.json     # a pipeline folder (or the dashboard's New task page)
-python3 -m ftc.cli agents kickoff <pipeline_dir>       # the first artifact: {"spec": "<pipeline>/task_spec.json"}
+python3 -m ftc.cli agents kickoff <pipeline_dir>       # scope the agents to it + post {"spec": "<pipeline>/task_spec.json"}
+python3 -m ftc.cli agents start --interval 60          # 7 daemons, one per profile in agents/ (refuses unscoped agents)
 python3 -m ftc.cli agents status                       # running? + each agent's last log line; the dashboard shows progress
 python3 -m ftc.cli agents stop
 ```
@@ -352,7 +352,14 @@ python3 -m ftc.cli agents stop
   only `spec`: another key could wake a skill with half its inputs (e.g. `finetune-submit --pipeline-dir`).
 - `tests/test_handoffs.py` checks every key match, including the kickoff's; `tests/test_agent_mode.py` drives the whole
   chain with ScienceClaw's real `ArtifactReactor` (stand-ins for the GPU/API skills; needs ScienceClaw + pyyaml).
-- One pipeline at a time: when two artifacts for the same skill are waiting, the reactor merges the two oldest
-  (newest values win) and marks both used, so a second kickoff could swallow the first.
+- One pipeline at a time: the agents follow the latest kickoff (the scope above), so an earlier pipeline's unfinished
+  hand-offs are left alone.
 - Skill help text matters: the reactor treats every `--word` in a skill's `--help` output (description included) as
   an input flag. Keep flag names out of descriptions, and hide internal flags with `help=argparse.SUPPRESS`.
+- The reactor also calls each skill once with only `--describe-schema` (looking for an `--input-json` schema). Our
+  skills ignore unknown flags, so a skill must do nothing when its hand-off input is missing: make that flag
+  `required=True` (or exit early). `tests/test_agent_mode.py` checks this for every skill.
+- Scope: `agents kickoff` sets `investigation_id_filter` = the pipeline id in each installed profile, so agents only
+  act on this pipeline's artifacts, not on old, never-used hand-offs in the shared index (an old `train_path` would
+  start a GPU job). `agents start` refuses unscoped agents; `install.sh` keeps the scope when it re-copies profiles.
+  A new kickoff moves running agents to the new pipeline at their next beat.
