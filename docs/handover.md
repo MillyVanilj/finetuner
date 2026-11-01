@@ -78,11 +78,13 @@ listings (The Rundown, AWS Bedrock); OpenRouter lists `gpt-6-sol`. If wrong, set
 `FINETUNE_JUDGE_MODEL`. Without `OPENAI_API_KEY`, DataGen falls back to Gemini verification with a warning in
 its result; the eval stops at start-up (before GPU work) with a clear message.
 
-Open question (still true on main): DataGen caps each LLM call at **18 s** (`finetune_common/llm.py:23`, `LLM_CALL_CAP_S`)
-because ScienceClaw's executor kills skills at 30 s (DataGen budgets 27 s). Sol is a reasoning model and may
-need longer per verification batch. `run_pipeline.py:189` gives DataGen 600 s but never sets
-`DATAGEN_TIME_BUDGET`, so the dashboard runner also works in 27 s slices. Proposed fix (not done): set
-`DATAGEN_TIME_BUDGET=580` in `run_pipeline.py`'s DataGen call and make the 18 s cap an env var.
+DataGen time budget (PR #23): ScienceClaw's executor kills skills at 30 s, so in agent mode DataGen budgets 27 s
+per call and cuts each LLM call at 18 s. Sol is a reasoning model and may need longer. `run_pipeline.py` now gives
+each DataGen call `$DATAGEN_TIME_BUDGET` or 540 s (+120 s timeout margin), which allows 120 s per LLM call, and
+stops a DataGen stage after 4 h or 5 calls without progress. In agent mode, checks that run out of time stay
+queued (nothing new is generated meanwhile); if Sol can't check even one example per call, DataGen stops with
+`verifier_too_slow` and says what to change. `$FINETUNE_LLM_CALL_CAP_S` pins the per-call limit
+(DataGen SKILL.md).
 
 ## 5. Agent mode (the "decentralised collective")
 
@@ -183,7 +185,7 @@ clamped, reasons saved in `run.json`). For other GPU work check yourself: GPU id
 1. ~~Merge #13~~ and ~~#11~~: done. Tell the team to add `OPENAI_API_KEY` to `.env` on Brev, `git pull`,
    `bash scripts/install.sh`. Confirm the Sol model id with one real call (section 4).
 2. **Merge #18** (eval crash on Brev when `install.sh` ran mid-eval).
-3. Decide on the 18 s / 27 s DataGen budget fix (section 4).
+3. Merge the DataGen budget fix (#23, section 4).
 4. **Review + merge #12.** It predates #11: merge `main` into it and resolve `docs/decisions.md` overlap.
    Run the real chain on Brev once (chem_qa example, `--skip-general`, 1 loop).
 5. **Port #15's three pieces into #12** (section 5.3), then close #15.

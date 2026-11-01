@@ -34,6 +34,7 @@ def out(obj, rc=0):
 FAKES = {
     "finetune-data-gen/scripts/gen_data.py": """
 p = argparse.ArgumentParser(); p.add_argument("--spec"); p.add_argument("--run-id"); p.add_argument("--format")
+p.add_argument("--time-budget", type=float, default=27.0)
 a = p.parse_args()
 d = Path(os.environ["FAKE_STATE"]) / "datagen" / a.run_id; d.mkdir(parents=True, exist_ok=True)
 spec = json.loads(Path(a.spec).read_text()); n = spec["n_examples"]
@@ -186,6 +187,68 @@ def test_runner_end_to_end(keep=False):
     return pl.dir
 
 
+def _runner():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("run_pipeline_mod", ROOT / "scripts" / "run_pipeline.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_datagen_budget_and_safety_nets():
+    """The runner gives DataGen long calls ($DATAGEN_TIME_BUDGET if set, else 540 s), a call timeout with room for
+    startup and M4 after the budget, and stops a DataGen stage that makes no progress (instead of ~64 h of calls),
+    but not while DataGen only waits for BenchGen to freeze the benchmark."""
+    R = _runner()
+    saved = os.environ.get("DATAGEN_TIME_BUDGET")
+    R.dotenv_vars = lambda: {}
+    try:
+        os.environ.pop("DATAGEN_TIME_BUDGET", None)
+        assert R.datagen_budget() == 540
+        os.environ["DATAGEN_TIME_BUDGET"] = "300"
+        assert R.datagen_budget() == 300
+        for bad in ("abc", "0", "-1"):
+            os.environ["DATAGEN_TIME_BUDGET"] = bad
+            assert R.datagen_budget() == 540, bad
+        os.environ.pop("DATAGEN_TIME_BUDGET")
+        R.dotenv_vars = lambda: {"DATAGEN_TIME_BUDGET": "420"}
+        assert R.datagen_budget() == 420                     # from .env
+        R.dotenv_vars = lambda: {}
+    finally:
+        if saved is None:
+            os.environ.pop("DATAGEN_TIME_BUDGET", None)
+        else:
+            os.environ["DATAGEN_TIME_BUDGET"] = saved
+    assert R.DATAGEN_MARGIN_S >= 60
+    R.sleep = lambda s: None
+    with tempfile.TemporaryDirectory() as d:
+        pl = Pipeline.create(load_spec(ROOT / "examples/specs/chem_qa.json"), root=Path(d) / "pipelines")
+        calls = []
+        def stuck(pl_, name, args, timeout=900):
+            calls.append(timeout)
+            assert args[args.index("--time-budget") + 1] == "540", args   # long calls (Sol checks can take > 18 s)
+            return 1, {"done": False, "raw_kept": 4, "rejected_total": 1, "pending_verify": 3, "unverified_total": 0,
+                       "stop_reason": "checking examples left over from earlier calls"}, ""
+        R.call = stuck
+        try:
+            R.run_datagen(pl, pl.dir / "task_spec.json", "r1", 1)
+            raise AssertionError("a stuck DataGen should stop the runner")
+        except R.RunnerError as e:
+            assert "no progress" in str(e) and len(calls) == R.DATAGEN_NO_PROGRESS_CALLS + 1, (e, len(calls))
+        assert calls[0] == 540 + R.DATAGEN_MARGIN_S
+        n = {"i": 0}
+        def bench_wait(pl_, name, args, timeout=900):
+            n["i"] += 1
+            if n["i"] < 20:   # all generated, BenchGen still working: the same numbers many times over
+                return 1, {"done": False, "state": "waiting_for_bench", "raw_kept": 6, "rejected_total": 0,
+                           "pending_verify": 0, "unverified_total": 0}, ""
+            return 0, {"done": True, "train_path": str(Path(d) / "train.jsonl"), "train_examples": 6}, ""
+        R.call = bench_wait
+        assert R.run_datagen(pl, pl.dir / "task_spec.json", "r2", 1).endswith("train.jsonl")
+
+
 if __name__ == "__main__":
     test_runner_end_to_end(keep=True)
     print("ok test_runner_end_to_end")
+    test_datagen_budget_and_safety_nets()
+    print("ok test_datagen_budget_and_safety_nets")

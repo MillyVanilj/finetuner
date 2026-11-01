@@ -35,6 +35,8 @@ AVOID_LIMIT = 40        # only show the most recent N prompts to keep the prompt
 VERIFY_MAX_TOKENS = 1500  # ~10 short verdicts
 VERIFY_TEMPERATURE = 0.1  # the reviewer should be consistent, not creative
 MAX_REGEN_ROUNDS = 2      # rejected examples are regenerated at most twice
+MAX_VERIFY_CUTOFFS = 3    # a single pending example cut off this many calls in a row -> VerifierTooSlow
+MIN_FAIR_VERIFY_S = 10.0  # ...only counting checks that had at least this long
 
 # --- time management (Step 7). The skill executor kills the process at 30 s. ---
 SKILL_DEADLINE_S = 27.0   # default --time-budget: everything must finish by this, from process start
@@ -157,15 +159,17 @@ def _truthy(v) -> bool:
     return v is True or (isinstance(v, str) and v.strip().lower() in {"true", "yes", "keep", "1"})
 
 
-def verify_batch(llm, spec: dict, examples: list, deadline: float = None) -> tuple[list, list, list]:
+def verify_batch(llm, spec: dict, examples: list, deadline: float = None, cap: float = None,
+                 info: dict = None) -> tuple[list, list, list]:
     """M3: one LLM call -> (kept, rejected, unverified).
     rejected items are {"example": ..., "reason": ...}.
-    If the verifier itself fails, the whole batch is set aside as unverified (not kept)."""
+    If the verifier itself fails, the whole batch is set aside as unverified (not kept).
+    cap / info: see call_json_list (info["cut_off"] says the verifier ran out of time rather than failed)."""
     if not examples:
         return [], [], []
     verdicts = call_json_list(llm, build_verify_prompt(spec, examples),
                               VERIFY_MAX_TOKENS, VERIFY_TEMPERATURE, "M3", required_key="keep",
-                              deadline=deadline)
+                              deadline=deadline, cap=cap, info=info)
     if not verdicts:
         log("[M3] verifier failed; batch set aside as unverified")
         return [], [], list(examples)
@@ -247,16 +251,69 @@ def existing_prompts(run_dir: Path) -> list[str]:
     return [k for k in (_user_key(r) for r in rows) if k]
 
 
-def verify_pending(llm_v, spec: dict, run_dir: Path, state: dict, deadline: float) -> None:
-    """Verify examples that a previous call generated but had no time to verify.
-    Second chance only: anything still unverified goes to unverified.jsonl for good."""
+class VerifierTooSlow(ValueError):
+    """The M3 verifier can't check even one example within the time one call allows."""
+
+
+def verifier_id(llm_v, time_budget) -> str:
+    """What decides whether M3 fits in a call: backend, model, per-call cap, time budget."""
+    model = getattr(llm_v, "openai_model", None) or getattr(llm_v, "anthropic_model", None) or ""
+    return f"{getattr(llm_v, 'backend', '?')}:{model} cap={L.LLM_CALL_CAP_S:g}s budget={time_budget:g}s"
+
+
+def too_slow_message(vid) -> str:
+    return (f"the M3 verifier ({vid}) keeps running out of time on a single example, so DataGen can't check its "
+            "data within one call. Fix one of: run scripts/run_pipeline.py (long calls, up to 120 s each); give agent "
+            "mode a longer limit and set DATAGEN_TIME_BUDGET to match; or use a faster checker "
+            "(DATAGEN_VERIFY_BACKEND=same uses the M2 model). Calling again with the same settings repeats this error "
+            "without API calls.")
+
+
+def verify_pending(llm_v, spec: dict, run_dir: Path, state: dict, deadline: float, time_budget: float) -> bool:
+    """Verify examples that an earlier call generated but couldn't check in time (pending_verify.jsonl).
+    Returns True while examples are still waiting: the caller then generates nothing new this call, so a
+    verifier slower than one call can't make DataGen generate and drop examples forever.
+    - A check that was cut off at the time limit is NOT a failure: the examples stay pending, the next call
+      checks half as many (smaller prompt, faster reasoning) with all the time it has left.
+    - If even one example is cut off MAX_VERIFY_CUTOFFS times in a row with a fair amount of time, raise
+      VerifierTooSlow (no endless paid retries); the same settings then fail at once, new settings retry.
+    - A real verifier failure (empty or unusable reply, not a timeout) drops the examples to unverified.jsonl,
+      as before: they already failed once."""
     f = run_dir / "pending_verify.jsonl"
     items = read_jsonl(f)
-    if not items or call_timeout(deadline) < L.MIN_CALL_S:
-        return
-    log(f"[M3] verifying {len(items)} pending examples from the previous call")
-    ok, bad, unv = verify_batch(llm_v, spec, items, deadline)
+    vid = verifier_id(llm_v, time_budget)
+    slow = state.get("verifier_too_slow")
+    if slow and slow == vid:
+        raise VerifierTooSlow(too_slow_message(vid))
+    if slow:
+        log(f"[M3] settings changed since the verifier was too slow ({slow}); trying again with {vid}")
+        state.pop("verifier_too_slow"); state["verify_cutoffs"] = 0
+    if not items or state["kept"] >= state.get("raw_target", float("inf")):
+        state["verify_chunk"] = None
+        return False
+    if call_timeout(deadline, float("inf")) < L.MIN_CALL_S:
+        return True
+    chunk = min(len(items), state.get("verify_chunk") or len(items))
+    take, rest = items[:chunk], items[chunk:]
+    log(f"[M3] verifying {len(take)} of {len(items)} pending examples (left over from earlier calls)")
+    info = {}
+    ok, bad, unv = verify_batch(llm_v, spec, take, deadline, cap=float("inf"), info=info)   # all the time left
+    if info.get("cut_off"):
+        fair = info.get("timeout", 0) >= MIN_FAIR_VERIFY_S
+        state["verify_cutoffs"] = state.get("verify_cutoffs", 0) + (1 if fair and chunk == 1 else 0)
+        state["verify_chunk"] = max(1, chunk // 2)
+        log(f"[M3] check cut off after {info.get('timeout', 0):.1f}s; kept pending, next call checks "
+            f"{state['verify_chunk']} at a time")
+        if state["verify_cutoffs"] >= MAX_VERIFY_CUTOFFS:
+            state["verifier_too_slow"] = vid
+            save_state(run_dir, state)
+            raise VerifierTooSlow(too_slow_message(vid))
+        save_state(run_dir, state)
+        return True
+    state["verify_cutoffs"] = 0
+    state["verify_chunk"] = min(len(items), chunk * 2) if rest else None   # fits again: grow back
     f.write_text("")
+    append_jsonl(f, rest)
     ok = ok[:max(0, state.get("raw_target", 0) - state["kept"])] if state.get("raw_target") else ok
     append_jsonl(run_dir / "raw.jsonl", ok)
     append_jsonl(run_dir / "rejects.jsonl", [dict(r, round="deferred") for r in bad])
@@ -265,6 +322,7 @@ def verify_pending(llm_v, spec: dict, run_dir: Path, state: dict, deadline: floa
     state["rejected"] += len(bad)
     state["unverified"] += len(unv)
     save_state(run_dir, state)
+    return bool(rest)
 
 
 # ---------- main loop ----------
@@ -375,6 +433,8 @@ def main():
         if unknown:
             log(f"[args] ignoring unrecognized arguments: {unknown}")
         result = run(a)
+    except VerifierTooSlow as e:                 # a settings problem, not a crash: no traceback
+        result, code = {"error": f"VerifierTooSlow: {e}", "state": "verifier_too_slow", "done": False}, 1
     except Exception as e:                       # always answer with JSON, never a bare traceback
         import traceback; traceback.print_exc()
         result, code = {"error": f"{type(e).__name__}: {e}", "done": False}, 1
@@ -480,6 +540,7 @@ def run(a) -> dict:
         a.run_id = f"{a.pipeline_dir.name}-l{loop}"
     a.agent_mode = agent_mode
     deadline = _T_START + a.time_budget
+    L.allow_long_calls(a.time_budget)         # run_pipeline.py's long calls: 120 s per LLM call instead of 18 s
     jsonparse.BAD_OUTPUT_DIR = RUNS_DIR
     if not (a.spec or (a.query and a.query.strip())):
         raise ValueError("give --spec <file> or --query <fine-tuning request>")
@@ -543,10 +604,12 @@ def run(a) -> dict:
     focuses = ["typical cases"] + list(spec["edge_cases"])
     raw_target = state.setdefault("raw_target", target)   # grows if M4 drops rows (top-ups)
     batches, stop_reason = 0, "target reached"
-    verify_pending(llm_v, spec, run_dir, state, deadline)
+    waiting = verify_pending(llm_v, spec, run_dir, state, deadline, a.time_budget)
+    if waiting:
+        stop_reason = "checking examples left over from earlier calls before generating more"
 
     parallel = max(1, min(a.parallel, state.get("parallel_cap", a.parallel)))
-    while state["kept"] < raw_target:
+    while state["kept"] < raw_target and not waiting:
         if a.max_batches and batches >= a.max_batches:
             stop_reason = "max batches"
             break
@@ -602,6 +665,9 @@ def run(a) -> dict:
         state["batch_idx"] += p_now
         batches += 1
         save_state(run_dir, state)
+        if unverified:   # the checker ran out of time: check those first (next call) before making more
+            stop_reason = "checker ran out of time; those examples are checked first on the next call"
+            break
         if not (kept or rejects or unverified):   # nothing came back at all
             stop_reason = ("time budget used" if call_timeout(deadline) < L.MIN_CALL_S
                            else "no output from LLM (API error / rate limit?)")

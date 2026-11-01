@@ -57,7 +57,7 @@ next cycle. Checked by `tests/test_handoffs.py`.
 | `--run-id` | Name of this run; progress lives in `~/.scienceclaw/finetune/runs/<run-id>/` | `<pipeline_id>-l<loop>` for a spec inside a pipeline folder (agent mode; the run is also linked in `pipeline.json` and its start/done shown on the dashboard); else the spec file name, or slug of the query |
 | `--format` | `json` (machine-readable result) or `summary` (one line) | json |
 | `--batch-size` | Largest batch; smaller ones are planned automatically near the time limit | 10 |
-| `--time-budget` | Seconds one call may use, from process start. Set it a few seconds below the executor's timeout | 27, or `$DATAGEN_TIME_BUDGET` |
+| `--time-budget` | Seconds one call may use, from process start. Set it a few seconds below the executor's timeout. Above 60 s, a single LLM call may take up to 120 s instead of 18 s (a reasoning checker such as Sol needs it). 0 is not "unlimited": nothing runs. `scripts/run_pipeline.py` passes `$DATAGEN_TIME_BUDGET` if set, else 540 | 27, or `$DATAGEN_TIME_BUDGET` |
 | `--bench` | Benchmark for the contamination check: BenchGen run id, folder or file; `none` disables | a frozen BenchGen benchmark with the same spec, if any |
 | `--verify-backend` | LLM backend for M3: `openai` (Sol, a different family from the Gemini generator, so it checks more strictly; model `$FINETUNE_OPENAI_MODEL`), `anthropic`, or `same` (= M2's backend). Needs `OPENAI_API_KEY` + the `openai` package; without them M3 falls back to M2's backend and the result's `warnings` says so | `openai` (Sol), or `$DATAGEN_VERIFY_BACKEND` |
 | `--parallel` | Batches generated at the same time. Falls back to 1 on API rate limits | 1 |
@@ -118,8 +118,8 @@ Example: `{baseDir}/examples/spec_chem.json`
 | `spec.json` | Copy of the spec used |
 | `raw.jsonl` | Verified examples, appended batch by batch |
 | `rejects.jsonl` | Rejected examples with `reason`, `round`, `focus` (useful failure categories for the Evaluator) |
-| `pending_verify.jsonl` | Generated but not yet verified (time ran out); verified first on the next call |
-| `unverified.jsonl` | Could not be verified twice; never used for training |
+| `pending_verify.jsonl` | Generated but not yet checked (the checker ran out of time); checked first on the next call, before anything new is generated |
+| `unverified.jsonl` | The checker failed on them twice (an error or unusable reply, not running out of time); never used for training |
 | `state.json` | Progress, timing model, carried-over reject feedback |
 | `train.jsonl` | Final training data (M4 output) |
 | `format_report.json` | M4 counts plus sample dropped rows per reason |
@@ -153,6 +153,16 @@ python3 {baseDir}/lib/format_data.py --run-id chem-v1 --bench path/to/benchmark.
 - Executor timeouts differ: the plain skill executor uses 30 s (keep the default 27), while the
   deep-investigation agent path allows longer. With a longer limit, set `DATAGEN_TIME_BUDGET`
   (for example `280` for a 300 s limit) so one call can finish the whole run.
+- Per-LLM-call limit: 18 s with the default budget, 120 s with a budget over 60 s. `$FINETUNE_LLM_CALL_CAP_S`
+  (seconds, 5 to 3600, e.g. `45` or `45s`) pins it for any budget; another value is ignored with a warning.
+- A slow checker in agent mode (27 s per call, e.g. Sol, a reasoning model): when M3 runs out of time, those
+  examples are **not** dropped and **nothing new is generated** until they are checked. The next call checks them
+  first, with all the time it has left, and each time a check is cut off it checks half as many next time. If even a
+  single example is cut off 3 calls in a row (with at least 10 s each), DataGen stops with
+  `"state": "verifier_too_slow"` (exit 1) and says what to change: run `scripts/run_pipeline.py` (long calls), give
+  agent mode a longer limit with a matching `DATAGEN_TIME_BUDGET`, or use a faster checker
+  (`DATAGEN_VERIFY_BACKEND=same`). Calling again with the same settings repeats the error without API calls; any
+  change to the checker, its model, the per-call limit or the budget tries again.
 - Unknown extra flags are ignored, and errors are returned as `{"error": ...}` JSON with exit code 1.
 
 - Runs on **Gemini** by default (ignores ScienceClaw's global `LLM_BACKEND`; override for the

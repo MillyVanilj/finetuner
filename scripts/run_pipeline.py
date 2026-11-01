@@ -40,7 +40,25 @@ POLL_TRAIN_S = int(os.environ.get("FTC_POLL_TRAIN_S", 30))
 POLL_EVAL_S = int(os.environ.get("FTC_POLL_EVAL_S", 30))
 POLL_BENCH_S = int(os.environ.get("FTC_POLL_BENCH_S", 20))
 SUBMIT_WAIT_TRIES = 20          # pre-flight "wait" (GPU busy etc.) retries, POLL_TRAIN_S apart
-MAX_DATAGEN_CALLS = 400         # safety net: each call does ~one time budget of work
+# DataGen's own default budget is 27 s per call (ScienceClaw's 30 s skill limit), with each LLM call cut at 18 s.
+# The runner isn't bound by that: each call gets DATAGEN_TIME_BUDGET (from the environment or .env) or 540 s, and
+# a budget over 60 s lets single LLM calls run up to 120 s (finetune_common.llm.allow_long_calls), e.g. the Sol
+# checker, a reasoning model. The call's timeout adds DATAGEN_MARGIN_S for what the budget doesn't cover: startup
+# (imports; slow on /mnt/c) and M4 (format + contamination check), which run after the budget's deadline.
+DATAGEN_DEFAULT_BUDGET_S = 540
+DATAGEN_MARGIN_S = 120
+DATAGEN_MAX_HOURS = 4           # safety net for the whole DataGen stage (one loop's data)
+DATAGEN_NO_PROGRESS_CALLS = 5   # ...and this many calls in a row that change nothing
+
+
+def datagen_budget() -> float:
+    """Seconds per DataGen call: $DATAGEN_TIME_BUDGET (environment, then .env) if it is a positive number."""
+    raw = os.environ.get("DATAGEN_TIME_BUDGET") or dotenv_vars().get("DATAGEN_TIME_BUDGET")
+    try:
+        v = float(str(raw).strip().rstrip("sS"))
+    except (TypeError, ValueError):
+        v = 0
+    return v if v > 0 else DATAGEN_DEFAULT_BUDGET_S
 
 STOP = threading.Event()
 
@@ -185,14 +203,29 @@ def run_datagen(pl: Pipeline, spec_path: Path, run_id: str, loop: int, note: str
     """DataGen: call until done; returns train_path."""
     pl.emit("data", "start", f"DataGen: generating + verifying training examples{note}", loop=loop)
     linked = False
-    for _ in range(MAX_DATAGEN_CALLS):
-        rc, out, err = call(pl, "finetune-data-gen", ["--spec", spec_path, "--run-id", run_id], timeout=600)
+    budget = datagen_budget()
+    pl.emit("data", "log", f"DataGen calls get {budget:g} s each "
+                           f"({'up to 120 s' if budget > 60 else 'up to 18 s'} per LLM call)", loop=loop)
+    stage_end, last, same = time.time() + DATAGEN_MAX_HOURS * 3600, None, 0
+    while True:
+        if time.time() > stage_end:
+            raise RunnerError(f"DataGen did not finish within {DATAGEN_MAX_HOURS} h")
+        rc, out, err = call(pl, "finetune-data-gen", ["--spec", spec_path, "--run-id", run_id,
+                                                      "--time-budget", f"{budget:g}"],
+                            timeout=int(budget + DATAGEN_MARGIN_S))
         out = out or {}
         if out.get("run_dir") and not linked:
             pl.link("data_run_dir", str(Path(out["run_dir"]).expanduser()), stage="data", append=True)
             linked = True
         if out.get("error") or (rc != 0 and not out):
             raise RunnerError(f"DataGen failed: {out.get('error') or err}")
+        progress = tuple(out.get(k) for k in ("raw_kept", "rejected_total", "pending_verify", "unverified_total"))
+        waiting = out.get("state") == "waiting_for_bench"   # done generating, BenchGen still writing: not stuck
+        same = same + 1 if progress == last and not waiting else 0
+        last = progress
+        if same >= DATAGEN_NO_PROGRESS_CALLS and not out.get("done"):
+            raise RunnerError(f"DataGen made no progress in {same + 1} calls in a row "
+                              f"(last: {out.get('stop_reason') or err})")
         if out.get("done") and out.get("train_path"):
             n = out.get("train_examples")
             pl.emit("data", "done", f"{n} training examples ready ({out.get('rejected_total', 0)} rejected by M3)",
@@ -201,8 +234,7 @@ def run_datagen(pl: Pipeline, spec_path: Path, run_id: str, loop: int, note: str
                                        f"({out.get('rejected_total', 0)} rejected by the verifier).",
                                        to="TrainAgent", kind="finding", loop=loop, refs={"train_path": out["train_path"]})
             return str(Path(out["train_path"]).expanduser())
-        sleep(1)
-    raise RunnerError("DataGen did not finish after many calls")
+        sleep(5 if out.get("state") == "waiting_for_bench" else 1)
 
 
 def decontaminate(pl: Pipeline, data_run_id: str, bench_dir: str):

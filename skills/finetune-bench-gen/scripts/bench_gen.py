@@ -113,7 +113,6 @@ CALLS_PER_ROUND = 3          # generate, solve, review
 PER_ITEM_INIT = 2.0          # starting guess s/item for a full round (3 calls, Gemini; learned per run)
 MIN_BATCH = 2
 SKILL_DEADLINE_S = 27.0
-LONG_CALL_CAP_S = 120.0      # per-call cap when the time budget allows long calls
 FEEDBACK_LIMIT = 8
 MAX_WORKER_STARTS = 3        # background job restarts before reporting "failed"
 
@@ -640,8 +639,7 @@ def accept(run_dir, state, items):
 def run(a):
     budget = a.time_budget
     deadline = _T_START + (budget if budget > 0 else 10 ** 9)
-    if budget <= 0 or budget > 60:
-        L.LLM_CALL_CAP_S = LONG_CALL_CAP_S
+    L.allow_long_calls(budget if budget > 0 else float("inf"))   # BenchGen's 0 = no budget (the background worker)
     jsonparse.BAD_OUTPUT_DIR = BENCH_DIR
     if not (a.spec or (a.query and a.query.strip())):
         raise ValueError("give --spec <file> or --query <fine-tuning request>")
