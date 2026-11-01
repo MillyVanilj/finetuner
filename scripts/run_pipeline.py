@@ -242,7 +242,7 @@ def evaluate(pl: Pipeline, adapter: str, bench_dir: str, split: str, loop: int, 
     b = conv["systems"].get("base_fewshot", {}).get("score")
     pl.emit("eval", "done", f"Tuned {t if t is None else round(t, 3)} vs base few-shot "
                             f"{b if b is None else round(b, 3)} on {split}", loop=loop, eval_report_path=str(rp))
-    return rp
+    return dest   # the §3.4 version: both finetune-decide versions read it (only one reads finetune-eval's own format)
 
 
 def convert_report(r: dict, pl: Pipeline, loop: int, split: str, job_id: str, adapter: str) -> dict:
