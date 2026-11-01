@@ -46,7 +46,11 @@ OUTPUTS = {
                         "stop_reason", "next_step"},
     # the poster wall: called on purpose by agents, must neither take nor feed any hand-off
     "finetune-wall": {"ok", "id", "wall", "agent", "n", "posts", "summary", "error"},
+    # the end of the chain: held-out once + final report (agent mode's Output box)
+    "finetune-report": {"state", "final_report_path", "model_card_path", "heldout_tuned_score", "summary", "error"},
 }
+# `python3 -m ftc.cli agents kickoff` posts the first artifact (ftc/agents.py); its payload is only this key
+KICKOFF_OUTPUT = {"spec"}
 # Intended chain: producer -> {consumer: key(s) that should carry it}
 INTENDED = {
     "finetune-data-gen": {"finetune-submit": {"train_path"}},
@@ -57,7 +61,8 @@ INTENDED = {
     "finetune-decide": {"finetune-submit": {"train_path", "retrain_config_path"},
                         "finetune-data-gen": {"data_feedback_path", "spec"},
                         # harmless: BenchGen answers a frozen benchmark instantly without API calls
-                        "finetune-bench-gen": {"spec"}},
+                        "finetune-bench-gen": {"spec"},
+                        "finetune-report": {"best_adapter_path", "best_loop", "best_job_id"}},
 }
 
 
@@ -80,7 +85,7 @@ def installed():
         names += ["finetune-data-gen", "finetune-bench-gen"]
     if (SKILLS / "finetune-decide").exists():
         names.append("finetune-decide")
-    names.append("finetune-wall")
+    names += ["finetune-wall", "finetune-report"]
     return names
 
 
@@ -99,6 +104,14 @@ def test_output_keys_only_reach_the_intended_skill():
             elif want and not want <= hit:
                 problems.append(f"{prod} -> {cons}: {sorted(want - hit)} not accepted by {cons}")
     assert not problems, "hand-off key problems:\n  " + "\n  ".join(problems)
+
+
+def test_kickoff_reaches_only_the_generators():
+    """The kickoff artifact must wake DataGen and BenchGen and nothing else (e.g. not finetune-decide, which
+    would fail without a report and retry every heartbeat)."""
+    names = installed()
+    reached = {n for n in names if KICKOFF_OUTPUT & (help_params(n) - {"help"})}
+    assert reached == {n for n in names if n in ("finetune-data-gen", "finetune-bench-gen")}, reached
 
 
 def test_wall_takes_no_artifacts():
@@ -204,6 +217,26 @@ def test_eval_hands_decide_a_spec_io_report():
         assert json.loads(sio.read_text())["systems"]["tuned"]["score"] == .6
         rc, dec = _run("finetune-decide", ["--eval-report-path", out["eval_report_path"]], env)
         assert rc == 0 and dec.get("status") == "ok" and dec.get("action") in ("retrain", "regenerate_data", "stop"), dec
+
+
+def test_submit_finds_the_pipeline_from_train_path():
+    """Agent mode hands finetune-submit only DataGen's train_path, which lives in DataGen's run folder outside the
+    pipeline, and no $FTC_PIPELINE_DIR. DataGen leaves a .pipeline pointer there (ftc/pipeline.py POINTER); without
+    it run.json got pipeline_dir null and the eval report, the loop count and the final report lost the pipeline."""
+    sys.path.insert(0, str(ROOT))
+    from ftc.pipeline import Pipeline, POINTER
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d).resolve()
+        pl = Pipeline.create(json.loads((ROOT / "examples/specs/chem_qa.json").read_text()), root=d / "pipelines")
+        run = d / "datagen-runs" / "chem-qa-l1"; run.mkdir(parents=True)
+        (run / "train.jsonl").write_text("".join(json.dumps({"messages": [{"role": "user", "content": f"q{i}"},
+                                                 {"role": "assistant", "content": "a"}]}) + "\n" for i in range(20)))
+        (run / POINTER).write_text(str(pl.dir))
+        env = {"FINETUNER_DIR": str(ROOT), "FINETUNER_RUNS": str(d / "runs"), "FTC_PIPELINE_DIR": ""}
+        rc, out = _run("finetune-submit", ["--train-path", str(run / "train.jsonl"), "--dry-run"], env)
+        assert rc == 0 and out.get("train_job_id"), out
+        rj = json.loads((d / "runs" / out["train_job_id"] / "run.json").read_text())
+        assert rj["pipeline_dir"] == str(pl.dir), rj.get("pipeline_dir")
 
 
 if __name__ == "__main__":

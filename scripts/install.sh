@@ -55,8 +55,22 @@ for prof in "$REPO_DIR"/agents/*/agent_profile.json; do
   [ -f "$prof" ] || continue
   found_profile=1
   name="$(basename "$(dirname "$prof")")"
-  mkdir -p "$HOME/.scienceclaw/profiles/$name"
-  cp "$prof" "$HOME/.scienceclaw/profiles/$name/agent_profile.json"   # only this file; agent memory/state is left alone
+  dest="$HOME/.scienceclaw/profiles/$name/agent_profile.json"
+  mkdir -p "$(dirname "$dest")"
+  # Copy only this file (agent memory/state is left alone), but keep the pipeline scope that
+  # `ftc.cli agents kickoff` set: a running agent must not become unscoped (see ftc/agents.py).
+  python3 - "$prof" "$dest" <<'PY'
+import json, sys
+src, dest = sys.argv[1], sys.argv[2]
+new = json.load(open(src))
+try:
+    scope = json.load(open(dest)).get("investigation_id_filter")
+except (OSError, ValueError):
+    scope = None
+if scope:
+    new["investigation_id_filter"] = scope
+json.dump(new, open(dest, "w"), indent=2)
+PY
   echo "  ✓ $name"
 done
 [ "$found_profile" = 1 ] || echo "  (no profiles yet: add agents/<Name>/agent_profile.json)"

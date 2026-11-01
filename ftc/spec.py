@@ -47,7 +47,7 @@ DEFAULTS = {
                 "judge_rubric": None,
                 "pass_threshold": 0.5},
     "benchmark": {"n_dev": 200, "n_heldout": 100, "seed_examples_to_heldout": True,
-                  "real_sources": []},   # e.g. ["huggingface:<dataset>", "pubmed"]
+                  "real_sources": []},   # where seed_examples came from besides the user, e.g. ["huggingface:<dataset>"]
     "targets": {"target_score": None, "min_gain": 0.02, "max_loops": 3,
                 "max_general_drop": 0.03},
     "budget": {"max_api_usd": 20.0, "max_gpu_hours": 2.0},
@@ -126,7 +126,28 @@ def upgrade(spec: dict) -> dict:
     sc["format_check"] = sc.get("format_check") or default_format_check(out)
     if sc["method"] == "json_field_f1" and not sc.get("json_fields") and isinstance(out.get("json_schema"), dict):
         sc["json_fields"] = list((out["json_schema"].get("properties") or {}).keys()) or None
+    _refresh_assumptions(s)
     return s
+
+
+def _norm(v):
+    return v.strip() if isinstance(v, str) else [_norm(x) for x in v] if isinstance(v, list) else v
+
+
+def _refresh_assumptions(s: dict):
+    """m1.assumptions lists values the user never gave (M1 guessed them, or a default filled them):
+    [{"field": "targets.target_score", "value": 0.8, "by": "m1"|"rule"|"template"|"default"|"search", "why": "..."}].
+    Once a field no longer holds the assumed value, the user has changed it: it is theirs, so drop the entry."""
+    m = s.get("m1")
+    if isinstance(m, dict) and isinstance(m.get("assumptions"), list):
+        m["assumptions"] = [a for a in m["assumptions"] if isinstance(a, dict) and isinstance(a.get("field"), str)
+                            and _norm(_get(s, a["field"])) == _norm(a.get("value"))]
+
+
+def assumptions(spec: dict) -> list:
+    """The spec's assumed values (see _refresh_assumptions); [] for specs not made by M1."""
+    m = (spec or {}).get("m1")
+    return [a for a in (m.get("assumptions") or []) if isinstance(a, dict)] if isinstance(m, dict) else []
 
 
 # Keys finetune-submit takes from spec.training for the first run (its DEFAULTS / TUNABLE).
@@ -136,7 +157,7 @@ TEXT_FIELDS = ["title", "domain", "task", "io_format", "system_prompt"]
 # Set in a spec but read by no skill yet (docs/spec_and_io.md §2). Flagged when changed from the default,
 # so the dashboard doesn't imply they take effect. Remove a path here once a skill reads it.
 UNUSED_FIELDS = ["models.generator", "models.verifier", "models.bench_writer", "budget.max_api_usd",
-                 "coverage.topics", "benchmark.real_sources", "scoring.judge_rubric", "scoring.pass_threshold",
+                 "coverage.topics", "scoring.judge_rubric", "scoring.pass_threshold",
                  "scoring.numeric_tolerance"]
 
 

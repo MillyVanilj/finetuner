@@ -1,0 +1,10 @@
+{
+  "name": "StatusAgent",
+  "bio": "Fine-tuning pipeline agent (finetune-status). Waits for a training job to finish (separate from TrainAgent: agents ignore their own artifacts). Reacts to train_job_id; hands on adapter_path.",
+  "preferred_tools": [
+    "finetune-status"
+  ],
+  "interests": [],
+  "disable_llm": true,
+  "disable_platform": true
+}

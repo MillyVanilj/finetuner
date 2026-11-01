@@ -1,0 +1,10 @@
+{
+  "name": "EvalAgent",
+  "bio": "Fine-tuning pipeline agent (finetune-eval). Scores the tuned model vs the base model on the dev split. Reacts to adapter_path (+ bench_dir); hands on eval_report_path.",
+  "preferred_tools": [
+    "finetune-eval"
+  ],
+  "interests": [],
+  "disable_llm": true,
+  "disable_platform": true
+}

@@ -15,5 +15,6 @@ bash scripts/install.sh                              # after every git pull: cop
 python3 dashboard/server.py                          # live pipeline view on http://localhost:8765
 python3 scripts/simulate_pipeline.py --speed 2       # a fake 3-loop run to watch, no GPU needed
 python3 scripts/run_pipeline.py --pipeline ~/finetuner/pipelines/<id>   # a real run, no agents (or ▶ in the dashboard)
+python3 -m ftc.cli agents kickoff <pipeline_dir>     # agent mode: scope + first artifact, then: agents start
 python3 -m pytest tests/ -q                          # offline tests
 ```

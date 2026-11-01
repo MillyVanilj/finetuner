@@ -30,6 +30,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 from ftc.pipeline import Pipeline, now_iso      # noqa: E402
+from ftc.report import dev_history, write_final   # noqa: E402
 from ftc.spec import upgrade                    # noqa: E402
 from ftc.wall import STAGE_AGENT, Wall          # noqa: E402
 
@@ -417,16 +418,8 @@ def run(pl: Pipeline, max_loops_cap: int, skip_general: bool):
     write_runner_state(pl, step="held-out evaluation")
     evaluate(pl, best_adapter, bench_dir, "heldout", loop, best_job, skip_general=True)
     ho = json.loads((pl.loop_dir(loop) / "eval" / "heldout_report.json").read_text())
-    history = []
-    for n in range(1, loop + 1):
-        f = pl.loop_dir(n) / "eval" / "eval_report.json"
-        if f.exists():
-            history.append({"loop": n, "tuned": json.loads(f.read_text())["systems"].get("tuned", {}).get("score")})
-    final = {"pipeline_id": pl.id, "best_loop": best_loop, "train_job_id": best_job, "adapter_path": best_adapter,
-             "hub_url": None, "infinite_post_url": None,
-             "heldout": {"systems": ho.get("systems"), "by_source": ho.get("by_source")},
-             "dev_history": history, "model_card_path": None, "created_at": now_iso()}
-    pl.write_json("final/final_report.json", final)
+    write_final(pl.dir / "final", pipeline_id=pl.id, best_adapter=best_adapter, best_job=best_job, best_loop=best_loop,
+                heldout=ho, history=dev_history(pl, loop), spec=pl.spec())   # same files as skills/finetune-report
     t = (ho.get("systems") or {}).get("tuned", {}).get("score")
     pl.emit("output", "done", f"Done. Held-out score of the tuned model: {t if t is None else round(t, 3)}", loop=loop)
 
