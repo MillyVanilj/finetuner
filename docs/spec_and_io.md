@@ -163,6 +163,16 @@ Overwrite it every ~20 items (`Pipeline.progress("eval", ...)` does this):
 - The skill's JSON output should include `retrain_config_path` or `data_feedback_path` so the ScienceClaw reactor
   hands it to the right agent. For `stop`, output neither key.
 - `rule` names the deterministic rule that fired (table in `wireframe_v0.2_review.md` §3). The LLM only writes `reason`.
+- **Implemented by `skills/finetune-decide`** (branch `worktree-evaluator-decide`, not merged yet). Input:
+  `--spec` / `--task-spec-path` (same option) plus the eval report. It reads both this §3.4 `eval_report.json` and
+  the eval skill's `report.json`. It writes `decision.json` and the copies above, emits a `decide`/`decision` event,
+  and on retrain / regenerate_data calls `pl.set_loop(n+1)`. Output keys for the reactor:
+  - `retrain` → `retrain_config_path` (→ finetune-submit `--retrain-config-path`)
+  - `regenerate_data` → `data_feedback_path` + **`spec`** (→ DataGen's existing `--spec`)
+  - `stop` → `final_adapter_path`, `best_job_id`, `stop_reason`, `next_step`
+
+**Passing the spec between skills:** the key is `spec` (the path to `task_spec.json`), matching DataGen's `--spec`.
+Skills that take a spec should accept `--spec`, optionally with `--task-spec-path` as an alias.
 
 ### 3.7 Final report: `final/final_report.json`
 `{pipeline_id, best_loop, train_job_id, adapter_path, hub_url, infinite_post_url, heldout: {systems, by_source}, dev_history: [{loop, tuned}], model_card_path, created_at}`.
@@ -225,7 +235,8 @@ python3 scripts/simulate_pipeline.py --speed 2          # fake run to watch (or 
 - `#p=<id>&once=1&stage=train&theme=light` in the URL gives a static snapshot (screenshots, slides).
 
 ## 6. Open items for the team
-- BenchGen, Eval, Evaluator and ReportAgent are not built yet; build them against §3.
+- Built: Eval (`skills/finetune-eval`, on main) and the Evaluator (`skills/finetune-decide`, on its own branch).
+  The Trainer skills report to the event log (main). Not built yet: BenchGen and ReportAgent; build them against §3.
 - `gen_data.py` and `finetune-submit` don't emit events yet. Until they do, run them with a pipeline and link their
   folders (`ftc.cli link`), or wrap them in `run_pipeline.py`, which can emit for them.
 - DataGen ignores the v2-only fields (seed examples, coverage topics) today. Using `seed_examples` as few-shot
