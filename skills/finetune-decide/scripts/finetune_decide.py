@@ -223,7 +223,9 @@ def decide(n, spec, d, cfg, loop, prev, gpu_h, fail_cats, job_id, extra_examples
     gain = n["gain_few"] or {}
     gain_lo = (gain.get("ci95") or [None])[0]
     beats_few = gain_lo is not None and gain_lo > 0
-    lr, epochs, rank = float(cfg.get("lr", 2e-4)), float(cfg.get("epochs", 2)), int(cfg.get("rank", 16))
+    lr, rank = float(cfg.get("lr", 2e-4)), int(cfg.get("rank", 16))
+    # Direction of epoch changes uses what was ACTUALLY trained (submit may have clamped it for budget).
+    epochs = float(d.get("epochs_actual") or cfg.get("epochs", 2))
     weak = [c for c, v in n["by_category"].items()
             if v["tuned"] is not None and v["n"] >= WEAK_CAT_MIN_N and v["tuned"] <= tuned - WEAK_CAT_MARGIN]
     weakest = [c["category"] for c in fail_cats[:3]] or sorted(
@@ -283,7 +285,7 @@ def decide(n, spec, d, cfg, loop, prev, gpu_h, fail_cats, job_id, extra_examples
                f"above base few-shot {few if few is not None else float('nan'):.3f}")
         if rank < MAX_RANK:
             return retrain(cfg, "rank", MAX_RANK, "underfitting", why + "; LoRA r=64 (alpha, lr unchanged)", job_id)
-        if epochs < MAX_EPOCHS:
+        if epochs < MAX_EPOCHS and not d.get("clamped"):  # budget-bound: more epochs would just be clamped again
             return retrain(cfg, "epochs", int(epochs) + 1, "underfitting", why + "; one more epoch", job_id)
 
     # 5. no clear training lever
@@ -364,6 +366,10 @@ def main():
             prev["delta"] = prev["mean"]
     gpu_h = sum(h.get("gpu_hours", 0) for h in history) + runtime_hours(run_dir, report_path)
     d = diagnose_training(run_dir)
+    actual = run.get("config") or metrics.get("config") or {}
+    d["epochs_actual"] = actual.get("epochs")
+    d["clamped"] = bool((run.get("preflight") or {}).get("clamped")) or (
+        actual.get("epochs") is not None and float(actual["epochs"]) != float(cfg["epochs"]))
     fail_cats = failure_categories(report_path, bench_file, spec["pass_threshold"])
 
     dec = decide(n, spec, d, cfg, loop, prev, gpu_h, fail_cats, job_id, args.extra_examples)

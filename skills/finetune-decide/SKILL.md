@@ -34,8 +34,9 @@ Reads the eval report from `finetune-eval` and makes **one decision**: `retrain`
 Retrain configs carry all current settings with **one** changed. Rank never goes above 64. If the new settings
 were already trained on the same data (e.g. "back to r=16" after r=64 forgot), it regenerates data instead
 (`config already tried`): `finetune-submit` would just return the old job and the loop would go round in circles.
-`finetune-submit` may lower epochs to fit the time/GPU budget; the Evaluator reads `run.json`'s `requested_config`
-(what was asked for), so a budget cut isn't mistaken for a deliberate change. If submit refuses outright
+`finetune-submit` may lower epochs to fit the time/GPU budget. The Evaluator carries `run.json`'s `requested_config`
+into retrain configs (so "already tried" matches submit's reuse check), but bases epoch changes on the epochs
+actually trained, and never asks for more epochs when they were budget-clamped (they'd just be clamped again). If submit refuses outright
 (< 0.25 epoch fits, low disk), no new job appears and the loop ends there.
 
 ## Output (one JSON object)

@@ -120,15 +120,30 @@ def t_no_cycle_back_to_tried_config(root):
 
 
 def t_budget_clamp_uses_requested_config(root):
-    """submit lowered epochs 2 -> 0.5 for budget: decide on the requested 2, so overfitting -> epochs 1."""
+    """submit lowered epochs 2 -> 0.5 for budget. It overfit AT 0.5 epochs, so fewer epochs isn't possible:
+    lr / 2, keeping the requested epochs (2) so the config identity matches submit's reuse check."""
     rep = make_run(root, "j1", cfg={"epochs": 0.5}, eval_losses=(0.8, 0.95))
+    clamp(rep)
+    out = decide(rep)
+    cfg = json.loads(Path(out["retrain_config_path"]).read_text())
+    assert out["rule"] == "overfitting" and cfg["lr"] == 1e-4 and cfg["epochs"] == 2, (out, cfg)
+
+
+def t_budget_clamp_no_epoch_increase(root):
+    """Underfit at r=64 but epochs were clamped: don't ask for more epochs (would be clamped again)."""
+    flat = (1.9, 1.85, 1.82, 1.8, 1.8, 1.79)
+    rep = make_run(root, "j1", cfg={"epochs": 0.5, "rank": 64}, losses=flat, tuned=0.52, few=0.5)
+    clamp(rep)
+    out = decide(rep)
+    assert out["action"] == "regenerate_data", out
+
+
+def clamp(rep):
     run_json = rep.parent.parent / "run.json"
     rj = json.loads(run_json.read_text())
     rj["requested_config"] = {**rj["config"], "epochs": 2}
+    rj["preflight"] = {"clamped": {"epochs": [2, 0.5], "because": "budget"}}
     run_json.write_text(json.dumps(rj))
-    out = decide(rep)
-    cfg = json.loads(Path(out["retrain_config_path"]).read_text())
-    assert out["rule"] == "overfitting" and cfg["epochs"] == 1 and cfg["lr"] == 2e-4, (out, cfg)
 
 
 def t_overfit(root):
