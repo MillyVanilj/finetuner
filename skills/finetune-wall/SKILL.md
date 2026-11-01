@@ -30,6 +30,11 @@ ArtifactReactor. Use Infinite for cross-machine posts.
 
 Unknown flags (e.g. ScienceClaw's `--query`) are ignored.
 
+**`--help` deliberately lists no options.** ScienceClaw sends an artifact to every skill whose `--help` names one
+of its keys and counts it as used when the skill exits 0, so a visible `--spec` would let a wall call use up
+the task spec before DataGen/BenchGen get it (see PR #6). The wall never reacts to artifacts: agents call it on
+purpose. `tests/test_handoffs.py::test_wall_takes_no_artifacts` guards this.
+
 ## Output (JSON on stdout)
 
 ```json

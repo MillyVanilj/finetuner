@@ -17,20 +17,26 @@ def out(obj, code=0):
 
 
 def main():
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--action", default="inbox", choices=["inbox", "read", "post", "reply", "react", "thread"])
-    p.add_argument("--agent", default=os.environ.get("AGENT_NAME") or "Agent", help="who you are")
-    p.add_argument("--text", default="")
-    p.add_argument("--to", default="", help="addressee(s), comma-separated; empty = everyone")
-    p.add_argument("--kind", default=None)
-    p.add_argument("--post-id", default=None)
-    p.add_argument("--emoji", default="👍")
-    p.add_argument("--pipeline-dir", "--spec", "--task-spec-path", dest="where", default=None)
-    p.add_argument("-n", type=int, default=20)
-    p.add_argument("--format", default="json")   # ScienceClaw may pass this; we always print JSON
+    # --help names NO options on purpose. ScienceClaw sends an artifact to every skill whose --help lists one
+    # of the artifact's keys, and counts it as used once that skill exits 0. A visible --spec / --format here
+    # would let a wall call "use up" the task spec before DataGen / BenchGen get it (same problem as PR #6).
+    # Agents call the wall deliberately; it never reacts to artifacts. Every option still works: see SKILL.md.
+    H = argparse.SUPPRESS
+    p = argparse.ArgumentParser(description="Poster wall for the fine-tuning agents. Options are listed in SKILL.md.",
+                                usage="finetune_wall.py [options listed in SKILL.md]")
+    p.add_argument("--action", default="inbox", choices=["inbox", "read", "post", "reply", "react", "thread"], help=H)
+    p.add_argument("--agent", default=os.environ.get("AGENT_NAME") or "Agent", help=H)   # who you are
+    p.add_argument("--text", default="", help=H)
+    p.add_argument("--to", default="", help=H)   # addressee(s), comma-separated; empty = everyone
+    p.add_argument("--kind", default=None, help=H)
+    p.add_argument("--post-id", default=None, help=H)
+    p.add_argument("--emoji", default="👍", help=H)
+    p.add_argument("--pipeline-dir", "--spec", "--task-spec-path", dest="where", default=None, help=H)
+    p.add_argument("-n", type=int, default=20, help=H)
+    p.add_argument("--format", default="json", help=H)   # ScienceClaw may pass this; we always print JSON
     a, _ = p.parse_known_args()                  # ignore extras like --query
 
-    # Imported after parsing so --help works without the repo (that's how ScienceClaw discovers our flags).
+    # Imported after parsing so --help works without the repo.
     sys.path[:0] = [str(Path(os.environ.get("FINETUNER_DIR", Path.home() / "finetuner")).expanduser()),
                     str(Path(__file__).resolve().parents[3])]
     try:
