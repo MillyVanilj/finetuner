@@ -1,4 +1,4 @@
-# Handover: where the project stands (updated 2026-11-01, hackathon day 2, after #11 merged)
+# Handover: where the project stands (updated 2026-11-01, hackathon day 2, after #20 / #27 / #28 / #29 merged)
 
 This is the **current-state** doc: what is merged, what is open, what to do next, and the pitch. The other
 docs hold the stable parts: design in `docs/wireframe_v0.2.md`, model choices and reasoning in
@@ -19,11 +19,17 @@ looks different, trust the repo and **update this file** (whoever merges or open
 - **Merged today:** #11 model split (Gemini writes data, **OpenAI Sol** verifies data and judges, Claude Opus
   writes the benchmark), #13 BenchGen JSON-fence parsing fix, #17 BenchGen says why a job stopped + dashboard
   clears a stale "Failed" after a reset.
-- **Open:**
+- **Open PRs:** none. #15 (second agent-mode version) was closed unmerged; #18 was superseded by #19.
+- **Also merged today** (notes still useful):
+  - **#28** DataGen: OpenAI Sol writes the training data, Claude Sonnet checks it. **#29** the final judge (M7)
+    is Claude Sonnet, not Sol (so the judge is not the family that wrote the training data).
+  - **#20** probe set: after loop 1, ~30 new questions on the weakest categories; at the end the original
+    and final model are scored on them (`final_report.json` → `probe`, dashboard Output card). Report only.
+    Off with `FTC_PROBE=0`.
   - **#27** hosting the dashboard (`docs/hosting.md`): `server.py --read-only` behind a Cloudflare tunnel for a
     live public link, and `scripts/export_static.py` for a frozen copy (Netlify / GitHub Pages) that outlives
     Brev. The normal server has no login: never expose it. Export the real run before stopping Brev.
-  - **#24** five fixes before the final runs (training-speed estimate, best adapter vs forgetting, DataGen
+  - **#24** (merged) five fixes before the final runs (training-speed estimate, best adapter vs forgetting, DataGen
     stall/dedupe, real format check). Before final runs: move smoke runs out of `runs/` on Brev, set
     `FTC_MAX_JOB_HOURS` if jobs may exceed 1 h. Still open: the forgetting check fires on noise at small M8 sizes.
   - **Grading + data quality** (#26, merged), from the weak NL→SQL run (tuned 48 % vs few-shot
@@ -38,12 +44,9 @@ looks different, trust the repo and **update this file** (whoever merges or open
     prompts for a category (e.g. "user asks for harmful content that should be declined"), BenchGen now drops
     that cell and moves its items to the others, instead of failing the whole benchmark after 3 restarts.
     API errors still stop it as before.
-  - **#18** eval job survives `install.sh` (an eval crashed on Brev because `install.sh` re-copied the skill
-    folder it was running in); `install.sh` now skips unchanged skills. Small, tested, merge it.
-  - **#12 (+ #14 merged into it)** *agent mode*: the pipeline run by real ScienceClaw agents handing work
+  - **#19** (merged; replaced #18) eval job survives `install.sh` re-copying the skill folder it runs in.
+  - **#12 (+ #14, merged)** *agent mode*: the pipeline run by real ScienceClaw agents handing work
     along via the ArtifactReactor. Tested with the real reactor (GPU/API skills stubbed). **The base for agent mode.**
-  - **#15** a second agent-mode implementation (written in a Claude session before we noticed #12). Mostly
-    duplicates #12; port its 3 unique pieces into #12 and close it (section 5.3).
 - **Deadline:** hackathon ends Sunday Nov 1 night; Google Cloud accounts are deleted then. Push everything.
 
 ## 2. Team, repos, machines
@@ -209,7 +212,7 @@ clamped, reasons saved in `run.json`). For other GPU work check yourself: GPU id
 3. Merge the DataGen budget fix (#23, section 4).
 4. **Review + merge #12.** It predates #11: merge `main` into it and resolve `docs/decisions.md` overlap.
    Run the real chain on Brev once (chem_qa example, `--skip-general`, 1 loop).
-5. **Port #15's three pieces into #12** (section 5.3), then close #15.
+5. ~~Port #15's three pieces into #12~~: #15 was closed unmerged (2026-11-01); section 5.3 is kept for reference.
 6. **Make the collective visible for the demo** (section 9.3): dashboard hand-off/lineage view, one Infinite
    post with the artifact DAG, per-agent comments.
 7. Push often; save adapters to HF Hub (`--push-to-hub`) before accounts are deleted.
