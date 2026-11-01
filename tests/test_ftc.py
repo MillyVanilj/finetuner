@@ -107,3 +107,20 @@ if __name__ == "__main__":
         if name.startswith("test_"):
             fn()
             print("ok", name)
+
+
+def test_bench_failed_then_restarted_shows_running(tmp_path):
+    """After "Reset BenchGen" the restarted job writes progress.json but may emit no start event:
+    progress newer than the failed event means the stage is running again, not failed."""
+    import json
+    from ftc import state
+    d = tmp_path / "p"; (d / "bench").mkdir(parents=True)
+    (d / "pipeline.json").write_text(json.dumps({"id": "p", "max_loops": 3}))
+    (d / "events.jsonl").write_text(json.dumps({"ts": "2026-11-01T04:23:16.000Z", "stage": "bench", "type": "failed",
+                                                "loop": 0, "msg": "stopped 3 times"}) + "\n")
+    prog = {"stage": "bench", "state": "running", "done": 184, "total": 300, "updated_at": "2026-11-01T04:30:55.000Z"}
+    (d / "bench" / "progress.json").write_text(json.dumps(prog))
+    assert state.snapshot(d)["stages"]["bench"]["status"] == "running"
+    prog["updated_at"] = "2026-11-01T04:00:00.000Z"          # older progress: the failure stands
+    (d / "bench" / "progress.json").write_text(json.dumps(prog))
+    assert state.snapshot(d)["stages"]["bench"]["status"] == "failed"

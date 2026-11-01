@@ -269,8 +269,14 @@ def snapshot(pipeline_dir) -> dict:
         stages["decide"]["status"] = "done"
 
     bench = read_bench(pdir)
-    if (bench.get("progress") or {}).get("state") == "running" and stages["bench"]["status"] == "pending":
+    bprog = bench.get("progress") or {}
+    if bprog.get("state") == "running" and stages["bench"]["status"] == "pending":
         stages["bench"]["status"] = "running"
+    # A restarted BenchGen job (after "Reset BenchGen") writes progress but no new start event:
+    # live progress newer than the last "failed" event means it is running again.
+    elif (bprog.get("state") == "running" and stages["bench"]["status"] == "failed"
+          and (_ts(bprog.get("updated_at") or "") or 0) > (_ts(stages["bench"]["since"] or "") or 0)):
+        stages["bench"]["status"], stages["bench"]["msg"] = "running", "BenchGen running again after a reset"
     if bench.get("splits", {}).get("heldout") and bench.get("report"):
         stages["bench"]["status"] = "done" if stages["bench"]["status"] != "failed" else "failed"
 

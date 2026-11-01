@@ -805,6 +805,24 @@ def _take_lock(run_dir) -> bool:
         return False
 
 
+# Log patterns -> a plain-language cause, so "stopped 3 times" says WHY (the log is often long).
+KNOWN_CAUSES = [("credit balance is too low", "Anthropic credit balance too low: top up or use another ANTHROPIC_API_KEY"),
+                ("ANTHROPIC_API_KEY not set", "ANTHROPIC_API_KEY not set: add it to ~/finetuner/.env"),
+                ("GEMINI_API_KEY", "Gemini API key missing or invalid"),
+                ("authentication_error", "API key rejected (authentication error)"),
+                ("No module named", "a Python package is missing in ScienceClaw's venv"),
+                ("rate_limit", "API rate limit"),
+                ("overloaded", "API overloaded")]
+
+
+def known_cause(log_text: str):
+    for pat, cause in KNOWN_CAUSES:
+        if pat in log_text:
+            m = re.search(r"No module named '([^']+)'", log_text) if pat == "No module named" else None
+            return f"{cause}: {m.group(1)}" if m else cause
+    return None
+
+
 def launch_or_poll(a, argv=None) -> dict:
     """Skill-call mode. ScienceClaw stops a skill after 30-45 s, but a 200-item benchmark takes minutes,
     so: frozen -> return it; worker running -> report progress; otherwise start the worker
@@ -841,10 +859,12 @@ def launch_or_poll(a, argv=None) -> dict:
         if w and state.get("kept", 0) > w.get("kept_at_start", 0):
             starts = 0                                    # the last job made progress: not a failure streak
         if starts >= MAX_WORKER_STARTS:
-            tail = log_f.read_text()[-1500:] if log_f.exists() else ""
+            text = log_f.read_text(errors="replace") if log_f.exists() else ""
+            cause = known_cause(text.split("\n===== start ")[-1])
             return build_result(run_dir, state, None, {
-                "state": "failed", "log": str(log_f), "log_tail": tail,
-                "error": f"background job stopped {starts} times in a row without new items; read the log, "
+                "state": "failed", "log": str(log_f), "log_tail": text[-1500:],
+                "error": f"background job stopped {starts} times in a row without new items"
+                         f"{' (' + cause + ')' if cause else ''}; read the log, "
                          f"fix the cause, then delete {run_dir / 'worker.json'} to retry"})
         cmd = worker_cmd(a, run_id, run_dir)
         with open(log_f, "a") as lf:
@@ -861,6 +881,9 @@ def launch_or_poll(a, argv=None) -> dict:
         except OSError:
             pass
     log(f"[run] background job started (pid {proc.pid}); log: {log_f}")
+    if state.get("kept") or w:          # resuming (e.g. after "Reset BenchGen"): the dashboard shows it running again
+        _pl.emit("bench", "start", f"BenchGen background job {'re' if w else ''}started at "
+                 f"{state.get('kept', 0)}/{state.get('target', '?')} items", loop=0)
     return build_result(run_dir, state, None, {"state": "started" if starts == 0 else "restarted",
                                                "target": state.get("target") or a.n_items or "from spec",
                                                "worker_pid": proc.pid, "log": str(log_f)})
