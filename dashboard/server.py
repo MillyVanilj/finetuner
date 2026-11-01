@@ -17,6 +17,8 @@ API (all JSON):
     POST /api/spec/draft      {goal, spec?, answers?}  -> M1: {spec, questions, errors, warnings, source}
     POST /api/pipelines       {spec}            -> create the pipeline folder, returns {pipeline_id, dir, commands}
     POST /api/simulate        {spec?, speed?}   -> start scripts/simulate_pipeline.py (no GPU, demo only)
+    POST /api/pipelines/<id>/start {skip_general?} -> run scripts/run_pipeline.py (the REAL pipeline) in the background
+    POST /api/pipelines/<id>/stop                  -> stop that runner
 """
 import argparse
 import hashlib
@@ -65,6 +67,42 @@ def next_commands(d: Path, spec: dict) -> list[dict]:
         {"label": "Or watch a simulated run (no GPU)",
          "cmd": f"python3 scripts/simulate_pipeline.py --spec {sp}"},
     ]
+
+
+def start_runner(d: Path, body: dict) -> dict:
+    """▶ Start: run scripts/run_pipeline.py for this pipeline in the background (survives the dashboard).
+    GPU use is gated by finetune-submit's automatic pre-flight checks, not by this button."""
+    from ftc.state import read_runner
+    r = read_runner(d)
+    if r.get("alive"):
+        return {"ok": False, "error": f"already running (pid {r.get('pid')})"}
+    args = [sys.executable, str(ROOT / "scripts" / "run_pipeline.py"), "--pipeline", str(d)]
+    if body.get("skip_general"):
+        args.append("--skip-general")
+    logf = open(d / "runner.log", "a")
+    logf.write(f"\n===== started from the dashboard {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n")
+    logf.flush()
+    proc = subprocess.Popen(args, stdout=logf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                            cwd=str(ROOT), start_new_session=True)
+    (d / "runner.json").write_text(json.dumps({"state": "running", "pid": proc.pid, "step": "starting",
+                                               "started_at": time.strftime("%Y-%m-%dT%H:%M:%S")}))
+    return {"ok": True, "pid": proc.pid}
+
+
+def stop_runner(d: Path) -> dict:
+    """■ Stop: SIGTERM the runner (it finishes its current call, then stops). Jobs it already launched
+    (training, eval, BenchGen background jobs) keep running; stop them on the GPU box if needed."""
+    import os
+    import signal
+    from ftc.state import read_runner
+    r = read_runner(d)
+    if not r.get("alive"):
+        return {"ok": False, "error": "not running"}
+    try:
+        os.kill(int(r["pid"]), signal.SIGTERM)
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "pid": r["pid"]}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -185,6 +223,10 @@ class Handler(BaseHTTPRequestHandler):
                 pl = Pipeline.create(spec)
                 return self._json({"pipeline_id": pl.id, "dir": str(pl.dir), "warnings": warnings,
                                    "commands": next_commands(pl.dir, spec)})
+            if u.path.startswith("/api/pipelines/") and u.path.endswith(("/start", "/stop")):
+                pid_, action = u.path.split("/")[3], u.path.rsplit("/", 1)[1]
+                d = pipeline_dir(pid_)
+                return self._json(start_runner(d, body) if action == "start" else stop_runner(d))
             if u.path == "/api/simulate":
                 args = [sys.executable, str(ROOT / "scripts" / "simulate_pipeline.py"),
                         "--speed", str(float(body.get("speed") or 1))]

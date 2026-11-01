@@ -196,6 +196,29 @@ def stage_status(events, loop) -> dict:
     return st
 
 
+def pid_alive(pid) -> bool:
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def read_runner(pdir: Path) -> dict:
+    """scripts/run_pipeline.py's state (runner.json) + whether its process is alive + the last log lines."""
+    r = _read_json(pdir / "runner.json", {}) or {}
+    if not r:
+        return {}
+    r["alive"] = r.get("state") == "running" and pid_alive(r.get("pid"))
+    if r.get("state") == "running" and not r["alive"]:
+        r["state"] = "died"     # killed without cleaning up (machine restart, OOM...)
+    try:
+        r["log_tail"] = (pdir / "runner.log").read_text(errors="replace").splitlines()[-40:]
+    except Exception:
+        r["log_tail"] = []
+    return r
+
+
 def snapshot(pipeline_dir) -> dict:
     pdir = Path(pipeline_dir).expanduser()
     meta = _read_json(pdir / "pipeline.json", {}) or {}
@@ -249,7 +272,10 @@ def snapshot(pipeline_dir) -> dict:
 
     running = [s for s in STAGES if stages[s]["status"] == "running"]
     failed = [s for s in STAGES if stages[s]["status"] == "failed"]
-    overall = "failed" if failed else ("done" if final else ("running" if running else "idle"))
+    runner = read_runner(pdir)
+    overall = "failed" if failed else ("done" if final else ("running" if running or runner.get("alive") else "idle"))
+    if runner.get("state") in ("failed", "died") and not final:
+        overall = "failed"
 
     # latest Trainer event: shows pre-flight "wait"/"refuse"/"reused" even when no job folder was made
     train_ev = next((e for e in reversed(events) if e.get("stage") == "train"
@@ -263,7 +289,7 @@ def snapshot(pipeline_dir) -> dict:
         "elapsed_s": round((last_ts if overall in ("done", "failed") and last_ts else time.time()) - t0) if t0 else None,
         "status": overall, "active_stages": running, "loop": loop,
         "max_loops": (spec.get("targets") or {}).get("max_loops"),
-        "spec": spec, "links": links, "stages": stages, "train_last_event": train_ev,
+        "spec": spec, "links": links, "stages": stages, "train_last_event": train_ev, "runner": runner,
         "data": data, "bench": bench, "train": jobs, "loops": loops, "final": final,
         "budget": meta.get("budget_used") or {},
         "events": events[-TAIL_EVENTS:], "n_events": len(events),

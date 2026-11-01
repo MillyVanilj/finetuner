@@ -241,10 +241,41 @@ python3 scripts/simulate_pipeline.py --speed 2          # fake run to watch (or 
   *Create pipeline* (shows the next commands) or *Simulate with this spec*.
 - `#p=<id>&once=1&stage=train&theme=light` in the URL gives a static snapshot (screenshots, slides).
 
-## 6. Open items for the team
-- Built: Eval (`skills/finetune-eval`, on main) and the Evaluator (`skills/finetune-decide`, on its own branch).
-  The Trainer skills report to the event log (main). Not built yet: BenchGen and ReportAgent; build them against §3.
-- `gen_data.py` and `finetune-submit` don't emit events yet. Until they do, run them with a pipeline and link their
-  folders (`ftc.cli link`), or wrap them in `run_pipeline.py`, which can emit for them.
-- DataGen ignores the v2-only fields (seed examples, coverage topics) today. Using `seed_examples` as few-shot
-  examples and `coverage.topics` in the batch rotation is a cheap win.
+## 6. Running a real pipeline (`scripts/run_pipeline.py`)
+
+Press **▶ Start pipeline** in the dashboard, or run it in a terminal:
+```bash
+cd ~/finetuner && set -a && source .env && set +a          # API keys (ScienceClaw doesn't read .env itself)
+python3 scripts/run_pipeline.py --pipeline ~/finetuner/pipelines/<id>   # add --skip-general for faster loops
+```
+It calls the real skills as subprocesses, like ScienceClaw's executor does, using
+`$SCIENCECLAW_DIR/skills/<name>` (default `~/scienceclaw`, where `scripts/install.sh` copies them) or else this
+repo's `skills/`:
+
+1. BenchGen (background job, no `--run-id`, so it writes `<pipeline>/bench`) runs while DataGen runs. After
+   both finish, DataGen's M4 is re-run against dev + held-out for the contamination check.
+2. `finetune-submit` (its pre-flight decides; a "wait" is retried, a "refuse" ends the run), then poll
+   `finetune-status` until it reports done.
+3. Poll `finetune-eval` (dev) until done; its `report.json` is converted to §3.4 by `ftc/report_convert.py`.
+4. `finetune-decide`, then act on the action:
+   - `retrain`: same data, `--retrain-config-path`.
+   - `regenerate_data`: DataGen can't read `data_feedback.json` yet, so the runner writes
+     `loops/<n>/task_spec_data.json`, with the weak categories first (twice) in `edge_cases` and `n_examples` raised,
+     and runs DataGen on that.
+   - `stop`: score the held-out split once, then write `final/final_report.json`.
+
+State: `runner.json` (pid, current step, error), log: `runner.log`, both shown in the dashboard. **■ Stop**
+sends SIGTERM: the runner stops after its current call. Jobs it already launched (training, eval, BenchGen) keep
+running. A restart picks up where it was: DataGen, BenchGen and submit all resume or reuse.
+Needs: the Brev machine set up (`setup_brev.sh`, `install.sh`), keys loaded, and `finetune-bench-gen` (branch
+`feat/l2-benchgen`) and `finetune-decide` (two versions: branches `feat/evaluator` and
+`worktree-evaluator-decide`) installed. The runner reads both Evaluators' outputs.
+Test without GPU or API: `python3 tests/test_run_pipeline.py` (stand-in skills, 3 loops).
+
+## 7. Open items for the team
+- Merge BenchGen (`feat/l2-benchgen`) and pick ONE Evaluator (`feat/evaluator` or `worktree-evaluator-decide`).
+- ReportAgent (HF push, model card, Infinite post) is not built; the runner writes `final/final_report.json` for it.
+- DataGen doesn't read `--data-feedback-path` yet (the runner works around it, see §6) and ignores the v2-only
+  fields (seed examples, coverage topics). Using `seed_examples` as few-shot examples is a cheap win.
+- `finetune-eval` reports only a stage name while running (no item counts), so the Evaluation panel shows its
+  stage list.
