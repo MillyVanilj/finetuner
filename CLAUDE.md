@@ -21,6 +21,7 @@ Hackathon ends Sunday night. Favor working demos over perfect code. Keep things 
 | Output | not built (`run_pipeline.py` scores held-out once and writes `final/final_report.json`) | best adapter → HF Hub, model card, Infinite post |
 | Runner without agents | `scripts/run_pipeline.py` (dashboard ▶ Start) | runs the stages above in order, converts Eval's report to §3.4 |
 | Live view | `dashboard/`, `ftc/pipeline.py`, `scripts/simulate_pipeline.py` | reads the pipeline folder |
+| Poster wall | `ftc/wall.py`, `skills/finetune-wall`, dashboard 📌 card | agents (and humans) pin notes for each other in `wall.jsonl` |
 
 Every training run saves its config, dataset hash, metrics and adapter location (`run.json`, `metrics.json`), so results are reproducible.
 

@@ -201,6 +201,46 @@ legend { font-size: 12px; font-weight: 650; color: var(--ink-2); padding: 0 6px;
 pre.cmd { background: var(--surface-2); padding: 8px 10px; border-radius: 8px; overflow: auto; font-size: 12px; }
 .empty { text-align: center; padding: 70px 20px; color: var(--ink-2); }
 .empty h2 { color: var(--ink); }
+
+/* poster wall: agents pin notes for each other */
+.wall-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.wall-head h3 { margin: 0; }
+.wall-head .who { display: flex; gap: 6px; flex-wrap: wrap; }
+.who .ag { font-size: 12px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--border); cursor: pointer; color: #1b1b1b; user-select: none; }
+.who .ag.off { opacity: .35; }
+.cork { border-radius: 10px; padding: 16px; min-height: 140px; max-height: 640px; overflow: auto;
+        background-color: #c9a46a; background-image: radial-gradient(rgba(0,0,0,.07) 1px, transparent 1.5px), radial-gradient(rgba(255,255,255,.08) 1px, transparent 1.5px);
+        background-size: 7px 7px, 11px 11px; background-position: 0 0, 3px 4px; box-shadow: inset 0 0 0 6px #8a6a3d, inset 0 2px 12px rgba(0,0,0,.25); }
+:root[data-theme="dark"] .cork { background-color: #6e5534; box-shadow: inset 0 0 0 6px #4a3820, inset 0 2px 12px rgba(0,0,0,.5); }
+@media (prefers-color-scheme: dark) { :root:where(:not([data-theme="light"])) .cork { background-color: #6e5534; box-shadow: inset 0 0 0 6px #4a3820, inset 0 2px 12px rgba(0,0,0,.5); } }
+.notes { columns: 260px; column-gap: 16px; }
+.note { break-inside: avoid; display: inline-block; width: 100%; margin: 6px 0 14px; padding: 14px 13px 10px; position: relative; color: #1b1b1b;
+        border-radius: 2px 2px 10px 2px; box-shadow: 0 1px 1px rgba(0,0,0,.15), 0 6px 12px -4px rgba(0,0,0,.35); transform: rotate(var(--rot, 0deg));
+        transition: transform .15s; animation: pin .45s ease-out; font-size: 13px; }
+.note:hover { transform: rotate(0deg) scale(1.02); z-index: 2; }
+@keyframes pin { from { opacity: 0; transform: translateY(-14px) rotate(var(--rot, 0deg)) scale(1.06); } }
+.note::before { content: ""; position: absolute; top: -6px; left: 50%; width: 13px; height: 13px; margin-left: -6px; border-radius: 50%;
+                background: radial-gradient(circle at 35% 35%, #ff8a8a, #c92a2a 60%, #7a1010); box-shadow: 0 2px 2px rgba(0,0,0,.35); }
+.note .nh { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; font-size: 11.5px; }
+.note .au { font-weight: 700; font-size: 12.5px; }
+.note .to { color: #4a4a4a; }
+.note .kd { margin-left: auto; text-transform: uppercase; font-size: 9.5px; letter-spacing: .06em; font-weight: 700; padding: 1px 5px; border-radius: 4px; background: rgba(0,0,0,.08); }
+.note .kd.k-alert { background: #d03b3b; color: #fff; } .note .kd.k-request, .note .kd.k-question { background: #1b1b1b; color: #fff; }
+.note .tx { margin: 6px 0 6px; white-space: pre-wrap; word-wrap: break-word; line-height: 1.4; }
+.note .mt { font-weight: 700; }
+.note .ft { display: flex; gap: 6px; align-items: center; font-size: 11px; color: #555; flex-wrap: wrap; }
+.note .ft .tm { margin-right: auto; font-variant-numeric: tabular-nums; }
+.note .rx, .note .act { border: 1px solid rgba(0,0,0,.15); background: rgba(255,255,255,.45); border-radius: 999px; padding: 0 7px; font-size: 11.5px; cursor: pointer; color: #1b1b1b; }
+.note .rx.me { background: rgba(255,255,255,.9); border-color: rgba(0,0,0,.4); }
+.note .act:hover, .note .rx:hover { background: rgba(255,255,255,.85); }
+.note .reps { margin-top: 8px; border-top: 1px dashed rgba(0,0,0,.2); padding-top: 6px; display: flex; flex-direction: column; gap: 6px; }
+.note .rep { padding: 5px 7px; border-radius: 6px; font-size: 12px; box-shadow: 0 1px 2px rgba(0,0,0,.15); }
+.note .rep b { font-size: 11.5px; } .note .rep .tm { color: #555; font-size: 10.5px; margin-left: 4px; }
+.compose { display: grid; grid-template-columns: 130px 150px 120px 1fr auto; gap: 8px; margin-top: 12px; align-items: start; }
+.compose input, .compose select, .compose textarea { border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; background: var(--page); width: 100%; }
+.compose textarea { min-height: 36px; height: 36px; resize: vertical; }
+.compose .re { grid-column: 1 / -1; font-size: 12px; color: var(--ink-2); }
+@media (max-width: 800px) { .compose { grid-template-columns: 1fr 1fr; } .compose textarea { grid-column: 1 / -1; } }
 </style>
 </head>
 <body>
@@ -244,6 +284,20 @@ pre.cmd { background: var(--surface-2); padding: 8px 10px; border-radius: 8px; o
         <details id="runLogBox" style="display:none;margin-top:10px"><summary class="muted">Runner log</summary><pre class="cmd" id="runLog" style="max-height:300px;font-size:11px"></pre></details></div>
     </div>
 
+
+    <div class="card" style="margin-top:16px" id="wallCard">
+      <div class="wall-head"><h3>📌 Poster wall</h3><span class="muted" id="wallCount" style="font-size:12px"></span>
+        <span class="spacer"></span><div class="who" id="wallWho"></div></div>
+      <div class="cork" id="cork"><div class="notes" id="notes"></div></div>
+      <div class="compose">
+        <input id="wAuthor" value="Human" title="Post as" aria-label="Post as">
+        <select id="wTo" title="Addressed to" aria-label="Addressed to"></select>
+        <select id="wKind" title="Kind of note" aria-label="Kind of note"><option>note</option><option>request</option><option>question</option><option>finding</option><option>answer</option><option>alert</option><option>praise</option></select>
+        <textarea id="wText" placeholder="Pin a note for the agents… (@DataAgent mentions work too; Ctrl+Enter to post)"></textarea>
+        <button class="btn primary" id="wPost">📌 Pin</button>
+        <div class="re" id="wRe" style="display:none"></div>
+      </div>
+    </div>
     <div class="card" style="margin-top:16px" id="loopsCard">
       <h3>Across loops</h3>
       <div class="two"><div id="loopChart"></div><div id="loopList"></div></div>
@@ -540,7 +594,7 @@ function render() {
   ].filter(c => c[1]).map(c => `<span class="chip">${c[0]} <b>${esc(c[1])}</b></span>`).join("");
   $("loopV").textContent = `${S.loop}${S.max_loops ? " / " + S.max_loops : ""}`;
   $("bestV").textContent = fmtPct(bestDev());
-  renderMap(); renderPanel(); renderFeed(); renderLoops(); renderRunner();
+  renderMap(); renderPanel(); renderFeed(); renderLoops(); renderRunner(); renderWall();
 }
 
 // ▶ Start / ■ Stop: runs scripts/run_pipeline.py (the real skills) on the machine the dashboard runs on.
@@ -638,6 +692,85 @@ function renderLoops() {
     return `<div class="callout ${kind}" style="margin-bottom:8px"><b>Loop ${l.loop}</b> ${r ? `· tuned ${fmtPct(r.systems.tuned.score)}` : ""}
       ${d ? `<div><b>${esc(d.action.replace(/_/g, " "))}</b>: ${esc(d.reason)}</div><div class="muted" style="font-size:12px">rule: ${esc(d.rule)}</div>` : `<div class="muted">${S.loop === l.loop ? "in progress…" : ""}</div>`}</div>`; }).join("");
 }
+
+// ---------------- poster wall ----------------
+// Agents pin notes for each other (ftc/wall.py, <pipeline>/wall.jsonl). Humans can pin notes too.
+const AGENTS = ["SpecAgent", "DataAgent", "BenchAgent", "TrainAgent", "EvalAgent", "Evaluator", "ReportAgent", "Runner", "Human"];
+const NOTE_COLORS = {SpecAgent: "#e6dcff", DataAgent: "#fff1a8", BenchAgent: "#c9f0ef", TrainAgent: "#ffe0c2",
+  EvalAgent: "#cfe6ff", Evaluator: "#ffd6e0", ReportAgent: "#ccf2dc", Runner: "#ebe9e3", Human: "#ffffff"};
+const EXTRA_COLORS = ["#f6e3b4", "#d9f2c4", "#f2d4f7", "#d4e4f7", "#f7d9c4"];
+const noteColor = (a) => NOTE_COLORS[a] || EXTRA_COLORS[[...String(a)].reduce((h, c) => h + c.charCodeAt(0), 0) % EXTRA_COLORS.length];
+const rotOf = (id) => (Math.abs([...String(id)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) | 0, 7)) % 5) * 0.6 - 1.2;
+const WALL_HIDE = new Set(); let WALL_FP = null, REPLY_TO = null;
+const me = () => ($("wAuthor").value || "Human").trim();
+const withMentions = (t) => esc(t).replace(/@([A-Za-z][\w-]*)/g, '<span class="mt">@$1</span>');
+
+function renderWall() {
+  const w = S.wall || {posts: [], authors: {}, n_posts: 0};
+  const names = [...new Set([...AGENTS.filter(a => w.authors[a]), ...Object.keys(w.authors)])];
+  // "to" picker: everyone + every known agent (rebuilt only when the list changes, so a choice survives updates)
+  const toSel = $("wTo"), opts = ["", ...new Set([...AGENTS.filter(a => a !== "Human"), ...names])];
+  if (toSel.dataset.o !== opts.join()) { const cur = toSel.value;
+    toSel.innerHTML = opts.map(a => `<option value="${esc(a)}">${a ? "→ " + esc(a) : "→ everyone"}</option>`).join("");
+    toSel.value = cur; toSel.dataset.o = opts.join(); }
+  const fp = JSON.stringify([PID, w.n_posts, w.posts.map(p => [p.id, p.reactions]), [...WALL_HIDE], me()]);
+  if (fp === WALL_FP) return;   // nothing new: don't re-render (keeps the pin animation for new notes only)
+  WALL_FP = fp;
+  $("wallCount").textContent = w.n_posts ? `${w.n_posts} note${w.n_posts === 1 ? "" : "s"} · ${names.length} voice${names.length === 1 ? "" : "s"}` : "";
+  $("wallWho").innerHTML = names.map(a => `<span class="ag ${WALL_HIDE.has(a) ? "off" : ""}" data-a="${esc(a)}" style="background:${noteColor(a)}" title="Show/hide ${esc(a)}">${esc(a)} · ${w.authors[a]}</span>`).join("");
+  $("wallWho").querySelectorAll(".ag").forEach(e => e.onclick = () => { const a = e.dataset.a; WALL_HIDE.has(a) ? WALL_HIDE.delete(a) : WALL_HIDE.add(a); renderWall(); });
+
+  const byId = Object.fromEntries(w.posts.map(p => [p.id, p]));
+  const rootOf = (p) => { let r = p, n = 0; while (r.reply_to && byId[r.reply_to] && n++ < 50) r = byId[r.reply_to]; return r; };
+  const threads = {};
+  w.posts.forEach(p => { const r = rootOf(p); (threads[r.id] ||= []).push(p); });
+  const roots = Object.keys(threads).map(id => byId[id])
+    .filter(r => threads[r.id].some(p => !WALL_HIDE.has(p.author)))
+    .sort((a, b) => (threads[b.id].at(-1).ts > threads[a.id].at(-1).ts ? 1 : -1));   // most recently active thread first
+  const rx = (p) => Object.entries(p.reactions || {}).map(([e, who]) =>
+    `<button class="rx ${who.includes(me()) ? "me" : ""}" data-p="${esc(p.id)}" data-e="${esc(e)}" title="${esc(who.join(", "))}">${esc(e)} ${who.length}</button>`).join("");
+  const to = (p) => p.to?.length ? `<span class="to">→ ${esc(p.to.join(", "))}</span>` : "";
+  $("notes").innerHTML = roots.map(r => {
+    const reps = threads[r.id].filter(p => p.id !== r.id && !WALL_HIDE.has(p.author));
+    return `<div class="note" style="background:${noteColor(r.author)};--rot:${rotOf(r.id)}deg">
+      <div class="nh"><span class="au">${esc(r.author)}</span>${to(r)}<span class="kd k-${esc(r.kind)}">${esc(r.kind)}</span></div>
+      <div class="tx">${withMentions(r.text)}</div>
+      <div class="ft"><span class="tm">${timeOf(r.ts)}${r.loop ? " · loop " + r.loop : ""}</span>${rx(r)}
+        <button class="act" data-react="${esc(r.id)}" title="+1">👍</button><button class="act" data-reply="${esc(r.id)}" title="Reply">↩ reply</button></div>
+      ${reps.length ? `<div class="reps">${reps.map(p => `<div class="rep" style="background:${noteColor(p.author)}"><b>${esc(p.author)}</b> ${to(p)}<span class="tm">${timeOf(p.ts)}</span><div>${withMentions(p.text)}</div>
+        <div class="ft">${rx(p)}<button class="act" data-react="${esc(p.id)}" title="+1">👍</button><button class="act" data-reply="${esc(p.id)}" title="Reply">↩</button></div></div>`).join("")}</div>` : ""}
+    </div>`; }).join("")
+    || `<div style="color:#2b2010;padding:20px;text-align:center">The wall is empty. Agents pin notes here when they need something from each other. Pin the first one below.</div>`;
+  $("notes").querySelectorAll("[data-reply]").forEach(b => b.onclick = () => setReply(byId[b.dataset.reply]));
+  $("notes").querySelectorAll("[data-react]").forEach(b => b.onclick = () => wallReact(b.dataset.react, "👍"));
+  $("notes").querySelectorAll(".rx").forEach(b => b.onclick = () => wallReact(b.dataset.p, b.dataset.e));
+}
+function setReply(p) {
+  REPLY_TO = p ? p.id : null; const re = $("wRe");
+  if (!p) { re.style.display = "none"; return; }
+  re.style.display = "";
+  re.innerHTML = `↩ replying to <b>${esc(p.author)}</b>: “${esc(p.text.slice(0, 80))}${p.text.length > 80 ? "…" : ""}” <button class="btn" style="padding:0 8px" id="wReX">✕</button>`;
+  $("wReX").onclick = () => setReply(null);
+  if (p.author !== me()) { const t = $("wTo"); if (![...t.options].some(o => o.value === p.author)) t.add(new Option("→ " + p.author, p.author)); t.value = p.author; }
+  $("wKind").value = "answer"; $("wText").focus();
+}
+async function wallPost() {
+  const text = $("wText").value.trim(); if (!text || !PID) return;
+  $("wPost").disabled = true;
+  const r = await fetch("/api/wall?p=" + encodeURIComponent(PID), {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({author: me(), text, to: $("wTo").value, kind: $("wKind").value, reply_to: REPLY_TO})})
+    .then(r => r.json()).catch(e => ({error: String(e)}));
+  $("wPost").disabled = false;
+  if (r.ok) { $("wText").value = ""; setReply(null); $("wKind").value = "note"; }
+  else alert("Could not pin the note: " + (r.error || "unknown error"));
+}
+async function wallReact(post, emoji) {
+  await fetch("/api/wall/react?p=" + encodeURIComponent(PID), {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({post, author: me(), emoji})}).catch(() => {});
+}
+$("wPost").addEventListener("click", wallPost);
+$("wText").addEventListener("keydown", e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); wallPost(); } });
+$("wAuthor").addEventListener("change", () => { WALL_FP = null; if (S) renderWall(); });
 
 // ---------------- stage panels ----------------
 function renderPanel() {

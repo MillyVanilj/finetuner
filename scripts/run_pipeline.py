@@ -31,6 +31,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 from ftc.pipeline import Pipeline, now_iso      # noqa: E402
 from ftc.spec import upgrade                    # noqa: E402
+from ftc.wall import STAGE_AGENT, Wall          # noqa: E402
 
 SKILL_SCRIPTS = {"finetune-data-gen": "gen_data.py", "finetune-bench-gen": "bench_gen.py",
                  "finetune-submit": "finetune_submit.py", "finetune-status": "finetune_status.py",
@@ -196,6 +197,9 @@ def run_datagen(pl: Pipeline, spec_path: Path, run_id: str, loop: int, note: str
             n = out.get("train_examples")
             pl.emit("data", "done", f"{n} training examples ready ({out.get('rejected_total', 0)} rejected by M3)",
                     loop=loop, train_path=out["train_path"])
+            Wall.for_pipeline(pl).post("DataAgent", f"{n} verified training examples ready "
+                                       f"({out.get('rejected_total', 0)} rejected by the verifier).",
+                                       to="TrainAgent", kind="finding", loop=loop, refs={"train_path": out["train_path"]})
             return str(Path(out["train_path"]).expanduser())
         sleep(1)
     raise RunnerError("DataGen did not finish after many calls")
@@ -273,6 +277,9 @@ def evaluate(pl: Pipeline, adapter: str, bench_dir: str, split: str, loop: int, 
     b = conv["systems"].get("base_fewshot", {}).get("score")
     pl.emit("eval", "done", f"Tuned {t if t is None else round(t, 3)} vs base few-shot "
                             f"{b if b is None else round(b, 3)} on {split}", loop=loop, eval_report_path=str(rp))
+    Wall.for_pipeline(pl).post("EvalAgent", f"{split} scores: tuned {t if t is None else round(t, 3)} vs base few-shot "
+                               f"{b if b is None else round(b, 3)}.", to="Evaluator" if split == "dev" else "ReportAgent",
+                               kind="finding", loop=loop, refs={"eval_report_path": str(dest)})
     return dest   # the §3.4 version: both finetune-decide versions read it (only one reads finetune-eval's own format)
 
 
@@ -303,6 +310,14 @@ def regen_spec(pl: Pipeline, base_spec: dict, decision: dict, loop: int) -> Path
     if fb.get("notes"):
         s["success_criteria"] = list(s.get("success_criteria", [])) + [str(fb["notes"])[:200]]
     s["m_feedback"] = {"from_loop": loop - 1, "categories": cats}
+    # Notes on the poster wall addressed to DataAgent (e.g. a human's hint) become extra criteria.
+    wall = Wall.for_pipeline(pl)
+    hints = [p for p in wall.inbox("DataAgent") if p.get("author") not in STAGE_AGENT.values()][-3:]
+    for h in hints:
+        s["success_criteria"] = list(s.get("success_criteria", [])) + [f"Hint from {h['author']}: {h['text'][:200]}"]
+        wall.reply(h["id"], "DataAgent", f"Got it, using your note when generating loop {loop}'s data.", loop=loop)
+    if hints:
+        s["m_feedback"]["wall_hints"] = [h["id"] for h in hints]
     return pl.write_json(f"loops/{loop}/task_spec_data.json", s)
 
 
@@ -331,7 +346,12 @@ def run(pl: Pipeline, max_loops_cap: int, skip_general: bool):
     if bench.get("error"):
         raise RunnerError(bench["error"])
     bench_dir = bench["bench_dir"]
+    wall = Wall.for_pipeline(pl)
+    bp = wall.post("BenchAgent", "Benchmark ready (dev + sealed held-out split). @DataAgent please check the training "
+                   "data against it for leaks; @EvalAgent it's yours.", kind="finding", loop=0, refs={"bench_dir": bench_dir})
     decontaminate(pl, data_run_id, bench_dir)
+    wall.reply(bp, "DataAgent", "Checked the training data against the benchmark (see the contamination event in Activity).", loop=loop)
+    wall.react(bp, "EvalAgent", "👍")
 
     retrain_cfg, best = None, None
     while True:
@@ -339,6 +359,10 @@ def run(pl: Pipeline, max_loops_cap: int, skip_general: bool):
         write_runner_state(pl, step=f"loop {loop}: training", loop=loop)
         st = train(pl, train_path, retrain_cfg)
         adapter, job = st["adapter_path"], st["train_job_id"]
+        m = st.get("metrics") or {}
+        wall.post("TrainAgent", f"Adapter for loop {loop} is ready (train loss {m.get('train_loss')}, "
+                  f"eval loss {m.get('eval_loss')}). Please score it!", to="EvalAgent", loop=loop,
+                  refs={"adapter_path": adapter, "train_job_id": job})
 
         write_runner_state(pl, step=f"loop {loop}: evaluating")
         rp = evaluate(pl, adapter, bench_dir, "dev", loop, job, skip_general=skip_general)
@@ -352,6 +376,16 @@ def run(pl: Pipeline, max_loops_cap: int, skip_general: bool):
             pl.write_json(f"loops/{loop}/decision.json", {"loop": loop, **dec, "created_at": now_iso()})
             pl.emit("decide", "decision", f"{action.replace('_', ' ')}: {dec.get('reason', '')}", loop=loop, action=action)
 
+        reason = dec.get("reason", "")
+        if action == "regenerate_data":
+            req = wall.post("Evaluator", f"Data issue: {reason} Please generate more examples for the weak categories.",
+                            to="DataAgent", kind="request", loop=loop)
+        elif action == "retrain":
+            req = wall.post("Evaluator", f"Training issue: {reason} Please retrain on the same data with the new config.",
+                            to="TrainAgent", kind="request", loop=loop, refs={"retrain_config_path": dec.get("retrain_config_path")})
+        else:
+            req = wall.post("Evaluator", f"Stopping{' (loop limit reached)' if action != 'stop' else ''}: {reason} "
+                            "@ReportAgent please score held-out once.", kind="praise" if action == "stop" else "note", loop=loop)
         if action == "stop" or loop >= max_loops:
             best_adapter = dec.get("final_adapter_path") or dec.get("best_adapter_path") or adapter
             best_job = dec.get("best_job_id") or job
@@ -363,10 +397,12 @@ def run(pl: Pipeline, max_loops_cap: int, skip_general: bool):
         if action == "retrain":
             retrain_cfg = dec.get("retrain_config_path")
             train_path = dec.get("train_path") or train_path
+            wall.reply(req, "TrainAgent", f"On it: retraining for loop {nxt}.", loop=nxt)
             pl.emit("data", "done", "Reusing the same training data (training issue only)", loop=nxt)
         elif action == "regenerate_data":
             retrain_cfg = None
             sp = regen_spec(pl, spec, dec, nxt)
+            wall.reply(req, "DataAgent", f"On it: regenerating data for loop {nxt}.", loop=nxt)
             data_run_id = f"{pl.id}-l{nxt}"
             train_path = run_datagen(pl, sp, data_run_id, nxt, note=" (more data for weak categories)")
             decontaminate(pl, data_run_id, bench_dir)

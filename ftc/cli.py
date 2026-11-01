@@ -7,6 +7,8 @@
     python3 -m ftc.cli loop  <pipeline_dir> 2 "more data for weak categories"
     python3 -m ftc.cli status <pipeline_dir>                       # one line per stage
     python3 -m ftc.cli list
+    python3 -m ftc.cli wall -p <pipeline_dir> post EvalAgent "weak on stoichiometry" --to DataAgent --kind request
+    python3 -m ftc.cli wall -p <pipeline_dir> inbox DataAgent      # see ftc/wall.py for all wall commands
 """
 import json
 import sys
@@ -17,6 +19,10 @@ from .spec import load_spec
 
 def main(argv=None):
     import argparse
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] == "wall":            # the poster wall has its own sub-commands
+        from .wall import main as wall_main
+        return wall_main(argv[1:])
     ap = argparse.ArgumentParser(prog="ftc")
     sub = ap.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("new"); s.add_argument("spec")

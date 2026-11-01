@@ -12,6 +12,7 @@ complete, correct example of every hand-off file. No LLM or GPU calls are made.
 Story (3 loops): loop 1 -> failures concentrate in two edge cases -> regenerate data
 (data issue). Loop 2 -> train loss << eval loss -> retrain with fewer epochs (training
 issue). Loop 3 -> target met -> stop, score held-out set, write model card.
+Along the way the agents talk on the poster wall (wall.jsonl, ftc/wall.py).
 """
 import argparse
 import json
@@ -26,6 +27,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ftc.pipeline import Pipeline, now_iso      # noqa: E402
 from ftc.spec import load_spec                  # noqa: E402
+from ftc.wall import Wall                       # noqa: E402
 
 R = random.Random(7)
 SPEED = 1.0
@@ -68,6 +70,11 @@ def run_bench(pl: Pipeline, spec):
     total = n_dev + n_ho
     pl.emit("bench", "start", f"M5 writing {total} benchmark items ({spec['models']['bench_writer']})", loop=0)
     cats = ["typical cases"] + spec["edge_cases"]
+    w = Wall.for_pipeline(pl)
+    hi = w.post("BenchAgent", f"Writing {total} benchmark items from the same spec. I'll pin the category list "
+                "when I'm done so training data can be checked against it (no test leakage!).", to="DataAgent", loop=0)
+    nap(1.5)
+    w.reply(hi, "DataAgent", "Thanks! I'll run the contamination check against bench/dev.jsonl before handing data to TrainAgent.", loop=0)
     made = rejected = 0
     steps = 25
     for k in range(steps):
@@ -104,6 +111,9 @@ def run_bench(pl: Pipeline, spec):
     pl.progress("bench", done=total, total=total, unit="items", state="done", metrics={"rejected": rejected})
     pl.link("bench_dir", str(b), stage="bench")
     pl.emit("bench", "done", f"Benchmark ready: {n_dev} dev + {n_ho} held-out items", loop=0)
+    w.post("BenchAgent", f"Benchmark ready: {n_dev} dev + {n_ho} held-out items across {len(cats)} categories: "
+           f"{', '.join(cats)}. Held-out stays sealed until the very end. @EvalAgent it's yours.",
+           kind="finding", loop=0, refs={"bench_dir": str(b)})
 
 
 def run_data(pl: Pipeline, spec, loop, n_target, focus_extra=None):
@@ -145,6 +155,10 @@ def run_data(pl: Pipeline, spec, loop, n_target, focus_extra=None):
     wjson(d / "state.json", st)
     pl.emit("data", "done", f"{st['kept']} training examples ready ({st['rejected']} rejected by M3)",
             loop=loop, train_path=str(d / "train.jsonl"))
+    note = f" (extra focus on {', '.join(focus_extra)})" if focus_extra else ""
+    Wall.for_pipeline(pl).post("DataAgent", f"{st['kept']} verified training examples ready{note}. "
+                               f"M3 rejected {st['rejected']}; {dup} exact duplicates removed.",
+                               to="TrainAgent", kind="finding", loop=loop, refs={"train_path": str(d / "train.jsonl")})
     return d / "train.jsonl"
 
 
@@ -202,6 +216,10 @@ def run_train(pl: Pipeline, spec, loop, train_path, cfg, overfit=False, parent=N
     wjson(d / "status.json", final)
     pl.emit("train", "done", f"Adapter saved (train loss {metrics['train_loss']}, eval loss {metrics['eval_loss']})",
             loop=loop, adapter_path=final["adapter_path"])
+    Wall.for_pipeline(pl).post("TrainAgent", f"Adapter for loop {loop} is ready (r={cfg['rank']}, lr={cfg['lr']}, "
+                               f"{cfg['epochs']} epoch{'s' if cfg['epochs'] != 1 else ''}). Train loss {metrics['train_loss']}, "
+                               f"eval loss {metrics['eval_loss']}. Please score it!", to="EvalAgent", loop=loop,
+                               refs={"adapter_path": final["adapter_path"], "train_job_id": job_id})
     return job_id, final
 
 
@@ -272,6 +290,12 @@ def run_eval(pl: Pipeline, spec, loop, job_id, adapter, tuned_score, cat_scores,
                 metrics={"systems": sys_prog, "general": general})
     pl.emit("eval", "done", f"Tuned {systems['tuned']['score']:.2f} vs base few-shot "
             f"{systems['base_fewshot']['score']:.2f} (teacher {systems['teacher']['score']:.2f}) on {split}", loop=loop)
+    weakest = min(cat_scores, key=cat_scores.get) if cat_scores else None
+    Wall.for_pipeline(pl).post(
+        "EvalAgent", f"{split} scores: tuned {systems['tuned']['score']:.2f} vs base few-shot {systems['base_fewshot']['score']:.2f} "
+        f"(teacher {systems['teacher']['score']:.2f})." + (f" Weakest category: {weakest!r} at {cat_scores[weakest]:.2f}." if weakest else "")
+        + (f" General ability dropped {general_drop * 100:.0f} points." if general_drop >= 0.03 else ""),
+        to="Evaluator" if split == "dev" else "ReportAgent", kind="finding", loop=loop, refs={"eval_report": str(ed / name)})
     return report
 
 
@@ -325,6 +349,13 @@ def main():
            f"58% of dev failures are in 2 categories: {weak[0]!r}, {weak[1]!r}",
            {"data_feedback": {"categories": weak, "extra_examples": 150,
                               "notes": "More examples of these categories. Category names only, never test items."}})
+    w = Wall.for_pipeline(pl)
+    rq = w.post("Evaluator", f"Most dev failures are in {weak[0]!r} and {weak[1]!r}. Please generate ~150 more examples "
+                "of these categories (category names only, I won't share test items).", to="DataAgent", kind="request", loop=1)
+    nap(1.5)
+    w.react(rq, "DataAgent", "👍")
+    w.reply(rq, "DataAgent", "On it: regenerating with extra focus on those two edge cases.", loop=1)
+    w.react(rq, "TrainAgent", "👀")
 
     # loop 2: data issue -> more data for weak categories, same hyperparameters
     pl.set_loop(2, "more data for weak categories")
@@ -334,6 +365,13 @@ def main():
     decide(pl, spec, 2, rep, "retrain", "train loss << eval loss and general drop > 3 points",
            "Overfitting: eval loss rose in epoch 2 and GSM8K fell 4 points; fewer epochs, lower lr",
            {"retrain_config": {"lr": 1e-4, "epochs": 1, "parent_job_id": job, "reason": "overfitting"}})
+    rq = w.post("Evaluator", "Looks like overfitting: eval loss went up in epoch 2 and GSM8K fell 4 points. "
+                "Can you retrain on the same data with lr 1e-4 and 1 epoch?", to="TrainAgent", kind="request", loop=2)
+    nap(1)
+    q = w.reply(rq, "TrainAgent", "Sure. Should I keep rank 16?", kind="question", loop=2)
+    nap(1)
+    w.reply(q, "Evaluator", "Yes, keep r=16 so we only change one thing at a time.", loop=2)
+    w.react(rq, "DataAgent", "😌")
 
     # loop 3: training issue -> new hyperparameters on the same data
     pl.set_loop(3, "retrain with lr 1e-4, 1 epoch")
@@ -345,6 +383,10 @@ def main():
     rep = run_eval(pl, spec, 3, job, res["adapter_path"], target + 0.04, {}, general_drop=0.005)
     decide(pl, spec, 3, rep, "stop", "target met",
            f"Tuned {rep['systems']['tuned']['score']:.2f} >= target {target}; beats base few-shot outside the CI")
+    st = w.post("Evaluator", f"Target met: tuned {rep['systems']['tuned']['score']:.2f} >= {target}. Stopping here. "
+                "Great teamwork everyone! @ReportAgent please score held-out once and publish.", kind="praise", loop=3)
+    for who, e in (("DataAgent", "🎉"), ("TrainAgent", "🎉"), ("BenchAgent", "🙌")):
+        w.react(st, who, e)
 
     # output: held-out once, model card, final report
     pl.emit("output", "start", "Scoring held-out set once, writing model card", loop=3)
@@ -361,6 +403,9 @@ def main():
     (pl.dir / "final" / "model_card.md").write_text(
         f"# {spec['title']} (LoRA on {spec['models']['student']})\n\nSIMULATED RUN: no real model was trained.\n")
     wjson(pl.dir / "final" / "final_report.json", final)
+    w.post("ReportAgent", f"Published! Held-out (scored once): tuned {ho['systems']['tuned']['score']:.2f} vs base few-shot "
+           f"{ho['systems']['base_fewshot']['score']:.2f}. Adapter: {final['hub_url']}", kind="finding", loop=3,
+           refs={"final_report": str(pl.dir / 'final' / 'final_report.json')})
     pl.emit("output", "done", f"Done. Held-out: tuned {ho['systems']['tuned']['score']:.2f} vs base few-shot "
             f"{ho['systems']['base_fewshot']['score']:.2f}", loop=3)
     print(json.dumps({"pipeline_dir": str(pl.dir)}))
