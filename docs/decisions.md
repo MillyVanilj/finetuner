@@ -52,8 +52,50 @@ The **fine-tuning collective** from wireframe v0.2: a user states a goal → age
 
 ## Decision 2: Gemini still does a lot of work
 
-1. **Gemini Flash = bulk data generator (M2).** Its rate limits + Batch API make thousands of examples cheap and fast, saving Claude/OpenAI credits.
+1. ~~**Gemini Flash = bulk data generator (M2).**~~ Replaced on Nov 1 by OpenAI Sol, see Decision 2b. Flash is still the fallback (`DATAGEN_GEN_BACKEND=default`) and the cheap option when volume matters more than hard items.
 2. **Gemini fine-tuning = optional 2nd Trainer backend** (stretch). Same JSONL data with a small format change, so the agents could compare "Qwen on Brev" vs "Gemini on Vertex". Also a fallback if GPU setup fails.
+
+## Decision 2b (Nov 1): OpenAI Sol writes the training data, Claude Sonnet checks it
+
+The NL→SQL run showed the Flash-written data was too easy (0 % `NOT EXISTS`, 1 % `LEFT JOIN`, 13 % subqueries vs 75 %
+among the tuned model's failures). Once DataGen is pushed to hard and misleading items (25 % misleading since #26), the
+writer's accuracy matters. Test: DataGen's own prompt, SQL spec, 20 hard/misleading items per model per round; an
+independent solver answered each item, both queries were run, and Claude Opus judged the disagreements.
+
+Round A (solver: OpenAI Sol), all candidate families:
+
+| Writer | Answers correct (est.) | Sec / example |
+|---|---|---|
+| Gemini 3.6 Flash (old default) | 14/19 (74 %) | 0.8 |
+| Gemini Pro latest | 9/20 (45 %) | 1.8 |
+| Gemini 4 Argon | 13/16 (81 %) | 2.9 |
+| Claude Sonnet 5.5 | 19/20 (95 %) | 2.2 |
+| Claude Opus 5.5 | 17/20 (85 %); its items fooled the solver most often | 3.6 |
+
+Rounds B + C (solver: Gemini 4 Argon, so no writer is checked by its own family), the OpenAI models added:
+
+| Writer | Answers correct (2 rounds) | `NOT EXISTS` / `LEFT JOIN` | Sec / example |
+|---|---|---|---|
+| **GPT-6.1 Sol (new default)** | **38/38** | 20-25 % / 10-15 % | 2.2 |
+| GPT-6.1 Terra | 33/36 (+1 ambiguous) | 30-35 % / 10-20 % | 1.7-2.0 |
+| Claude Sonnet 5.5 | 32/38 (2 did not run) | 15 % / 0-5 % | 2.5 |
+
+Why Sol: the most correct answers, more of the patterns the tuned model was failing (anti-joins, LEFT JOIN), and a
+**different family from the benchmark writer** (Claude Opus), so the tuned model can't score by learning the exam
+writer's style. The adjudicator is Claude, which if anything favours the Claude writers, and Sol still came out ahead.
+About 1 in 4 Flash answers on hard items was wrong; training on wrong answers teaches the mistakes.
+
+The **checker (M3) moves from Sol to Claude Sonnet**, so no family checks its own data. The checker only filters
+examples, it writes none, so sharing a family with the benchmark writer doesn't leak style into the training data.
+
+Settings (in `.env`): `DATAGEN_GEN_BACKEND` (`openai` default · `anthropic` · `gemini` · `default` = Gemini Flash),
+`DATAGEN_GEN_MODEL` (e.g. `gpt-6.1-terra`, `claude-sonnet-5-5`), `DATAGEN_VERIFY_BACKEND` (`anthropic` default · `openai`
+· `same`). DataGen warns if writer and checker are the same family. `state.json` records `generator` and `verifier`.
+
+**Open risk: the M7 judge is also Sol.** For items graded by the judge (not by execution), Sol may favour the tuned
+model's answers because it learned from Sol-written data, which would inflate the tuned-vs-base gain. SQL is graded by
+running the queries, so it is not affected. For judge-graded tasks, consider moving the judge to another family
+(`$FINETUNE_JUDGE_MODEL`, e.g. a `claude-*` model, keeping in mind Opus wrote those benchmark items).
 
 ## Decision 3: different model families per role
 
@@ -61,8 +103,9 @@ Same-family models favour their own outputs (self-preference bias), so:
 
 | Role | Model family |
 |---|---|
-| M2 generate training data | Gemini (Flash) |
-| M3 verify training data, M7 judge | OpenAI Sol (`gpt-6.1-sol`) |
+| M2 generate training data | OpenAI Sol (`gpt-6.1-sol`) since Nov 1 (Decision 2b); was Gemini Flash |
+| M3 verify training data | Claude Sonnet (`claude-sonnet-5-5`) since Nov 1 (Decision 2b); was Sol |
+| M7 judge | OpenAI Sol (`gpt-6.1-sol`); see the open risk in Decision 2b |
 | M1 spec parsing, M7 teacher | Claude Sonnet (`claude-sonnet-5-5`) |
 | M5/M6 write + check benchmark | Claude Opus (`claude-opus-5-5`), changed from OpenAI on Nov 1, see below |
 | Student (being trained) | Qwen |

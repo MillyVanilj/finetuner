@@ -7,6 +7,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 src = (HERE / "test_integration.py").read_text().split("TOPIC =")[0]
 __file__ = str(HERE / "test_integration.py"); exec(src)   # reuse Fake, executor_argv, tmp, gen_data
+os.environ["DATAGEN_GEN_BACKEND"] = "default"   # use the patched get_llm_client fake, never a real writer API
 gen_data.get_llm_client = lambda name: Fake(None)
 
 spec = {"task": "t", "io_format": "f", "success_criteria": ["a"], "edge_cases": ["e"], "n_examples": 4}
