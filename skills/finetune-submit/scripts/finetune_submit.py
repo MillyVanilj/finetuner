@@ -280,8 +280,15 @@ def main():
     data = Path(args.train_path).expanduser().resolve()
     n_examples, data_sha = validate_jsonl(data)
 
-    # Settings: defaults < Evaluator overrides < explicit flags
+    # Settings: defaults < task spec < Evaluator overrides < explicit flags.
+    # From the spec: models.student on every run; `training` only on the first one (an Evaluator retrain
+    # config already carries every setting it wants, starting from the run it retrains).
     cfg = dict(DEFAULTS)
+    spec = PL.spec() if PL else {}
+    if (spec.get("models") or {}).get("student"):
+        cfg["model"] = spec["models"]["student"]
+    if not args.retrain_config_path:
+        cfg.update({k: v for k, v in (spec.get("training") or {}).items() if k in TUNABLE and v is not None})
     if args.retrain_config_path:
         try:
             overrides = json.loads(Path(args.retrain_config_path).expanduser().read_text())
