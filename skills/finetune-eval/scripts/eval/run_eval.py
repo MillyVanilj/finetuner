@@ -19,6 +19,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 import traceback
@@ -160,14 +161,16 @@ def openai_judge(client, model, prompt):
     return r.output_text or None
 
 
-def score_all(items, outputs, judge, pool):
-    """-> per item {"score", "format_ok"[, "judge_reason"]}. score is None if the judge refused."""
+def score_all(items, outputs, judge, pool, fmt=None):
+    """-> per item {"score", "format_ok"[, "judge_reason"]}. score is None if the judge refused.
+    fmt: BenchGen's format regex (fully matches every reference), so judge items get a real format check."""
     def one(item, out):
         cs = code_score(item, out)
         if cs is not None:
             return {"score": cs[0], "format_ok": cs[1]}
         v = judge(item, out)
-        return {"score": None if v is None else float(v["pass"]), "format_ok": True, "judge_reason": v and v["reason"]}
+        ok = bool(fmt.fullmatch(str(out or "").strip())) if fmt else True
+        return {"score": None if v is None else float(v["pass"]), "format_ok": ok, "judge_reason": v and v["reason"]}
     return list(pool.map(one, items, outputs))
 
 
@@ -316,7 +319,10 @@ def main():
             return cache.get(["judge", a.judge_model, prompt], ask)
 
         status(state="running", stage="scoring")
-        scored = {name: score_all(items, outs, judge, pool) for name, outs in outputs.items()}
+        meta_f = Path(a.bench_dir) / "bench_meta.json"
+        rx = json.loads(meta_f.read_text()).get("format_regex") if meta_f.exists() else None
+        fmt = re.compile(rx, re.S) if rx else None   # same flags BenchGen verified it with
+        scored = {name: score_all(items, outs, judge, pool, fmt) for name, outs in outputs.items()}
         safety_scored = {name: score_all(safety, outs, judge, pool) for name, outs in safety_out.items()}
 
         if general:

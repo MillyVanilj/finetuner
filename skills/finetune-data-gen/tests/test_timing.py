@@ -270,5 +270,9 @@ again = agent_calls("hopeless", SlowCheck(0.01), 6, budget="3")     # a faster c
 L.LLM_CALL_CAP_S = 18.0
 check("new settings (different budget) -> tries again and finishes", again[-1][0].get("done"))
 
+head = "Extract the key trial facts from this abstract as JSON.\n\nBackground: "
+check("dedupe compares whole prompts, not the first 60 characters",
+      len({gen_data._user_key({"messages": [{"role": "user", "content": head + f"study {i}"}]}) for i in range(5)}) == 5)
+
 print(f"\n{'ALL PASSED' if not fails else f'{fails} FAILED'}")
 sys.exit(1 if fails else 0)
