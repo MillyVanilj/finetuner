@@ -59,7 +59,9 @@ next cycle. Checked by `tests/test_handoffs.py`.
 | `--batch-size` | Largest batch; smaller ones are planned automatically near the time limit | 10 |
 | `--time-budget` | Seconds one call may use, from process start. Set it a few seconds below the executor's timeout. Above 60 s, a single LLM call may take up to 120 s instead of 18 s (a reasoning checker such as Sol needs it). 0 is not "unlimited": nothing runs. `scripts/run_pipeline.py` passes `$DATAGEN_TIME_BUDGET` if set, else 540 | 27, or `$DATAGEN_TIME_BUDGET` |
 | `--bench` | Benchmark for the contamination check: BenchGen run id, folder or file; `none` disables | a frozen BenchGen benchmark with the same spec, if any |
-| `--verify-backend` | LLM backend for M3: `openai` (Sol, a different family from the Gemini generator, so it checks more strictly; model `$FINETUNE_OPENAI_MODEL`), `anthropic`, or `same` (= M2's backend). Needs `OPENAI_API_KEY` + the `openai` package; without them M3 falls back to M2's backend and the result's `warnings` says so | `openai` (Sol), or `$DATAGEN_VERIFY_BACKEND` |
+| `--gen-backend` | LLM backend for M2 (the writer): `anthropic` (Claude Sonnet; most correct on hard items, docs/decisions.md 2b), `gemini`, `openai`, or `default` (= `$FINETUNE_LLM_BACKEND`, Gemini Flash). No `ANTHROPIC_API_KEY`: falls back to `default` and the result's `warnings` says so | `anthropic`, or `$DATAGEN_GEN_BACKEND` |
+| `--gen-model` | Model for `--gen-backend` (e.g. `claude-opus-5-5`, `gemini-4-argon`) | `claude-sonnet-5-5` for anthropic, or `$DATAGEN_GEN_MODEL` |
+| `--verify-backend` | LLM backend for M3: `openai` (Sol, a different family from the Claude writer, so it checks more strictly; model `$FINETUNE_OPENAI_MODEL`), `anthropic`, or `same` (= M2's backend). Needs `OPENAI_API_KEY` + the `openai` package; without them M3 falls back to M2's backend and the result's `warnings` says so | `openai` (Sol), or `$DATAGEN_VERIFY_BACKEND` |
 | `--parallel` | Batches generated at the same time. Falls back to 1 on API rate limits | 1 |
 | `--max-batches` | Stop after N rounds in this call (debugging) | 0 (no limit) |
 

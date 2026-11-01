@@ -52,8 +52,33 @@ The **fine-tuning collective** from wireframe v0.2: a user states a goal → age
 
 ## Decision 2: Gemini still does a lot of work
 
-1. **Gemini Flash = bulk data generator (M2).** Its rate limits + Batch API make thousands of examples cheap and fast, saving Claude/OpenAI credits.
+1. ~~**Gemini Flash = bulk data generator (M2).**~~ Replaced on Nov 1 by Claude Sonnet, see Decision 2b. Flash is still the fallback (`DATAGEN_GEN_BACKEND=default`) and the cheap option when volume matters more than hard items.
 2. **Gemini fine-tuning = optional 2nd Trainer backend** (stretch). Same JSONL data with a small format change, so the agents could compare "Qwen on Brev" vs "Gemini on Vertex". Also a fallback if GPU setup fails.
+
+## Decision 2b (Nov 1): Claude Sonnet writes the training data
+
+The NL→SQL run showed the Flash-written data was too easy (0 % `NOT EXISTS`, 1 % `LEFT JOIN`, 13 % subqueries vs 75 %
+among the tuned model's failures). Once DataGen is pushed to hard and misleading items (25 % misleading since #26), the
+writer's accuracy matters. Test: DataGen's own prompt, SQL spec, 20 hard/misleading items per model; an independent
+solver (OpenAI Sol) answered each item and both queries were run; disagreements were judged by Claude Opus.
+
+| Writer | Answers correct (est.) | Sec / example |
+|---|---|---|
+| Gemini 3.6 Flash (old default) | 14/19 (74 %) | 0.8 |
+| Gemini Pro latest | 9/20 (45 %) | 1.8 |
+| Gemini 4 Argon | 13/16 (81 %) | 2.9 |
+| **Claude Sonnet 5.5 (new default)** | **19/20 (95 %)** | 2.2 |
+| Claude Opus 5.5 | 17/20 (85 %); its items fooled the solver most often (hardest) | 3.6 |
+
+Small sample, and the adjudicator is Claude (may favour Claude writers), but the gap to Flash is large: about 1 in 4
+Flash answers on hard items is wrong, and training on wrong answers teaches the mistakes.
+Settings (in `.env`): `DATAGEN_GEN_BACKEND` (`anthropic` default · `gemini` · `openai` · `default` = Gemini Flash),
+`DATAGEN_GEN_MODEL` (e.g. `claude-opus-5-5`, `gemini-4-argon`). The checker stays OpenAI Sol, a different family.
+DataGen's `state.json` records `generator` and `verifier`.
+Trade-offs: Claude credits instead of the free Gemini key; the training data and the benchmark (Opus) are now both
+Claude-written, so the tuned model could learn Claude's style rather than the task. Mitigations: execution grading for
+runnable answers (style can't score), real held-out items (Decision 4), and the decision rule compares tuned vs base
+few-shot on the same items.
 
 ## Decision 3: different model families per role
 
@@ -61,7 +86,7 @@ Same-family models favour their own outputs (self-preference bias), so:
 
 | Role | Model family |
 |---|---|
-| M2 generate training data | Gemini (Flash) |
+| M2 generate training data | Claude Sonnet (`claude-sonnet-5-5`) since Nov 1 (Decision 2b); was Gemini Flash |
 | M3 verify training data, M7 judge | OpenAI Sol (`gpt-6.1-sol`) |
 | M1 spec parsing, M7 teacher | Claude Sonnet (`claude-sonnet-5-5`) |
 | M5/M6 write + check benchmark | Claude Opus (`claude-opus-5-5`), changed from OpenAI on Nov 1, see below |

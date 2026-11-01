@@ -88,6 +88,31 @@ Return ONLY a JSON list with one item per example, in order:
 
 
 # ---------- Step 7: resumable state ----------
+DEFAULT_GEN_MODEL = {"anthropic": "claude-sonnet-5-5"}
+
+
+def model_name(llm):
+    """The model a client calls, for the record (state.json / result)."""
+    return next((getattr(llm, k) for k in ("anthropic_model", "openai_model", "gemini_model", "model")
+                 if isinstance(getattr(llm, k, None), str)), None)
+
+
+def gen_client(backend=None, model=None):
+    """M2 writer client -> (client, warning or None). backend None / "" / "default" = the shared finetune backend
+    ($FINETUNE_LLM_BACKEND, Gemini Flash unless set). anthropic / openai take `model`; gemini reads $GEMINI_MODEL,
+    so `model` is put there. If the backend can't start (no key, no package), fall back to the shared one."""
+    if backend in (None, "", "default"):
+        return get_llm_client("DataGen"), None
+    if backend == "gemini" and model:
+        os.environ["GEMINI_MODEL"] = model
+    try:
+        return make_client("DataGen", backend, model or DEFAULT_GEN_MODEL.get(backend)), None
+    except (ValueError, ImportError) as e:
+        return get_llm_client("DataGen"), (f"M2 writer '{backend}' unavailable ({e}); writing with the default backend "
+                                           "(Gemini Flash) instead, which makes more mistakes on hard items. "
+                                           "Fix: ANTHROPIC_API_KEY in .env")
+
+
 def load_state(run_dir: Path) -> dict:
     """Return progress from earlier calls, or a fresh state."""
     f = run_dir / "state.json"
@@ -420,7 +445,12 @@ def main():
     p.add_argument("--max-batches", type=int, default=0, help=H)
     p.add_argument("--parallel", type=int, default=1, help=H)
     p.add_argument("--bench", default=None, help=H)
-    # M3 runs on OpenAI Sol by default (a different model family from the Gemini generator).
+    # M2 writer. Claude Sonnet by default: in a 20-item test of hard / misleading SQL items it wrote the most
+    # correct answers (19/20 vs Gemini Flash 14/19, Gemini Pro 9/20; docs/decisions.md Decision 2b).
+    # "default" = the shared finetune backend ($FINETUNE_LLM_BACKEND, Gemini Flash unless set).
+    p.add_argument("--gen-backend", default=os.environ.get("DATAGEN_GEN_BACKEND") or "anthropic", help=H)
+    p.add_argument("--gen-model", default=os.environ.get("DATAGEN_GEN_MODEL") or None, help=H)
+    # M3 runs on OpenAI Sol by default (a different model family from the writer).
     # "same" = verify with the M2 backend (old behaviour, no OpenAI key needed).
     p.add_argument("--verify-backend", default=os.environ.get("DATAGEN_VERIFY_BACKEND") or "openai", help=H)
     # Default is JSON: core/skill_executor.py json.loads() stdout, and the agent never passes --format.
@@ -579,7 +609,10 @@ def run(a) -> dict:
         save_state(run_dir, state)
         log(f"[M4] {shortfall} rows overlapped the benchmark; generating replacements")
 
-    llm = get_llm_client("DataGen")
+    llm, gen_warning = gen_client(getattr(a, "gen_backend", None), getattr(a, "gen_model", None))
+    if gen_warning:
+        log(f"[warning] {gen_warning}")
+    state["generator"] = {"backend": getattr(llm, "backend", None), "model": model_name(llm)}
     if a.spec:
         spec = load_spec(a.spec)
         if a.n_examples:
@@ -600,6 +633,7 @@ def run(a) -> dict:
             verify_warning = (f"M3 verifier '{a.verify_backend}' unavailable ({e}); verified with the M2 model instead "
                               "(same family, less strict). Fix: OPENAI_API_KEY in .env + pip install openai")
             log(f"[warning] {verify_warning}")
+    state["verifier"] = {"backend": getattr(llm_v, "backend", None), "model": model_name(llm_v)}
     for k in ("rejected", "unverified"):
         state.setdefault(k, 0)
     timing = state.setdefault("timing", {"per_ex": PER_EX_INIT, "rounds": 0})
@@ -704,8 +738,7 @@ def run(a) -> dict:
             state["done"] = True
     save_state(run_dir, state)
     warnings = [NO_BENCH_WARNING] if fmt and fmt.get("bench") is None and (a.bench or "").lower() != "none" else []
-    if verify_warning:
-        warnings.append(verify_warning)
+    warnings += [w for w in (gen_warning, verify_warning) if w]
     return build_result(a.run_id, state, target, fmt, run_dir,
                         {"batches_this_call": batches, "stop_reason": stop_reason if not state["done"] else "done",
                          "sec_per_example": timing["per_ex"], "parallel": parallel, "warnings": warnings})

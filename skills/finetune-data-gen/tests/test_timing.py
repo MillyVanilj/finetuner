@@ -6,6 +6,7 @@ import contextlib, io, json, os, re, sys, tempfile, threading, time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 os.environ.setdefault("DATAGEN_VERIFY_BACKEND", "same")   # offline: M3 uses the fake M2 client, not OpenAI Sol
+os.environ["DATAGEN_GEN_BACKEND"] = "default"              # offline: M2 uses the patched get_llm_client fake
 import gen_data
 from gen_data import call_llm, call_json_list, plan_batch, update_per_ex, est_round
 

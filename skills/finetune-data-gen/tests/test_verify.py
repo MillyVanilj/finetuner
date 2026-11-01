@@ -123,6 +123,7 @@ class E2E(Fake):
             time.sleep(0.05)                                 # so each call fits exactly one batch
         return super().call(prompt, max_tokens, temperature)
 fake = E2E(judge=judge_e2e)
+os.environ["DATAGEN_GEN_BACKEND"] = "default"   # use the patched get_llm_client fake, never a real writer API
 gen_data.get_llm_client = lambda name: fake
 spec_path = Path(gen_data.RUNS_DIR) / "spec.json"
 spec_path.write_text(json.dumps(dict(SPEC, n_examples=25)))
