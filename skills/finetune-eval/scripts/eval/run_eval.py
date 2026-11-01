@@ -65,10 +65,11 @@ def parse_args():
     p.add_argument("--split", choices=["dev", "heldout"], default="dev")
     p.add_argument("--out-dir", help="default: <run dir>/eval_<split>")
     p.add_argument("--model", help="base model; default: the one in the run's metrics.json")
-    # Judge = OpenAI Sol: a different family from the Claude-written benchmark and the Claude teacher, so
-    # Claude never grades Claude. A "claude-*" name switches the judge back to Claude. docs/decisions.md Decision 3.
+    # Judge = Claude Sonnet: a different family from the training-data writer (OpenAI Sol), so the judge can't favour
+    # the tuned model for having learned its own style. A "gpt-*" name switches to OpenAI. docs/decisions.md 2b/3.
+    # Runnable answers (SQL) are graded by execution and never reach the judge.
     p.add_argument("--judge-model", "--claude-model", dest="judge_model",
-                   default=os.environ.get("FINETUNE_JUDGE_MODEL") or "gpt-6.1-sol",
+                   default=os.environ.get("FINETUNE_JUDGE_MODEL") or "claude-sonnet-5-5",
                    help="judge (M7); $FINETUNE_JUDGE_MODEL; OpenAI unless the name starts with claude")
     p.add_argument("--teacher-model", default=os.environ.get("FINETUNE_TEACHER_MODEL") or "claude-sonnet-5-5",
                    help="teacher system (M7 ceiling); $FINETUNE_TEACHER_MODEL")

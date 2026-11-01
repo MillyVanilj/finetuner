@@ -92,10 +92,15 @@ Settings (in `.env`): `DATAGEN_GEN_BACKEND` (`openai` default · `anthropic` · 
 `DATAGEN_GEN_MODEL` (e.g. `gpt-6.1-terra`, `claude-sonnet-5-5`), `DATAGEN_VERIFY_BACKEND` (`anthropic` default · `openai`
 · `same`). DataGen warns if writer and checker are the same family. `state.json` records `generator` and `verifier`.
 
-**Open risk: the M7 judge is also Sol.** For items graded by the judge (not by execution), Sol may favour the tuned
-model's answers because it learned from Sol-written data, which would inflate the tuned-vs-base gain. SQL is graded by
-running the queries, so it is not affected. For judge-graded tasks, consider moving the judge to another family
-(`$FINETUNE_JUDGE_MODEL`, e.g. a `claude-*` model, keeping in mind Opus wrote those benchmark items).
+**The M7 judge moves from Sol to Claude Sonnet** (team decision, Nov 1). With Sol writing the training data, a Sol
+judge could favour the tuned model's answers for sounding like its training data and inflate the tuned-vs-base gain.
+Sonnet is a different family from the data writer. What remains, and why it is acceptable:
+- Sonnet judges items Claude Opus wrote. Self-preference applies to the *answers* being graded, and none of the
+  systems compared (base, few-shot, tuned) is Claude, so it doesn't tilt the tuned-vs-base comparison.
+- The teacher is also Sonnet, so its score (only the ceiling bar, never part of the decision) may be a bit generous.
+- Runnable answers (SQL) are graded by execution and never reach the judge.
+Existing pipelines keep the judge in their own `task_spec.json` (`models.judge`), so a running pipeline does not
+switch judges mid-way (that would re-judge everything and break loop-to-loop comparisons).
 
 ## Decision 3: different model families per role
 
@@ -105,7 +110,7 @@ Same-family models favour their own outputs (self-preference bias), so:
 |---|---|
 | M2 generate training data | OpenAI Sol (`gpt-6.1-sol`) since Nov 1 (Decision 2b); was Gemini Flash |
 | M3 verify training data | Claude Sonnet (`claude-sonnet-5-5`) since Nov 1 (Decision 2b); was Sol |
-| M7 judge | OpenAI Sol (`gpt-6.1-sol`); see the open risk in Decision 2b |
+| M7 judge | Claude Sonnet (`claude-sonnet-5-5`) since Nov 1 (Decision 2b); was Sol |
 | M1 spec parsing, M7 teacher | Claude Sonnet (`claude-sonnet-5-5`) |
 | M5/M6 write + check benchmark | Claude Opus (`claude-opus-5-5`), changed from OpenAI on Nov 1, see below |
 | Student (being trained) | Qwen |
@@ -116,7 +121,7 @@ Same-family models favour their own outputs (self-preference bias), so:
 
 *Update Nov 1 (credits):* Opus is used **only** for BenchGen (M5 write, M6 check). Everything else that called Opus now defaults to Sonnet: the M7 judge and teacher (`$FINETUNE_JUDGE_MODEL`, `$FINETUNE_TEACHER_MODEL`), M1 (`$FTC_M1_MODEL`) and DataGen M3 with `--verify-backend anthropic` (`$FINETUNE_ANTHROPIC_MODEL`). The judge was the big one: it runs per judged item, per system, per loop.
 
-*Update Nov 1 (Sol):* the team moved **M3 verification and the M7 judge to OpenAI Sol** (`gpt-6.1-sol`). This gives one family per job: Gemini writes training data, Sol checks it; Claude Opus writes the benchmark, Sol grades answers on it. So no model checks its own family's work, which also removes the "Claude grades Claude-written items" caveat above. DataGen's `--verify-backend` now defaults to `openai` (`$DATAGEN_VERIFY_BACKEND`; `same` = old behaviour), and the judge defaults to `gpt-6.1-sol` (`$FINETUNE_JUDGE_MODEL`; a `claude-*` name switches back to Claude). Sol model ID for DataGen: `$FINETUNE_OPENAI_MODEL`. Needs `OPENAI_API_KEY` in `.env`. The teacher stays Claude Sonnet.
+*Update Nov 1 (Sol), superseded later on Nov 1 by Decision 2b (Sol writes data; Sonnet checks it and judges):* the team moved **M3 verification and the M7 judge to OpenAI Sol** (`gpt-6.1-sol`). This gives one family per job: Gemini writes training data, Sol checks it; Claude Opus writes the benchmark, Sol grades answers on it. So no model checks its own family's work, which also removes the "Claude grades Claude-written items" caveat above. DataGen's `--verify-backend` now defaults to `openai` (`$DATAGEN_VERIFY_BACKEND`; `same` = old behaviour), and the judge defaults to `gpt-6.1-sol` (`$FINETUNE_JUDGE_MODEL`; a `claude-*` name switches back to Claude). Sol model ID for DataGen: `$FINETUNE_OPENAI_MODEL`. Needs `OPENAI_API_KEY` in `.env`. The teacher stays Claude Sonnet.
 
 ## Decision 4: always include real data where possible
 

@@ -52,10 +52,10 @@ DEFAULTS = {
                 "max_general_drop": 0.03},
     "budget": {"max_api_usd": 20.0, "max_gpu_hours": 2.0},
     "models": {"student": "Qwen/Qwen3-4B-Instruct-2507",
-               "generator": "gemini-3.6-flash",
-               "verifier": "gpt-6.1-sol",            # DataGen M3 (OpenAI Sol, docs/decisions.md Decision 3)
+               "generator": "gpt-6.1-sol",          # DataGen M2 writer (OpenAI Sol, docs/decisions.md Decision 2b)
+               "verifier": "claude-sonnet-5-5",     # DataGen M3 checker (Claude Sonnet: not the writer's family)
                "bench_writer": "claude-opus-5-5",   # BenchGen's model (team choice Nov 1, docs/decisions.md Decision 3)
-               "judge": "gpt-6.1-sol"},             # finetune-eval M7 judge (OpenAI Sol)
+               "judge": "claude-sonnet-5-5"},       # finetune-eval M7 judge (Claude Sonnet: not the data writer's family)
     "training": {},                # optional LoRA overrides for the first run: rank, alpha, lr, epochs ...
 }
 

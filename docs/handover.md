@@ -51,7 +51,7 @@ looks different, trust the repo and **update this file** (whoever merges or open
 - GPU: NVIDIA Brev instance (shared Linux box, repo at `~/finetuner`). `bash scripts/setup_brev.sh` once,
   `bash scripts/install.sh` after every `git pull`. Stop the instance when idle.
 - Keys live in `~/finetuner/.env` (gitignored; template `.env.example`): `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`,
-  `OPENAI_API_KEY` (needed since #11: Sol verifies data and judges), HF token.
+  `OPENAI_API_KEY` (needed: Sol writes the training data), HF token.
 
 ## 3. Pipeline and code map
 
@@ -78,7 +78,7 @@ output keys must only match the intended next skill's `--flags` (`tests/test_han
 | M2 generate training data | **OpenAI Sol** (`gpt-6.1-sol`) since Nov 1, was Gemini Flash (decisions.md 2b) | `DATAGEN_GEN_BACKEND`, `DATAGEN_GEN_MODEL` |
 | M3 verify training data | **Claude Sonnet** (`claude-sonnet-5-5`) since Nov 1, was Sol | `DATAGEN_VERIFY_BACKEND` (`same` = the writer), `FINETUNE_ANTHROPIC_MODEL` |
 | M5/M6 write + check benchmark | Claude Opus (`claude-opus-5-5`) | `BENCHGEN_MODEL` |
-| M7 judge | **OpenAI Sol** | `FINETUNE_JUDGE_MODEL`, spec `models.judge` (`gpt-*` or `claude-*`) |
+| M7 judge | **Claude Sonnet** (`claude-sonnet-5-5`) since Nov 1, was Sol (decisions.md 2b) | `FINETUNE_JUDGE_MODEL`, spec `models.judge` (`gpt-*` or `claude-*`) |
 | M7 teacher (ceiling), M1 spec | Claude Sonnet (`claude-sonnet-5-5`) | `FINETUNE_TEACHER_MODEL`, `FTC_M1_MODEL` |
 | Student | `Qwen/Qwen3-4B-Instruct-2507` | spec `models.student` |
 
@@ -216,7 +216,8 @@ clamped, reasons saved in `run.json`). For other GPU work check yourself: GPU id
 - **Closed feedback loop between agents.** The Evaluator posts either a retrain config (TrainAgent picks it
   up) or "more data on weak categories" (DataAgent picks it up). The system improves itself loop by loop.
 - **Checks and balances between model families.** Sol writes data, Claude Sonnet audits it; Opus writes the exam,
-  Sol grades it; BenchAgent never sees the training data. No agent grades its own work. The decision rule
+  Claude Sonnet grades answers (runnable ones are executed instead); BenchAgent never sees the training data.
+  The judge is never the data writer's family. The decision rule
   ("tuned must beat base few-shot") compares two non-Claude systems.
 - **Parallel work.** DataAgent and BenchAgent work on the same spec at the same time.
 - **Full provenance.** Every artifact carries its parents and a content hash: the final adapter traces back
