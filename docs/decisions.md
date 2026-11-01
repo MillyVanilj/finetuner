@@ -62,13 +62,15 @@ Same-family models favour their own outputs (self-preference bias), so:
 | Role | Model family |
 |---|---|
 | M2 generate training data | Gemini (Flash) |
-| M3 verify training data, M7 judge | Claude |
+| M1 spec parsing, M3 verify training data, M7 judge + teacher | Claude Sonnet (`claude-sonnet-5-5`) |
 | M5/M6 write + check benchmark | Claude Opus (`claude-opus-5-5`), changed from OpenAI on Nov 1, see below |
 | Student (being trained) | Qwen |
 
 (This updates the review doc, which originally had Claude as the generator. Gemini's free high-volume key changed that.)
 
 *Update Nov 1:* the team chose **Claude Opus** for the benchmark (BenchGen, `skills/finetune-bench-gen`). Caveat: the Evaluator's judge and teacher are also Claude, so Claude may grade Claude-written items generously. Mitigations in place: an independent solve (M6a) checks every answer key, the benchmark is frozen, and the decision rule is "tuned must beat base few-shot", which compares two non-Claude systems on the same items.
+
+*Update Nov 1 (credits):* Opus is used **only** for BenchGen (M5 write, M6 check). Everything else that called Opus now defaults to Sonnet: the M7 judge and teacher (`$FINETUNE_JUDGE_MODEL`, `$FINETUNE_TEACHER_MODEL`), M1 (`$FTC_M1_MODEL`) and DataGen M3 with `--verify-backend anthropic` (`$FINETUNE_ANTHROPIC_MODEL`). The judge was the big one: it runs per judged item, per system, per loop.
 
 ## Decision 4: always include real data where possible
 

@@ -61,7 +61,12 @@ def parse_args():
     p.add_argument("--split", choices=["dev", "heldout"], default="dev")
     p.add_argument("--out-dir", help="default: <run dir>/eval_<split>")
     p.add_argument("--model", help="base model; default: the one in the run's metrics.json")
-    p.add_argument("--claude-model", default="claude-opus-5-5", help="judge and teacher")
+    # Sonnet, not Opus: the judge runs once per item per system per loop, so it is the biggest Claude cost.
+    # BenchGen alone stays on Opus (writing + checking the benchmark). See docs/decisions.md Decision 3.
+    p.add_argument("--claude-model", default=os.environ.get("FINETUNE_JUDGE_MODEL") or "claude-sonnet-5-5",
+                   help="judge (M7); $FINETUNE_JUDGE_MODEL")
+    p.add_argument("--teacher-model", default=os.environ.get("FINETUNE_TEACHER_MODEL") or "claude-sonnet-5-5",
+                   help="teacher system (M7 ceiling); $FINETUNE_TEACHER_MODEL")
     p.add_argument("--few-shot", type=int, default=3)
     p.add_argument("--max-new-tokens", type=int, default=512)
     p.add_argument("--batch-size", type=int, default=16)
@@ -251,7 +256,7 @@ def main():
         if not a.skip_teacher:
             status(state="running", stage="M7 teacher (Claude)")
             outputs["teacher"] = list(pool.map(
-                lambda m: cache.get(["teacher", a.claude_model, m], lambda: claude(client, a.claude_model, m, "medium") or ""),
+                lambda m: cache.get(["teacher", a.teacher_model, m], lambda: claude(client, a.teacher_model, m, "medium") or ""),
                 prompts))
 
         def judge(item, output):
@@ -278,6 +283,7 @@ def main():
             "bench_sha256": hashlib.sha256(bench_file.read_bytes()).hexdigest(),
             "n_items": len(items),
             "judge_model": a.claude_model,
+            "teacher_model": None if a.skip_teacher else a.teacher_model,
             "few_shot_k": a.few_shot if shots else 0,
             "task": {name: summarize(items, s) for name, s in scored.items()},
             "gain_vs_base_few_shot": gain(scored["tuned"], scored["base_few_shot"]) if shots else None,

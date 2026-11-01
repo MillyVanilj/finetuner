@@ -74,7 +74,9 @@ class AnthropicClient:
         if not key:
             raise ValueError("ANTHROPIC_API_KEY not set")
         self.agent_name = agent_name
-        self.anthropic_model = model or os.environ.get("ANTHROPIC_MODEL") or "claude-opus-5-5"
+        # Sonnet by default (DataGen M3 --verify-backend anthropic). Not $ANTHROPIC_MODEL: ScienceClaw may set
+        # that to Opus for itself. BenchGen passes its own model (Opus) and is unaffected.
+        self.anthropic_model = model or os.environ.get("FINETUNE_ANTHROPIC_MODEL") or "claude-sonnet-5-5"
         self._client = anthropic.Anthropic(api_key=key, max_retries=2)
 
     def call(self, prompt: str, max_tokens: int = 1000, temperature: float = None, **_ignored) -> str:
