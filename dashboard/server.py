@@ -223,6 +223,15 @@ class Handler(BaseHTTPRequestHandler):
                 pl = Pipeline.create(spec)
                 return self._json({"pipeline_id": pl.id, "dir": str(pl.dir), "warnings": warnings,
                                    "commands": next_commands(pl.dir, spec)})
+            if u.path.startswith("/api/pipelines/") and u.path.endswith("/bench/retry"):
+                # BenchGen's documented reset: remove bench/worker.json. Renamed, not deleted, so it can be inspected.
+                d = pipeline_dir(u.path.split("/")[3])
+                w = d / "bench" / "worker.json"
+                if not w.exists():
+                    return self._json({"ok": False, "error": "no bench/worker.json: nothing to reset"})
+                w.rename(d / "bench" / f"worker.json.failed-{time.strftime('%H%M%S')}")
+                Pipeline(d).emit("bench", "log", "BenchGen reset from the dashboard (worker.json set aside); press Start to retry", loop=0)
+                return self._json({"ok": True})
             if u.path.startswith("/api/pipelines/") and u.path.endswith(("/start", "/stop")):
                 pid_, action = u.path.split("/")[3], u.path.rsplit("/", 1)[1]
                 d = pipeline_dir(pid_)

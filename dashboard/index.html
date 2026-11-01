@@ -153,6 +153,7 @@ ul.plain { margin: 4px 0; padding-left: 18px; }
 .ev { display: grid; grid-template-columns: 54px 1fr; gap: 8px; padding: 6px; border-radius: 6px; font-size: 12.5px; }
 .ev:first-child { animation: fadein .5s; }
 .ev .ts { color: var(--muted); font-variant-numeric: tabular-nums; }
+.ev > span:last-child, .callout { overflow-wrap: anywhere; }
 .ev .st { font-weight: 600; text-transform: uppercase; font-size: 10.5px; letter-spacing: .04em; color: var(--ink-2); margin-right: 4px; }
 .ev.failed .st { color: var(--critical); }
 .ev.decision { background: var(--surface-2); }
@@ -529,7 +530,8 @@ function nodeSummary(k) {
 // ---------------- render ----------------
 function render() {
   if (!S) return;
-  if (!USER_SEL) SEL = S.active_stages.find(s => s !== "spec") || (S.final ? "output" : lastDoneStage());
+  if (!USER_SEL) SEL = STAGES.map(s => s.key).find(k => S.stages[k].status === "failed")
+    || S.active_stages.find(s => s !== "spec") || (S.final ? "output" : lastDoneStage());
   $("title").textContent = S.title || S.pipeline_id;
   $("status").innerHTML = badge(S.status === "idle" ? "pending" : S.status).replace("Waiting", "Idle");
   $("task").textContent = S.spec.task || "";
@@ -687,7 +689,13 @@ function pData() {
 
 function pBench() {
   const b = S.bench, p = b.progress || {}, sp = b.splits || {}, rep = b.report;
-  let html = `<div class="tiles">
+  const failed = S.stages.bench.status === "failed", logLines = b.worker_log_tail || [];
+  // When BenchGen fails, show WHY (its own log) and a one-click reset, right at the top
+  let html = failed ? `<div class="callout warn" style="margin-bottom:12px"><b>BenchGen failed:</b> ${esc(S.stages.bench.msg)}
+      <div style="margin-top:8px;display:flex;gap:8px;align-items:center">${b.worker ? `<button class="btn" id="benchRetry">Reset BenchGen</button>` : ""}
+      <span class="muted" style="font-size:12px">Read the log below, fix the cause (often a missing API key or package), reset, then press ▶ Restart pipeline.</span></div></div>` : "";
+  if (logLines.length) html += `<details ${failed ? "open" : ""} style="margin-bottom:12px"><summary class="muted">BenchGen background job log (last ${logLines.length} lines)</summary><pre class="cmd" style="max-height:320px;font-size:11px">${esc(logLines.join("\n"))}</pre></details>`;
+  html += `<div class="tiles">
     <div class="tile"><div class="v">${fmtNum(p.done)}<small> / ${fmtNum(p.total)}</small></div><div class="l">items written + checked</div><div class="bar ${p.state === "done" ? "done" : ""}"><i style="width:${p.total ? p.done / p.total * 100 : 0}%"></i></div></div>
     <div class="tile"><div class="v">${fmtNum(p.metrics?.rejected ?? rep?.n_rejected)}</div><div class="l">rejected by M6</div></div>
     <div class="tile"><div class="v">${p.metrics?.two_model_agreement != null ? fmtPct(p.metrics.two_model_agreement) : "–"}</div><div class="l">answer-key agreement</div></div>
@@ -696,6 +704,9 @@ function pBench() {
   html += `<div class="two"><div><h4>Dev items per category</h4><div id="bCat"></div></div><div><h4>Held-out items by source</h4><div id="bSrc"></div><p class="muted" style="font-size:12px">Real items (user examples, PubMed, HF datasets) keep the final score honest: they are not written by the same kind of model as the training data.</p></div></div>
     <div class="sec"><h4>Sample dev items</h4><div id="bSample" class="muted">${sp.dev ? "Loading…" : "Available when the benchmark is ready."}</div></div>`;
   return {html, after: () => {
+    $("benchRetry")?.addEventListener("click", async () => {
+      const r = await fetch(`/api/pipelines/${encodeURIComponent(PID)}/bench/retry`, {method: "POST"}).then(r => r.json());
+      alert(r.ok ? "BenchGen reset. Fix the cause in the log first, then press ▶ Restart pipeline." : r.error); });
     hbars($("bCat"), Object.entries(sp.dev?.by_category || {}).map(([k, v]) => ({label: k, values: [{name: "items", color: "--s1", v}]})), {aria: "Dev items per category", empty: "–"});
     hbars($("bSrc"), Object.entries(sp.heldout?.by_source || {}).map(([k, v]) => ({label: k, values: [{name: "items", color: "--s1", v}]})), {aria: "Held-out items by source", empty: "–"});
     if (sp.dev) fetch(`/api/file?p=${encodeURIComponent(PID)}&path=bench/dev.jsonl&n=4`).then(r => r.json()).then(r => { const el = $("bSample"); if (!el || !r.lines) return;
