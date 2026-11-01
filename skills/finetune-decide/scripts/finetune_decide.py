@@ -311,7 +311,11 @@ def main():
         loop = len(history) + 1
     report["loop"] = loop
 
-    if split != "dev":   # the held-out report is scored once, at the end: it is the final word
+    if split == "probe":   # weak-spot probe set: report only, it never steers the loop
+        d = {"action": "stop", "rule": "probe set (report only)",
+             "reason": f"Probe tuned score {report['systems']['tuned']['score']:.2f}; the probe set is reported, never acted on"}
+        best = report
+    elif split != "dev":   # the held-out report is scored once, at the end: it is the final word
         d = {"action": "stop", "rule": "final held-out eval",
              "reason": f"Held-out tuned score {report['systems']['tuned']['score']:.2f}; the held-out split is scored once, at the end"}
         best = report

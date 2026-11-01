@@ -15,6 +15,7 @@ Hackathon ends Sunday night. Favor working demos over perfect code. Keep things 
 | M1 + task spec | `ftc/m1.py`, `ftc/spec.py` | user goal → `task_spec.json` |
 | L1 data (M2–M4) | `skills/finetune-data-gen` | spec → `train_path` |
 | L2 benchmark (M5–M6) | `skills/finetune-bench-gen` | `spec` → `bench_dir` (dev / held-out) |
+| Probe set (weak spots) | `skills/finetune-bench-gen/lib/probe_gen.py`, run by `run_pipeline.py` | loop 1 eval report → `bench/probe.jsonl`; original vs final model scored on it at the end (report only, never steers the loop) |
 | Trainer | `skills/finetune-submit`, `skills/finetune-status` | `train_path` (+ `retrain_config_path`) → `train_job_id` → `adapter_path` |
 | L3 eval (M7–M9) | `skills/finetune-eval` | `adapter_path` + `bench_dir` → `eval_report_path` |
 | Iterate? (Evaluator) | `skills/finetune-decide` | `eval_report_path` → `retrain_config_path` + `train_path` · `data_feedback_path` · stop (`best_adapter_path`) |

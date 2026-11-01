@@ -333,6 +333,21 @@ def find_heldout(pdir):
     return None, {}
 
 
+def find_probe(pdir):
+    """Weak-spot probe set (report only): latest loops/<n>/eval/probe_report.json + bench/probe_meta.json,
+    or None if the probe set was never scored. The original model vs the final adapter on new questions."""
+    for n in sorted((int(p.name) for p in (pdir / "loops").glob("*") if p.name.isdigit()), reverse=True):
+        r = _read_json(pdir / "loops" / str(n) / "eval" / "probe_report.json")
+        if r:
+            m = _read_json(pdir / "bench" / "probe_meta.json", {}) or {}
+            items = _read_jsonl(pdir / "bench" / "probe.jsonl")
+            cats = m.get("categories") or sorted({i.get("category") for i in items if i.get("category")})
+            return {"n_items": m.get("n_items") or len(items) or r.get("n_items"), "categories": cats,
+                    "from_loop": m.get("from_loop"), "systems": r.get("systems"),
+                    "by_category": r.get("by_category"), "gain_vs_base_few_shot": r.get("gain_vs_base_few_shot")}
+    return None
+
+
 def build_final(pipeline_dir, best_loop=None, best_job=None, best_adapter=None, extra=None) -> dict:
     """Build and write final/final_report.json, heldout_answers.jsonl, model_card.md and infinite_post.json.
     Arguments default to what's on disk (the held-out report, an earlier final report, the stop decision),
@@ -404,6 +419,7 @@ def build_final(pipeline_dir, best_loop=None, best_job=None, best_adapter=None, 
         "general": general, "general_from": general_from if general else None,
         "examples": pick_examples(rows, base, thr) if outputs else [],
         "dev_history": history,
+        "probe": find_probe(pdir),
         "made_with": made_with(pdir, spec, best_job, raw, len(history), meta),
         "cost": cost(pdir, meta),
         # publishing results survive a rebuild (ftc/publish.py fills them)

@@ -241,6 +241,7 @@ No LLM writes any of it: every sentence is a template filled with the numbers, s
  "examples": [{"kind": "fixed|still_fails|broke", "id", "category", "source", "source_ref", "question", "reference",
                "answers": {"base_fewshot": {"output", "score", "format_ok", "judge_reason"}, "tuned": {...}, "teacher": {...}}}],
  "dev_history": [{"loop", "tuned", "base_fewshot", "train_job_id", "action", "rule", "reason"}],
+ "probe": null,                                  // or {n_items, categories, from_loop, systems, by_category, gain_vs_base_few_shot}
  "made_with": {"student", "training_config", "train_examples", "dataset_sha256", "data": {"verified", "rejected", "reject_rate",
                "contaminated_removed", "duplicates_removed"}, "models": {...}, "benchmark": {"n_dev", "n_heldout", "bench_sha256",
                "few_shot_k"}, "loops", "train_metrics"},
@@ -250,6 +251,9 @@ No LLM writes any of it: every sentence is a template filled with the numbers, s
  "assumptions": [...],                           // spec.m1.assumptions: values the user skipped (also in the card)
  "simulated": false, "model_card_path": ".../final/model_card.md", "created_at", "updated_at"}
 ```
+- `probe`: the weak-spot probe set (`bench/probe.jsonl` + `probe_meta.json`, written after loop 1 for its failing
+  categories; report only, the Evaluator never reads it) scored with the original model and the final adapter
+  (`loops/<n>/eval/probe_report.json`). `null` if it was off (`FTC_PROBE=0`), skipped or not scored.
 - **Outside a pipeline folder** (`finetune-report` on a run with no `pipeline_dir`): `ftc.report.write_final` writes
   the same format to `<run dir>/final/`, without examples, outcome counts or cost (no benchmark or loop files to read).
 - **Examples are picked by fixed rules, not by hand:** up to 4 items fine-tuning *fixed* (baseline wrong, tuned right),
