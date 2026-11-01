@@ -1,0 +1,59 @@
+---
+name: finetune-eval
+description: Evaluate a LoRA fine-tuned model against its base model (task benchmark, general ability, safety) and write an eval report
+metadata:
+---
+
+# Fine-tune Evaluator (wireframe L3: M7–M9)
+
+Scores a LoRA adapter from `train_sft.py` against its base model. The job takes minutes, so the first call starts it in the background, and later calls report `running` until it finishes, then return the report. It exits 1 until the report is ready, so ScienceClaw retries on the next cycle.
+
+## Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `--adapter-path` | `adapter/` dir from `train_sft.py` (its `metrics.json` next to it gives the base model and training data) | Required |
+| `--bench-dir` | Benchmark folder from L2: `dev.jsonl`, `heldout.jsonl`, optional `safety.jsonl` | Required |
+| `--split` | `dev` every loop, `heldout` once at the end | dev |
+| `--skip-general` | Skip M8 (lm-eval) for faster loops | off |
+| `--format` | `json` or `summary` | json |
+
+Needs `ANTHROPIC_API_KEY` in the environment (Claude judges free-text items and safety items and plays the teacher) and the training venv at `$FINETUNER_DIR/.venv-train` (default `~/finetuner`).
+
+## Benchmark item format (what L2 must write)
+
+One JSON object per line:
+
+```json
+{"id": "d-001", "messages": [{"role": "user", "content": "..."}], "reference": "...",
+ "scoring": "json", "category": "methods-extraction", "source": "real"}
+```
+
+- `scoring`: `exact` (normalized string match), `json` (output must parse; score = field-level F1 against `reference`, which is an object or a JSON string) or `judge` (default: Claude grades pass/fail against `reference`).
+- `category`: a coverage-axis cell. The report breaks scores down by it, so the Evaluator can send failing categories (never items) back to L1.
+- `source`: `real` or `synthetic`. The report scores each separately.
+- `safety.jsonl` (M9): same format with `judge` scoring. `reference` describes the expected behaviour, e.g. "should decline" or "should answer normally" (to catch over-refusal). Use `category` values `should_refuse` / `should_help`. If the file is missing, M9 is skipped and the report says so.
+
+## What it measures
+
+- **M7 task:** four systems on the split: `base_zero_shot`, `base_few_shot` (3 training examples as prior turns: **tuning must beat this**), `teacher` (Claude, the ceiling) and `tuned`. Each gets a mean with a bootstrap 95% CI, the format-failure rate, and breakdowns by category and source. `gain_vs_base_few_shot` is a paired CI: if it includes 0, the gain may be noise.
+- **M8 general:** lm-eval MMLU (5/subtask ≈ 285 questions), GSM8K and IFEval (250 each), base vs tuned. `general.max_drop_points` > 3 means forgetting.
+- **M9 safety:** pass rate on `safety.jsonl`, base vs tuned.
+
+Base-model outputs and scores, teacher answers and judge verdicts are cached in `<bench-dir>/.eval_cache/`, so each loop pays only for the tuned model.
+
+## Output
+
+`<run dir>/eval_<split>/`: `report.json` (everything above, plus train loss from `metrics.json`), `outputs.jsonl` (every answer with its score), `status.json`, `eval.log`. On success the skill prints `eval_report_path` plus headline numbers. A failed job is not restarted automatically: fix the cause, delete the folder, and call again.
+
+## Examples
+
+```bash
+python3 {baseDir}/scripts/finetune_eval.py --adapter-path ~/runs/r001/adapter --bench-dir ~/bench/pubmed-json
+```
+
+Run the GPU job directly (foreground, more flags: `--help`):
+
+```bash
+~/finetuner/.venv-train/bin/python {baseDir}/scripts/eval/run_eval.py --adapter-path ~/runs/r001/adapter --bench-dir ~/bench/pubmed-json --skip-general
+```
