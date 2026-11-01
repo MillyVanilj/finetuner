@@ -1,39 +1,27 @@
 # CLAUDE.md — Project context
 
-> **Read first:** `docs/decisions.md` (current plan, model choices and reasoning, compute) and `docs/wireframe_v0.2_review.md` (wireframe critique + ScienceClaw internals). The current plan follows wireframe v0.2 (LLM fine-tuning with generated data, Qwen3-4B on Brev). Where the protein/ESM examples below disagree with `docs/decisions.md`, the decisions doc wins.
+> **Read first:** `docs/wireframe_v0.2.md` (the design, and which code implements each box), `docs/decisions.md` (model choices and reasoning, compute) and `docs/spec_and_io.md` (the task spec and every hand-off file format). ScienceClaw internals and the wireframe critique: `docs/wireframe_v0.2_review.md`.
 
 ## What we're doing
 
-We are a team of 3 at the ScienceClaw hackathon (MIT, Oct 31 – Nov 1, 2026). We're using the ScienceClaw multi-agent framework to automate the model fine-tuning process: a team of agents that takes a goal (e.g. "make a small model better at predicting protein properties"), then finds data, prepares it, fine-tunes a model, evaluates it, and reports results — with minimal human work.
+We are a team of 3 at the ScienceClaw hackathon (MIT, Oct 31 – Nov 1, 2026). We're using the ScienceClaw multi-agent framework to automate fine-tuning: a user states a goal ("answer chemistry questions in `ANSWER:/WHY:` form"), and agents write a task spec, generate and verify training data, build a benchmark, LoRA fine-tune Qwen3-4B on a Brev GPU, evaluate tuned vs base, decide whether to iterate, and publish the result, with minimal human work.
 
 Hackathon ends Sunday night. Favor working demos over perfect code. Keep things simple.
 
-## Project plan (suggested — adjust as we go)
+## The pipeline (wireframe v0.2)
 
-Split the pipeline into specialist agents that hand work to each other through artifacts:
+| Stage | Code | Takes → gives (reactor keys) |
+|---|---|---|
+| M1 + task spec | `ftc/m1.py`, `ftc/spec.py` | user goal → `task_spec.json` |
+| L1 data (M2–M4) | `skills/finetune-data-gen` | spec → `train_path` |
+| L2 benchmark (M5–M6) | not built | spec → `bench_dir` (dev / held-out) |
+| Trainer | `skills/finetune-submit`, `skills/finetune-status` | `train_path` (+ `retrain_config_path`) → `train_job_id` → `adapter_path` |
+| L3 eval (M7–M9) | `skills/finetune-eval` | `adapter_path` + `bench_dir` → `eval_report_path` |
+| Iterate? (Evaluator) | `skills/finetune-decide` | `eval_report_path` → `retrain_config_path` + `train_path` · `data_feedback_path` · stop (`best_adapter_path`) |
+| Output | not built | best adapter → HF Hub, model card, Infinite post |
+| Live view | `dashboard/`, `ftc/pipeline.py`, `scripts/simulate_pipeline.py` | reads the pipeline folder |
 
-| Agent | Job | Output artifact |
-|-------|-----|-----------------|
-| DataAgent | Find and download a dataset (Hugging Face, papers, databases) | `dataset` |
-| PrepAgent | Clean, format, and split train/val/test | `prepared_dataset` |
-| TrainAgent | Pick base model + settings, launch the fine-tuning job | `trained_model` |
-| EvalAgent | Score base vs fine-tuned model on the test set | `eval_report` |
-| ReportAgent | Summarize results and post to Infinite | `post` |
-
-Each agent broadcasts what it needs next (e.g. TrainAgent needs `prepared_dataset`), so the ArtifactReactor can chain them. All agents run on the same machine so hand-offs work.
-
-**Start small, then scale:**
-1. MVP: one tiny model (e.g. a small Hugging Face model) + one small dataset, LoRA fine-tune, end-to-end on one GPU. Make this work first.
-2. Then automate choices (base model, learning rate, epochs) and compare runs.
-3. Then add more datasets/models or a hyperparameter search.
-
-**Fine-tuning options (pick the simplest that works):**
-- Brev GPU (L4/A100) + Hugging Face `transformers` / `peft` (LoRA). Default choice.
-- NVIDIA NeMo / BioNeMo for bigger or biology-specific models.
-- Vertex AI serverless Gemini supervised fine-tuning (Google Cloud account) — no GPU management needed.
-- Nebius H100s — shared by everyone; 1 GPU, short jobs only.
-
-Every training run must save: config used, dataset version, metrics, and where the model weights are stored — so results are reproducible and traceable.
+Every training run saves its config, dataset hash, metrics and adapter location (`run.json`, `metrics.json`), so results are reproducible.
 
 ## About ScienceClaw
 
@@ -78,10 +66,15 @@ tail -f ~/.scienceclaw/heartbeat_daemon.log
 Our repo is separate from ScienceClaw (ScienceClaw is installed next to it, not inside it).
 
 ```
-our-project/
-  agents/     # agent profiles we created (copies from ~/.scienceclaw)
-  skills/     # new tools we write
-  scripts/    # helper scripts (e.g. exporting/syncing artifacts)
+finetuner/
+  skills/     # our ScienceClaw skills (finetune-*); scripts/install.sh copies them into ScienceClaw
+  agents/     # agent profiles (<Name>/agent_profile.json), copied to ~/.scienceclaw/profiles (none yet)
+  ftc/        # shared Python: task spec, pipeline folder + event log, M1, dashboard state
+  dashboard/  # live pipeline view (python3 dashboard/server.py)
+  scripts/    # setup_brev.sh, install.sh, train_sft.py (brev-smoke/), simulate_pipeline.py
+  examples/   # example task specs
+  tests/      # offline tests: python3 -m pytest tests/ -q
+  docs/       # design, decisions, formats, progress logs
   results/    # exported artifacts, figures, findings
   NOTES.md    # who is doing what
 ```

@@ -160,9 +160,13 @@ Overwrite it every ~20 items (`Pipeline.progress("eval", ...)` does this):
 ```
 - `action`: `retrain` (writes `retrain_config.json` = finetune-submit's `--retrain-config-path` format:
   `{lr, epochs, rank, …, parent_job_id, reason}`) · `regenerate_data` (writes `data_feedback.json`) · `stop`.
-- The skill's JSON output should include `retrain_config_path` or `data_feedback_path` so the ScienceClaw reactor
-  hands it to the right agent. For `stop`, output neither key.
-- `rule` names the deterministic rule that fired (table in `wireframe_v0.2_review.md` §3). The LLM only writes `reason`.
+- Built: `skills/finetune-decide` (`--eval-report-path`). Its JSON output carries the hand-off keys for the reactor:
+  `retrain` → `retrain_config_path` **and** `train_path` (finetune-submit requires both; same data, new settings) ·
+  `regenerate_data` → `data_feedback_path` · `stop` → neither, but `best_loop` + `best_adapter_path` for the held-out
+  run and the ReportAgent. A `stop` decision.json also has `best_loop` and `best_adapter_path`.
+- `rule` names the deterministic rule that fired (order and thresholds: `skills/finetune-decide/SKILL.md`,
+  reasoning: `docs/evaluator-notes.md`). `reason` is a templated sentence; there is no LLM call.
+- The Evaluator moves the pipeline to loop n+1 (`pipeline.json` → `loop`) unless it stops.
 
 ### 3.7 Final report: `final/final_report.json`
 `{pipeline_id, best_loop, train_job_id, adapter_path, hub_url, infinite_post_url, heldout: {systems, by_source}, dev_history: [{loop, tuned}], model_card_path, created_at}`.
@@ -225,8 +229,15 @@ python3 scripts/simulate_pipeline.py --speed 2          # fake run to watch (or 
 - `#p=<id>&once=1&stage=train&theme=light` in the URL gives a static snapshot (screenshots, slides).
 
 ## 6. Open items for the team
-- BenchGen, Eval, Evaluator and ReportAgent are not built yet; build them against §3.
-- `gen_data.py` and `finetune-submit` don't emit events yet. Until they do, run them with a pipeline and link their
-  folders (`ftc.cli link`), or wrap them in `run_pipeline.py`, which can emit for them.
+- Status per box: `docs/wireframe_v0.2.md`. BenchGen and ReportAgent are not built yet; build them against §3.
+- Eval (`skills/finetune-eval`) is built but doesn't follow §3.3–3.5 yet: it writes `<run dir>/eval_<split>/report.json`
+  with its own shape, `base_zero_shot`/`base_few_shot` names and `general` in points, reads a per-item `scoring` field
+  instead of `spec.scoring`, and writes no `progress.json` or events. The Evaluator reads §3.4 only, so the two
+  don't connect until Eval writes `loops/<n>/eval/eval_report.json`.
+- DataGen doesn't read the Evaluator's `data_feedback_path` yet (no `--data-feedback-path` flag), so the
+  `regenerate_data` loop has no consumer.
+- `gen_data.py` and `finetune-eval` don't emit events yet (`finetune-submit`/`-status` and `finetune-decide` do).
+  Until they do, run them with a pipeline and link their folders (`ftc.cli link`), or wrap them in `run_pipeline.py`
+  (not written yet), which can emit for them.
 - DataGen ignores the v2-only fields (seed examples, coverage topics) today. Using `seed_examples` as few-shot
   examples and `coverage.topics` in the batch rotation is a cheap win.

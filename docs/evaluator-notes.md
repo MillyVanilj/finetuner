@@ -1,6 +1,6 @@
 # Notes for the Evaluator ("Iterate?" decision node)
 
-*For whoever builds the decision step after `skills/finetune-eval` (which measures; this file is about what to do next). Agreed by the team on 2026-10-31. Update here if a rule changes.*
+*The reasoning behind the decision step after `skills/finetune-eval` (which measures; this file is about what to do next). Agreed by the team on 2026-10-31. **Implemented in `skills/finetune-decide`** (rule order in its SKILL.md, thresholds at the bottom of this file). If a rule changes, update this file, the skill and `tests/test_decide.py` together.*
 
 ## LoRA size: when to change the rank
 
@@ -39,3 +39,20 @@ Change **only** the rank: keep alpha=32 and the same learning rate. With alpha f
 | `gain_vs_base_few_shot` CI includes 0 after a change | noise | don't count it as an improvement |
 
 **Stop when:** target met · gain over the previous loop is inside the dev CI · 3 loops · budget spent. Change **one thing per loop**, or you can't tell what helped.
+
+## How the skill reads "high", "low" and "concentrated"
+
+`skills/finetune-decide` turns the table above into fixed numbers (constants at the top of `finetune_decide.py`). Train-loss "start" and "end" are the averages of the first and last 10% of logged steps in the run's `metrics.json`.
+
+| Word above | Number in the skill |
+|---|---|
+| Train loss not falling | fell < 5% from start to end (or any NaN) |
+| Train loss high / flat (underfitting) | fell < 40%, **and** tuned's CI lower bound ≤ base few-shot |
+| Overfitting | final eval loss > 5% above its best, **or** final train loss < half the final eval loss |
+| High format-failure rate | tuned format rate < 90% |
+| Failures concentrated | top 2 failure categories ≥ 50% of failures |
+| Forgetting | any M8 task's delta below `-targets.max_general_drop` (spec default 0.03 = 3 points) |
+| "Gain over the previous loop" too small | gain < `targets.min_gain` (spec default 0.02). Used instead of "inside the dev CI": with 200 dev items the CI is about ±0.06, so the CI rule would stop any loop that gains less than ~6 points |
+| More data | `max(50, n_examples / 2)` extra examples, top 2–3 failure categories |
+
+Things it doesn't do yet: no LLM-written `reason` (templated sentences), no API-cost budget check (the Trainer's pre-flight checks already enforce the GPU budget), and it trusts the eval report's `failure_categories` as given.

@@ -1,6 +1,6 @@
 # Review of wireframe v0.2 + how to build it
 
-*Written 2026-10-31. Sources: wireframe PDF v0.2, ScienceClaw source code (checked line by line), web research (links at the end).*
+*Written 2026-10-31. The wireframe itself, with what's built now: `docs/wireframe_v0.2.md`. Sources: wireframe PDF v0.2, ScienceClaw source code (checked line by line), web research (links at the end).*
 
 ## TL;DR
 
