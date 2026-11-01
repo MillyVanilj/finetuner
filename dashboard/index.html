@@ -507,7 +507,9 @@ function nodeSummary(k) {
   if (k === "bench") { const p = S.bench.progress || {}, sp = S.bench.splits || {};
     if (sp.dev && sp.heldout) return {kv: `<b>${sp.dev.n}</b> dev · <b>${sp.heldout.n}</b> held-out`, pct: 1};
     if (p.total) return {kv: `<b>${fmtNum(p.done)}</b> / ${fmtNum(p.total)} items`, pct: p.done / p.total}; return {kv: "waiting"}; }
-  if (k === "train") { const j = latestJob(); if (!j) return {kv: "waiting for data"};
+  if (k === "train") { const j = latestJob(), pf = preflightNotice();
+    if (pf) return {kv: `<b>${esc(pf.title)}</b>`};
+    if (!j) return {kv: "waiting for data"};
     const last = j.loss[j.loss.length - 1];
     if (j.state === "done") return {kv: `loss <b>${fmtNum(j.metrics?.train_loss, 3)}</b> · ${fmtDur(j.elapsed_s)}`, pct: 1};
     return {kv: `step <b>${fmtNum(j.step)}</b>/${fmtNum(j.max_steps)}${last ? ` · loss <b>${fmtNum(last.loss, 3)}</b>` : ""}`, pct: j.max_steps ? j.step / j.max_steps : null}; }
@@ -673,8 +675,36 @@ function pBench() {
   }};
 }
 
+// A pre-flight "wait" / "refuse" / "reused" that happened AFTER the latest job started (no job folder for it).
+function preflightNotice() {
+  const e = S.train_last_event; if (!e || !e.msg) return null;
+  const m = e.msg;
+  if (/^Pre-flight wait/i.test(m)) return {kind: "warn", title: "pre-flight: waiting", msg: m};
+  if (/^Pre-flight refuse/i.test(m)) return {kind: "warn", title: "pre-flight: refused", msg: m};
+  if (/^Skipped training/i.test(m)) return {kind: "stop", title: "reused earlier job", msg: m};
+  return null;
+}
+
+function preflightSection(j) {
+  const pf = j.preflight; if (!pf) return "";
+  const mark = c => c.ok ? `<span class="badge done"><span class="ic">✓</span>OK</span>`
+    : c.overridden ? `<span class="badge running"><span class="ic"></span>Overridden</span>` : `<span class="badge failed"><span class="ic">✕</span>Failed</span>`;
+  const used = pf.pipeline_gpu_hours_used, budget = pf.pipeline_gpu_hours_budget;
+  const took = j.state === "done" && j.elapsed_s ? ` · took ${fmtDur(j.elapsed_s)}` : "";
+  const gpu = budget ? `<div class="tile" style="margin-top:10px"><div class="l">Pipeline GPU budget (before this job)</div>
+      <div class="v" style="font-size:18px">${fmtNum(used, 2)} h <small>of ${fmtNum(budget, 1)} h used</small></div>
+      <div class="bar ${used / budget > 0.8 ? "" : "done"}"><i style="width:${Math.min(100, used / budget * 100)}%"></i></div></div>` : "";
+  return `<div class="sec"><h4>Pre-flight checks <span class="muted">(automatic, no human OK needed)</span></h4>
+    <div class="callout ${pf.decision === "launch" ? "stop" : "warn"}"><b>${esc(pf.decision)}</b>: ${esc(pf.reason)}
+      <div class="muted" style="font-size:12px">estimated ${fmtDur(pf.estimate_s)}${took} · ${fmtNum(pf.s_per_example_epoch, 2)} s per example-epoch, learned from ${fmtNum(pf.speed_from_n_runs)} past runs</div></div>
+    ${gpu}
+    <table class="t" style="margin-top:10px"><tr><th>check</th><th>result</th><th>detail</th></tr>${(pf.checks || []).map(c =>
+      `<tr><td>${esc(c.check)}</td><td>${mark(c)}</td><td>${esc(c.detail)}</td></tr>`).join("")}</table></div>`;
+}
+
 function pTrain() {
-  if (!S.train.length) return {html: `<p class="muted">No training job yet. The Trainer starts when the training data is ready.</p>`};
+  const notice = preflightNotice(), noticeHtml = notice ? `<div class="callout ${notice.kind}" style="margin-bottom:12px">${esc(notice.msg)}</div>` : "";
+  if (!S.train.length) return {html: noticeHtml + `<p class="muted">No training job yet. The Trainer starts when the training data is ready; finetune-submit's pre-flight checks decide whether to launch.</p>`};
   const jobs = S.train, j = jobs[jobs.length - 1], c = j.config || {}, last = j.loss[j.loss.length - 1];
   const tiles = `<div class="tiles">
     <div class="tile"><div class="v">${fmtNum(j.step)}<small> / ${fmtNum(j.max_steps)}</small></div><div class="l">step · epoch ${fmtNum(j.epoch, 2)}</div><div class="bar ${j.state === "done" ? "done" : ""}"><i style="width:${j.max_steps ? j.step / j.max_steps * 100 : 0}%"></i></div></div>
@@ -685,7 +715,8 @@ function pTrain() {
   const hist = `<table class="t" style="margin-top:12px"><tr><th>loop</th><th>job</th><th>config</th><th class="n">train loss</th><th class="n">eval loss</th><th>state</th></tr>${jobs.map(x =>
     `<tr><td>${x.loop ?? "–"}</td><td class="mono">${esc(x.job_id)}</td><td>lr ${esc(x.config?.lr)} · ${esc(x.config?.epochs)} ep · r ${esc(x.config?.rank)}</td><td class="n">${fmtNum(x.metrics?.train_loss, 3)}</td><td class="n">${fmtNum(x.metrics?.eval_loss, 3)}</td><td>${badge({starting: "running", running: "running", done: "done", failed: "failed"}[x.state] || "pending")}</td></tr>`).join("")}</table>`;
   const err = j.error ? `<div class="callout warn sec"><b>Training failed:</b> <span class="mono">${esc(j.error)}</span></div>` : "";
-  return {html: tiles + cfg + `<div class="sec"><h4>Loss by training step (live) · loop ${j.loop ?? "?"}</h4><div id="lossChart"></div></div>` + err + `<div class="sec"><h4>All training runs</h4>${hist}</div>`,
+  return {html: noticeHtml + tiles + cfg + `<div class="sec"><h4>Loss by training step (live) · loop ${j.loop ?? "?"}</h4><div id="lossChart"></div></div>` + err +
+    preflightSection(j) + `<div class="sec"><h4>All training runs</h4>${hist}</div>`,
     after: () => lineChart($("lossChart"), [
       {name: "Train loss", color: "--s1", points: j.loss.map(p => ({x: p.step, y: p.loss}))},
       {name: "Eval loss", color: "--s2", points: j.eval_loss.map(p => ({x: p.step, y: p.loss})), dots: true}],
