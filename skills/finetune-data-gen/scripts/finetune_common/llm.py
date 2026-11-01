@@ -20,7 +20,12 @@ REPO_ROOT = _find_scienceclaw_root()
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-LLM_CALL_CAP_S = 18.0     # hard limit for any single LLM call
+# Hard limit for any single LLM call. 18 s fits ScienceClaw's 30 s skill limit; a caller with a long time budget
+# (run_pipeline.py, BenchGen's background worker) raises it to LONG_CALL_CAP_S, because a reasoning model (the Sol
+# data checker) can need longer than 18 s. $FINETUNE_LLM_CALL_CAP_S overrides both.
+LLM_CALL_CAP_S = float(os.environ.get("FINETUNE_LLM_CALL_CAP_S") or 18.0)
+LONG_CALL_CAP_S = 120.0
+LONG_BUDGET_S = 60.0      # a time budget above this (or none) allows long calls
 MIN_CALL_S = 2.0          # don't start an LLM call with less than this much time left
 CALL_MARGIN_S = 0.5       # keep this much time after a call for writing files
 
@@ -114,7 +119,7 @@ class OpenAIClient:
 
     def call(self, prompt: str, max_tokens: int = 1000, temperature: float = None, **_ignored) -> str:
         """temperature is accepted for interface compatibility and NOT sent (reasoning models reject it).
-        Reasoning effort is low (calls have an 18 s cap); the output limit leaves room for reasoning tokens."""
+        Reasoning effort is low (agent-mode calls have an 18 s cap); the output limit leaves room for reasoning tokens."""
         kw = dict(model=self.openai_model, input=prompt, max_output_tokens=max(4 * max_tokens, 4000))
         try:
             try:
@@ -174,6 +179,15 @@ EMPTY_REPLIES = [0]               # empty LLM replies seen (rate-limit signal fo
 
 _EMPTY_LOCK = threading.Lock()
 
+
+
+def allow_long_calls(time_budget) -> float:
+    """Raise the per-call cap for a long (> LONG_BUDGET_S) or unlimited (<= 0) time budget, unless
+    $FINETUNE_LLM_CALL_CAP_S pins it. Returns the cap in force."""
+    global LLM_CALL_CAP_S
+    if not os.environ.get("FINETUNE_LLM_CALL_CAP_S") and (time_budget <= 0 or time_budget > LONG_BUDGET_S):
+        LLM_CALL_CAP_S = LONG_CALL_CAP_S
+    return LLM_CALL_CAP_S
 
 
 def call_timeout(deadline) -> float:

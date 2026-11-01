@@ -34,7 +34,10 @@ def out(obj, rc=0):
 FAKES = {
     "finetune-data-gen/scripts/gen_data.py": """
 p = argparse.ArgumentParser(); p.add_argument("--spec"); p.add_argument("--run-id"); p.add_argument("--format")
+p.add_argument("--time-budget", type=float, default=27.0)
 a = p.parse_args()
+if a.time_budget <= 60:   # the runner must give DataGen long calls (Sol checks can take over 18 s)
+    out({"error": f"runner passed a {a.time_budget} s time budget"}, 1)
 d = Path(os.environ["FAKE_STATE"]) / "datagen" / a.run_id; d.mkdir(parents=True, exist_ok=True)
 spec = json.loads(Path(a.spec).read_text()); n = spec["n_examples"]
 k = counter("dg-" + a.run_id)

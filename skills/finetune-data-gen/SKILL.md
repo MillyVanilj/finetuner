@@ -57,7 +57,7 @@ next cycle. Checked by `tests/test_handoffs.py`.
 | `--run-id` | Name of this run; progress lives in `~/.scienceclaw/finetune/runs/<run-id>/` | `<pipeline_id>-l<loop>` for a spec inside a pipeline folder (agent mode; the run is also linked in `pipeline.json` and its start/done shown on the dashboard); else the spec file name, or slug of the query |
 | `--format` | `json` (machine-readable result) or `summary` (one line) | json |
 | `--batch-size` | Largest batch; smaller ones are planned automatically near the time limit | 10 |
-| `--time-budget` | Seconds one call may use, from process start. Set it a few seconds below the executor's timeout | 27, or `$DATAGEN_TIME_BUDGET` |
+| `--time-budget` | Seconds one call may use, from process start. Set it a few seconds below the executor's timeout. Above 60 s, a single LLM call may take up to 120 s instead of 18 s (a reasoning checker such as Sol needs it); `scripts/run_pipeline.py` passes 580 | 27, or `$DATAGEN_TIME_BUDGET` |
 | `--bench` | Benchmark for the contamination check: BenchGen run id, folder or file; `none` disables | a frozen BenchGen benchmark with the same spec, if any |
 | `--verify-backend` | LLM backend for M3: `openai` (Sol, a different family from the Gemini generator, so it checks more strictly; model `$FINETUNE_OPENAI_MODEL`), `anthropic`, or `same` (= M2's backend). Needs `OPENAI_API_KEY` + the `openai` package; without them M3 falls back to M2's backend and the result's `warnings` says so | `openai` (Sol), or `$DATAGEN_VERIFY_BACKEND` |
 | `--parallel` | Batches generated at the same time. Falls back to 1 on API rate limits | 1 |
@@ -153,6 +153,9 @@ python3 {baseDir}/lib/format_data.py --run-id chem-v1 --bench path/to/benchmark.
 - Executor timeouts differ: the plain skill executor uses 30 s (keep the default 27), while the
   deep-investigation agent path allows longer. With a longer limit, set `DATAGEN_TIME_BUDGET`
   (for example `280` for a 300 s limit) so one call can finish the whole run.
+- Per-LLM-call limit: 18 s with the default budget, 120 s with a budget over 60 s; `$FINETUNE_LLM_CALL_CAP_S` pins
+  it. In agent mode (27 s) a Sol check that runs out of time is not lost: the examples wait in
+  `pending_verify.jsonl` and are checked again on the next call.
 - Unknown extra flags are ignored, and errors are returned as `{"error": ...}` JSON with exit code 1.
 
 - Runs on **Gemini** by default (ignores ScienceClaw's global `LLM_BACKEND`; override for the

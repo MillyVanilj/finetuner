@@ -42,6 +42,11 @@ POLL_EVAL_S = int(os.environ.get("FTC_POLL_EVAL_S", 30))
 POLL_BENCH_S = int(os.environ.get("FTC_POLL_BENCH_S", 20))
 SUBMIT_WAIT_TRIES = 20          # pre-flight "wait" (GPU busy etc.) retries, POLL_TRAIN_S apart
 MAX_DATAGEN_CALLS = 400         # safety net: each call does ~one time budget of work
+# DataGen's own default budget is 27 s per call (ScienceClaw's 30 s skill limit), with each LLM call cut at 18 s.
+# The runner isn't bound by that: give each call most of its 600 s timeout, which also lets single LLM calls run
+# up to 120 s (finetune_common.llm.allow_long_calls), e.g. the Sol checker, a reasoning model. 20 s margin for M4.
+DATAGEN_TIME_BUDGET_S = 580
+DATAGEN_CALL_TIMEOUT_S = 600
 
 STOP = threading.Event()
 
@@ -187,7 +192,9 @@ def run_datagen(pl: Pipeline, spec_path: Path, run_id: str, loop: int, note: str
     pl.emit("data", "start", f"DataGen: generating + verifying training examples{note}", loop=loop)
     linked = False
     for _ in range(MAX_DATAGEN_CALLS):
-        rc, out, err = call(pl, "finetune-data-gen", ["--spec", spec_path, "--run-id", run_id], timeout=600)
+        rc, out, err = call(pl, "finetune-data-gen", ["--spec", spec_path, "--run-id", run_id,
+                                                      "--time-budget", str(DATAGEN_TIME_BUDGET_S)],
+                            timeout=DATAGEN_CALL_TIMEOUT_S)
         out = out or {}
         if out.get("run_dir") and not linked:
             pl.link("data_run_dir", str(Path(out["run_dir"]).expanduser()), stage="data", append=True)

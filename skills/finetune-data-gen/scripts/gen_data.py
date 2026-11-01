@@ -480,6 +480,7 @@ def run(a) -> dict:
         a.run_id = f"{a.pipeline_dir.name}-l{loop}"
     a.agent_mode = agent_mode
     deadline = _T_START + a.time_budget
+    L.allow_long_calls(a.time_budget)         # run_pipeline.py's long calls: 120 s per LLM call instead of 18 s
     jsonparse.BAD_OUTPUT_DIR = RUNS_DIR
     if not (a.spec or (a.query and a.query.strip())):
         raise ValueError("give --spec <file> or --query <fine-tuning request>")

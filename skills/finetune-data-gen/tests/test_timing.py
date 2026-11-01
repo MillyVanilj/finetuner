@@ -195,5 +195,24 @@ res = json.loads(out.getvalue())
 check("already done -> saved result returned, no LLM client", res["done"] and res["train_examples"] == 5
       and res["batches_this_call"] == 0)
 
+# Per-call cap: 18 s for a skill call (27 s budget), 120 s when the budget is long (run_pipeline.py passes 580),
+# so a slow reasoning checker (Sol) isn't cut off; $FINETUNE_LLM_CALL_CAP_S pins it.
+L = gen_data.L
+L.LLM_CALL_CAP_S = 18.0
+check("27 s budget (agent mode) -> 18 s per call", L.allow_long_calls(27.0) == 18.0 and L.call_timeout(None) == 18.0)
+check("580 s budget (run_pipeline.py) -> 120 s per call", L.allow_long_calls(580.0) == 120.0
+      and 119 < L.call_timeout(time.time() + 500) <= 120)
+check("...but never past the deadline", L.call_timeout(time.time() + 10) < 10)
+L.LLM_CALL_CAP_S = 18.0
+os.environ["FINETUNE_LLM_CALL_CAP_S"] = "45"
+check("$FINETUNE_LLM_CALL_CAP_S pins the cap", L.allow_long_calls(580.0) == 18.0)   # the env value is read at import
+os.environ.pop("FINETUNE_LLM_CALL_CAP_S")
+import subprocess
+r = subprocess.run([sys.executable, "-c", "import sys; sys.path.insert(0, sys.argv[1]); from finetune_common import llm; "
+                    "print(llm.LLM_CALL_CAP_S, llm.allow_long_calls(580))", str(Path(__file__).resolve().parents[1] / "scripts")],
+                   capture_output=True, text=True, env={**os.environ, "FINETUNE_LLM_CALL_CAP_S": "45"}, timeout=60)
+check("$FINETUNE_LLM_CALL_CAP_S=45 at start -> 45 s, also with a long budget", r.stdout.split()[-2:] == ["45.0", "45.0"])
+L.LLM_CALL_CAP_S = 18.0
+
 print(f"\n{'ALL PASSED' if not fails else f'{fails} FAILED'}")
 sys.exit(1 if fails else 0)
