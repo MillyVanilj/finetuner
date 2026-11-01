@@ -98,6 +98,10 @@ a human. Without an API key it returns a template.
 ### 3.1 Training data (DataGen → Trainer): unchanged
 JSONL, one `{"messages": [{"role":"system"?}, {"role":"user"}, {"role":"assistant"}]}` per line.
 DataGen's result key is `train_path`; `finetune-submit` accepts it as `--train-path`.
+Exit codes (all pipeline skills): exit 0 only when the hand-off key is in the result; exit 1 while not done
+(DataGen, BenchGen, finetune-status, finetune-eval), so the reactor keeps the input unconsumed and calls again.
+Each skill's `--help` lists only flags that are hand-off keys (the reactor matches every `--flag` it finds there);
+`tests/test_handoffs.py` checks the whole key matrix.
 Run order: inside a pipeline, if `bench/` exists but is not frozen yet, DataGen returns `"state": "waiting_for_bench"`
 and exits 1 (no `train_path` yet), so the contamination check always uses this pipeline's benchmark.
 
@@ -145,6 +149,7 @@ Systems: `base_zeroshot`, `base_fewshot` (prompted with 3–5 train examples: **
  "created_at": "..."}
 ```
 Scores are in 0–1. `ci95` = bootstrap (or normal-approximation) 95% interval. `general` is empty when M8 was skipped.
+Inside a pipeline, `finetune-eval` writes this file itself (converted with `ftc/report_convert.py`) for the pipeline's current loop on every call, so a reused training job gets the new loop number.
 The final held-out run writes the same shape to `heldout_report.json` with `"split": "heldout"`.
 
 ### 3.5 Live eval progress (Eval → UI): `loops/<n>/eval/progress.json`
@@ -306,7 +311,7 @@ Test without GPU or API: `python3 tests/test_run_pipeline.py` (stand-in skills, 
   under the ScienceClaw reactor nothing does, and `finetune-decide` reads §3.4 only. Either Eval writes
   `loops/<n>/eval/eval_report.json` itself, or the Evaluator calls `report_convert`.
 - ReportAgent (HF push, model card, Infinite post) is not built; the runner writes `final/final_report.json` for it.
-- DataGen doesn't read `--data-feedback-path` yet (the runner works around it, see §6) and ignores the v2-only
-  fields (seed examples, coverage topics). Using `seed_examples` as few-shot examples is a cheap win.
+- DataGen reads `--data-feedback-path` (agent mode; builds the same spec copy as the runner's `regen_spec`). It
+  still ignores the v2-only fields (seed examples, coverage topics); using `seed_examples` as few-shot is a cheap win.
 - `finetune-eval` reports only a stage name while running (no item counts), so the Evaluation panel shows its
   stage list.

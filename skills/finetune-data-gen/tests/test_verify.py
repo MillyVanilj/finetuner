@@ -6,6 +6,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import gen_data
 from gen_data import verify_batch, generate_and_verify, load_spec, regen_fits
 
+# gen_data.main() exits 1 while a run is not done (the reactor contract); these tests only read stdout
+_gen_main = gen_data.main
+def _main_no_exit():
+    try:
+        _gen_main()
+    except SystemExit:
+        pass
+gen_data.main = _main_no_exit
+
 gen_data.RUNS_DIR = Path(tempfile.mkdtemp())
 gen_data.jsonparse.BAD_OUTPUT_DIR = gen_data.RUNS_DIR   # bad-output log into the temp dir
 gen_data.BENCH_DIR = gen_data.RUNS_DIR / '_no_bench'   # never auto-detect real benchmarks

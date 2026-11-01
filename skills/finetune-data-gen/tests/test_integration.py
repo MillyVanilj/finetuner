@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Offline tests for Step 9: calling the skill the way ScienceClaw's agent does.
 Run: python3 -B skills/finetune-data-gen/tests/test_integration.py"""
-import contextlib, io, json, os, subprocess, sys, tempfile, threading, time
+import contextlib, io, json, os, re, subprocess, sys, tempfile, threading, time
 from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
@@ -65,7 +65,8 @@ fake = Fake(SPEC_REPLY)
 res, err, code = run_main(executor_argv({"query": TOPIC, "format": "json", "n_examples": 12, "max_results": 3}), fake)
 rid = gen_data.default_run_id(None, TOPIC)
 spec = json.loads((tmp / "runs" / rid / "spec.json").read_text())
-check("agent-style call with only --query works (exit 0, JSON result)", code == 0 and res["run_id"] == rid)
+check("agent-style call with only --query works (JSON result; exit 1 = not done yet, call again)",
+      code == (0 if res["done"] else 1) and res["run_id"] == rid and "error" not in res)
 check("stray agent flag (--max-results) ignored, not a crash", "ignoring unrecognized arguments" in err)
 check("M1-lite drafted the spec from the topic", spec["task"].startswith("Reply to bike-shop")
       and spec["edge_cases"][0] == "Angry customers" and spec["n_examples"] == 12
@@ -85,7 +86,7 @@ check("train.jsonl has 12 valid examples", len(train) == 12 and all(r["messages"
 # 3. Spec drafting fails -> generic template, run still works
 res, err, code = run_main(["--query", "summarize legal contracts", "--n-examples", "5", "--format", "json"], Fake("no idea"))
 spec = json.loads((tmp / "runs" / res["run_id"] / "spec.json").read_text())
-check("unparseable spec draft -> generic template, still generates", code == 0 and spec["task"] == "summarize legal contracts"
+check("unparseable spec draft -> generic template, still generates", "error" not in res and spec["task"] == "summarize legal contracts"
       and spec["source"]["drafted_by"] == "generic-template" and res["raw_kept"] > 0)
 
 # 4. Errors come back as JSON on stdout with exit code 1
@@ -107,7 +108,8 @@ check("--spec run id = spec file name; --n-examples overrides", res["run_id"] ==
 out = subprocess.run([sys.executable, "-B", "-c",
     "import sys; sys.argv=['x','--help']; sys.path.insert(0, %r); import gen_data; gen_data.main()" % str(HERE.parent / "scripts")],
     capture_output=True, text=True, env={**os.environ, "DATAGEN_TIME_BUDGET": "280"}, cwd=str(REPO))
-check("DATAGEN_TIME_BUDGET read at startup (shown in --help default)", "$DATAGEN_TIME_BUDGET" in out.stdout)
+check("--help shows only the pipeline hand-off flags (reactor matches every --flag in --help)",
+      sorted(set(re.findall(r"--([a-z][a-z0-9_-]+)", out.stdout + out.stderr))) == ["data-feedback-path", "help", "spec", "task-spec-path"])
 src = (HERE.parent / "scripts/gen_data.py").read_text()
 check("time budget default uses the env var", 'os.environ.get("DATAGEN_TIME_BUDGET", SKILL_DEADLINE_S)' in src)
 
@@ -120,8 +122,10 @@ check("registry: single executable = scripts/gen_data.py",
       [Path(x).name for x in meta["executables"]] == ["gen_data.py"])
 help_out = subprocess.run([sys.executable, "-B", meta["executables"][0], "--help"], capture_output=True, text=True,
                           cwd=str(REPO)).stdout
-check("executor-built flags are all accepted by the script",
-      all(f in help_out for f in ("--query", "--spec", "--run-id", "--n-examples", "--format", "--time-budget")))
+res_h, err_h, code_h = run_main(executor_argv({"spec": str(tmp / "missing.json"), "query": "x", "run_id": "r",
+                                               "n_examples": 3, "format": "json", "time_budget": 5, "bench": "none"}), Fake(SPEC_REPLY))
+check("hidden flags (query, spec, run_id, n_examples, format, time_budget, bench) are still accepted",
+      "ignoring unrecognized" not in err_h and "spec file not found" in res_h["error"])
 
 print(f"\n{'ALL PASSED' if not fails else f'{fails} FAILED'}")
 sys.exit(1 if fails else 0)

@@ -119,6 +119,12 @@ def read_bench(pdir: Path) -> dict:
     prog = _read_json(b / "progress.json", {}) or {}
     rep = _read_json(b / "bench_report.json")
     out = {"progress": prog, "report": rep, "splits": {}}
+    # BenchGen's background job: its log explains failures ("stopped 3 times without new items")
+    try:
+        out["worker_log_tail"] = (b / "worker.log").read_text(errors="replace").splitlines()[-40:]
+    except OSError:
+        out["worker_log_tail"] = []
+    out["worker"] = _read_json(b / "worker.json")
     for split in ("dev", "heldout"):
         rows = _read_jsonl(b / f"{split}.jsonl")
         if not rows:

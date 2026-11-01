@@ -16,7 +16,7 @@ States: `starting` · `running` (with % progress) · `done` (with `adapter_path`
 | Flag | Required | Meaning |
 |---|---|---|
 | `--train-job-id` | yes | From finetune-submit's output (key `train_job_id` matches this) |
-| `--require-done` | no | Exit code 3 while still running, so a ScienceClaw agent retries next cycle instead of moving on |
+| `--require-done` | no | Exit code 3 (instead of 1) while still running |
 
 ## Output (JSON on stdout)
 
@@ -30,7 +30,7 @@ Done:
 
 When the job finishes, it logs one `train done`/`failed` event (plus an `adapter_path` link) to the pipeline recorded in `run.json`, if any, for the dashboard.
 
-Exit codes: 0 ok · 1 failed/unknown job · 3 still running (only with `--require-done`).
+Exit codes: 0 done (or dry run) · 1 still starting/queued/running, or failed/unknown job · 3 still running with `--require-done`. Exiting non-zero until done keeps the reactor's `train_job_id` hand-off unconsumed, so the job is polled again next cycle; only the final call (with `adapter_path`) hands on to the EvalAgent.
 
 ## Example
 
