@@ -421,6 +421,13 @@ check("3 earlier starts but new items since -> restarted (count reset), not fail
 (rd / "worker.json").write_text(json.dumps({"pid": 999999, "starts": 3, "kept_at_start": 40}))
 res, err, code = run_main(["--spec", str(spec_f), "--run-id", "progress-run"], Fake(), foreground=False)
 check("3 starts in a row without new items -> failed", res["state"] == "failed" and "in a row" in res["error"])
+(rd / "worker.log").write_text("\n===== start 1 at x\nold: No module named 'anthropic'\n===== start 3 at y\n"
+                               "Anthropic API error: ... 'Your credit balance is too low to access the Anthropic API.'\n")
+res, err, code = run_main(["--spec", str(spec_f), "--run-id", "progress-run"], Fake(), foreground=False)
+check("failed error names the cause found in the LAST start's log (credit balance)",
+      res["state"] == "failed" and "credit balance too low" in res["error"] and "package" not in res["error"])
+check("known_cause: missing module is named", "anthropic" in (B.known_cause("No module named 'anthropic'") or ""))
+check("known_cause: unknown log -> None", B.known_cause("[M5] parsed=8") is None)
 
 # lock: a launch already in progress -> "starting", no second worker
 rd2 = tmp / "bench" / "locked-run"; rd2.mkdir(parents=True)

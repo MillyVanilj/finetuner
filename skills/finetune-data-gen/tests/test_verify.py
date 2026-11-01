@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Offline tests for Step 5 / M3 (no API calls). Run: python3 -B skills/finetune-data-gen/tests/test_verify.py"""
-import io, json, sys, tempfile, time, contextlib
+import io, json, os, sys, tempfile, time, contextlib
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+os.environ.setdefault("DATAGEN_VERIFY_BACKEND", "same")   # offline: M3 uses the fake M2 client, not OpenAI Sol
 import gen_data
 from gen_data import verify_batch, generate_and_verify, load_spec, regen_fits
 

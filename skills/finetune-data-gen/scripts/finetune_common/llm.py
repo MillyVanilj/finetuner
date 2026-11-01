@@ -74,7 +74,9 @@ class AnthropicClient:
         if not key:
             raise ValueError("ANTHROPIC_API_KEY not set")
         self.agent_name = agent_name
-        self.anthropic_model = model or os.environ.get("ANTHROPIC_MODEL") or "claude-opus-5-5"
+        # Sonnet by default (DataGen M3 --verify-backend anthropic). Not $ANTHROPIC_MODEL: ScienceClaw may set
+        # that to Opus for itself. BenchGen passes its own model (Opus) and is unaffected.
+        self.anthropic_model = model or os.environ.get("FINETUNE_ANTHROPIC_MODEL") or "claude-sonnet-5-5"
         self._client = anthropic.Anthropic(api_key=key, max_retries=2)
 
     def call(self, prompt: str, max_tokens: int = 1000, temperature: float = None, **_ignored) -> str:
@@ -91,12 +93,50 @@ class AnthropicClient:
             return ""
 
 
+# OpenAI's Sol model: the M3 verifier (DataGen) and the M7 judge (finetune-eval). A third model family,
+# so neither Gemini (writes the training data) nor Claude (writes the benchmark) grades its own work.
+OPENAI_DEFAULT_MODEL = "gpt-6.1-sol"
+
+
+class OpenAIClient:
+    """OpenAI (Sol) via the openai SDK's Responses API, with llm_client's interface (.call -> text, "" on error).
+    Model: `model`, else $FINETUNE_OPENAI_MODEL, else gpt-6.1-sol. Needs OPENAI_API_KEY."""
+    backend = "openai"
+
+    def __init__(self, agent_name: str = "Finetune", model: str = None):
+        import openai
+        key = os.environ.get("OPENAI_API_KEY")
+        if not key:
+            raise ValueError("OPENAI_API_KEY not set")
+        self.agent_name = agent_name
+        self.openai_model = model or os.environ.get("FINETUNE_OPENAI_MODEL") or OPENAI_DEFAULT_MODEL
+        self._client = openai.OpenAI(api_key=key, max_retries=2)
+
+    def call(self, prompt: str, max_tokens: int = 1000, temperature: float = None, **_ignored) -> str:
+        """temperature is accepted for interface compatibility and NOT sent (reasoning models reject it).
+        Reasoning effort is low (calls have an 18 s cap); the output limit leaves room for reasoning tokens."""
+        kw = dict(model=self.openai_model, input=prompt, max_output_tokens=max(4 * max_tokens, 4000))
+        try:
+            try:
+                r = self._client.responses.create(reasoning={"effort": "low"}, **kw)
+            except Exception as e:                # a model without reasoning settings: retry plainly
+                if "reasoning" not in str(e).lower():
+                    raise
+                r = self._client.responses.create(**kw)
+            return r.output_text or ""
+        except Exception as e:                    # same contract as llm_client: print, return ""
+            print(f"OpenAI API error: {type(e).__name__}: {e}")
+            return ""
+
+
 def make_client(agent_name: str, backend: str = None, model: str = None):
     """Client for a specific backend (None -> the shared DEFAULT_BACKEND client).
-    anthropic -> AnthropicClient (see its docstring); `model` only applies to anthropic."""
+    anthropic -> AnthropicClient, openai -> OpenAIClient (Sol); `model` only applies to those two."""
     backend = backend or DEFAULT_BACKEND
     if backend == "anthropic":
         return AnthropicClient(agent_name, model)
+    if backend == "openai":
+        return OpenAIClient(agent_name, model)
     if backend == DEFAULT_BACKEND:
         return get_llm_client(agent_name)
     return LLMClient(agent_name=agent_name, backend=backend)

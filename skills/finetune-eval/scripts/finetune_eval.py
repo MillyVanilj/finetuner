@@ -21,7 +21,8 @@ LAST_BENCH = RUNS / ".last_bench_dir"      # last bench_dir this skill was hande
 
 
 def _spec_judge(adapter_path):
-    """models.judge from the run's task spec, when it names a Claude model (judge and teacher call Claude).
+    """models.judge from the run's task spec, when it names a model run_eval can call: Claude (claude-*) or
+    OpenAI (gpt-*, e.g. Sol). It sets only the judge; the teacher stays on run_eval's teacher model.
     None when $FINETUNE_JUDGE_MODEL is set: that machine-wide override (e.g. to save credits) beats the spec,
     and run_eval.py reads it itself. Order: $FINETUNE_JUDGE_MODEL > spec models.judge > run_eval's default."""
     if os.environ.get("FINETUNE_JUDGE_MODEL"):
@@ -32,7 +33,7 @@ def _spec_judge(adapter_path):
         judge = (json.loads((Path(pdir) / "task_spec.json").read_text()).get("models") or {}).get("judge")
     except (OSError, ValueError, TypeError):
         return None
-    return judge if isinstance(judge, str) and judge.startswith("claude-") else None
+    return judge if isinstance(judge, str) and judge.startswith(("claude-", "gpt-")) else None
 
 
 def _pipeline_bench(pdir):
@@ -178,15 +179,19 @@ def main():
         result = {"state": "failed", "error": f"{TRAIN_PY} not found; run scripts/setup_brev.sh or set FINETUNER_DIR"}
     else:
         out.mkdir(parents=True, exist_ok=True)
-        cmd = [str(TRAIN_PY), str(HERE / "eval" / "run_eval.py"), "--adapter-path", a.adapter_path,
-               "--bench-dir", a.bench_dir, "--split", a.split, "--out-dir", str(out)]
+        cmd = [str(TRAIN_PY.absolute()), str(HERE / "eval" / "run_eval.py"),
+               "--adapter-path", str(Path(a.adapter_path).resolve()),
+               "--bench-dir", str(Path(a.bench_dir).expanduser().resolve()), "--split", a.split, "--out-dir", str(out)]
         if a.skip_general:
             cmd.append("--skip-general")
         judge = _spec_judge(a.adapter_path)
         if judge:
-            cmd += ["--claude-model", judge]
+            cmd += ["--judge-model", judge]
         with open(log_f, "ab") as log:
-            proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            # cwd=out: the job must not run inside the installed skill folder, which install.sh may replace
+            # mid-run (lm_eval/datasets call os.getcwd() and crash with FileNotFoundError if it's gone).
+            proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
+                                    cwd=str(out))
         if not status_f.exists():  # the job writes its own status; this only covers its first moments
             status_f.write_text(json.dumps({"state": "starting", "pid": proc.pid}))
         result = {"state": "started", "pid": proc.pid, "eval_dir": str(out), "log": str(log_f),

@@ -1,6 +1,6 @@
 # CLAUDE.md — Project context
 
-> **Read first:** `docs/wireframe_v0.2.md` (the design, and which code implements each box), `docs/decisions.md` (model choices and reasoning, compute) and `docs/spec_and_io.md` (the task spec and every hand-off file format). ScienceClaw internals and the wireframe critique: `docs/wireframe_v0.2_review.md`.
+> **Read first:** `docs/handover.md` (current state: what is merged, open PRs, next steps, demo pitch; keep it up to date when you merge or open a PR), then `docs/wireframe_v0.2.md` (the design, and which code implements each box), `docs/decisions.md` (model choices and reasoning, compute) and `docs/spec_and_io.md` (the task spec and every hand-off file format). ScienceClaw internals and the wireframe critique: `docs/wireframe_v0.2_review.md`.
 
 ## What we're doing
 

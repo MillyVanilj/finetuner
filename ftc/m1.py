@@ -15,7 +15,7 @@ still no real examples, it searches Hugging Face for some (ftc/real_data.py).
 
 Uses Claude via the anthropic SDK when ANTHROPIC_API_KEY (or an `ant auth` profile) is available;
 otherwise returns a template spec and generic questions so the UI still works offline.
-Model: $FTC_M1_MODEL (default claude-opus-5-5).
+Model: $FTC_M1_MODEL (default claude-sonnet-5-5; one call per pipeline).
 """
 import json
 import os
@@ -25,7 +25,7 @@ import sys
 from . import real_data
 from .spec import DEFAULTS, OUTPUT_TYPES, SCORING_METHODS, _get, check_spec, slugify
 
-MODEL = os.environ.get("FTC_M1_MODEL", "claude-opus-5-5")
+MODEL = os.environ.get("FTC_M1_MODEL", "claude-sonnet-5-5")
 MAX_QUESTIONS = 3
 # Filled from DEFAULTS when nobody sets them; recorded as assumptions so the report can say so.
 DEFAULTED = ["benchmark.n_dev", "benchmark.n_heldout", "targets.max_loops", "budget.max_gpu_hours", "models.student"]

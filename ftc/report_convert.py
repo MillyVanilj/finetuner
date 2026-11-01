@@ -25,7 +25,7 @@ def to_spec_io(r: dict, pipeline_id=None, loop=None, split=None, job_id=None, ad
         ffr = s.get("format_fail_rate")
         systems[dst] = {"score": s.get("mean"), "ci95": s.get("ci95"), "n": s.get("n"),
                         "format_rate": None if ffr is None else round(1 - ffr, 4),
-                        "model": r.get("judge_model") if dst == "teacher" else
+                        "model": (r.get("teacher_model") or r.get("judge_model")) if dst == "teacher" else
                         (f"{r.get('base_model')} + LoRA" if dst == "tuned" else r.get("base_model")),
                         "cached": False}
 

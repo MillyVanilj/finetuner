@@ -34,6 +34,17 @@ for name, raw, want in CASES:
     fails += not ok
     print(f"{'PASS' if ok else 'FAIL'}  {name:22s} want={want} got={got}")
 
+# a reference answer with its own ```latex block inside a ```json fence (bench M5, false-premise items)
+from finetune_common.jsonparse import parse_json_object
+inner = "```json\n[" + ",".join(json.dumps({"prompt": f"Q{i}", "reference": f"Fix:\n\n```latex\nx^{i}\n```"})
+                              for i in range(3)) + "]\n```"
+got = len(parse_json_list(inner, required_key="prompt")); ok = got == 3; fails += not ok
+print(f"{'PASS' if ok else 'FAIL'}  inner ``` fence (list)   want=3 got={got}")
+want_obj = {"keep": True, "note": "```latex\nx\n```"}
+obj = parse_json_object("```json\n" + json.dumps(want_obj) + "\n```")
+ok = obj == want_obj; fails += not ok
+print(f"{'PASS' if ok else 'FAIL'}  inner ``` fence (object) got={obj}")
+
 # required_key filter (M3 will use "keep")
 v = '[{"id":0,"keep":true,"reason":"ok"}]'
 for key, want in (("keep", 1), ("messages", 0)):

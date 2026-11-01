@@ -60,9 +60,9 @@
   "models": {
     "student": "Qwen/Qwen3-4B-Instruct-2507",
     "generator": "gemini-3.6-flash",
-    "verifier": "claude-sonnet-5-5",
+    "verifier": "gpt-6.1-sol",
     "bench_writer": "claude-opus-5-5",
-    "judge": "claude-sonnet-5-5"
+    "judge": "gpt-6.1-sol"
   },
   "training": {}
 }
