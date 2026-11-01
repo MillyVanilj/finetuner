@@ -52,6 +52,9 @@ def test_pipeline_events_links_and_snapshot():
         pl = Pipeline.create(load_spec(ROOT / "examples/specs/chem_qa.json"), root=tmp)
         pl.set_loop(1)
         assert Pipeline.from_any(pl.dir / "task_spec.json").dir == pl.dir
+        # files the Evaluator / Eval hand around live deeper in the folder
+        assert Pipeline.from_any(pl.dir / "loops/1/retrain_config.json").dir == pl.dir
+        assert Pipeline.from_any(pl.dir / "loops/1/eval/eval_report.json").dir == pl.dir
         # fake DataGen run folder in Owen's format
         d = Path(tmp) / "datagen"
         d.mkdir()

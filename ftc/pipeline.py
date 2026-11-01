@@ -88,7 +88,7 @@ class Pipeline:
             if not c:
                 continue
             p = Path(c).expanduser()
-            # 5 levels: reaches the pipeline from loops/<n>/eval/eval_report.json
+            # deepest file we hand out: loops/<n>/eval/eval_report.json (4 levels below the pipeline dir)
             for d in [p, *p.parents][:5]:
                 if (d / "pipeline.json").exists():
                     return cls(d)

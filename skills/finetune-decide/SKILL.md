@@ -12,7 +12,7 @@ Reads one dev-split eval report and applies fixed rules (`docs/evaluator-notes.m
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `--eval-report-path` | `loops/<n>/eval/eval_report.json` in the format of `docs/spec_and_io.md` §3.4 (dev split) | Required |
+| `--eval-report-path` | `loops/<n>/eval/eval_report.json` in the format of `docs/spec_and_io.md` §3.4 (dev split). `finetune-eval`'s own `report.json` isn't read: `run_pipeline.py` converts it first | Required |
 | `--format` | Accepted for ScienceClaw; output is always JSON | json |
 
 Everything else is found from the report: the pipeline folder (spec `targets`, earlier loops' reports and decisions) and the training run next to `adapter_path` (`metrics.json` for the loss curve and settings, `run.json` for the training data path). Unknown flags are ignored.
@@ -41,7 +41,7 @@ Stdout keys hand the work on through the ScienceClaw reactor:
 |---|---|---|
 | `retrain` | `retrain_config_path`, `train_path` (the same data) | `finetune-submit` (needs both flags) |
 | `regenerate_data` | `data_feedback_path` | DataGen (it doesn't read this flag yet) |
-| `stop` | `best_loop`, `best_adapter_path`, `best_tuned_score` | held-out eval / ReportAgent (not built yet) |
+| `stop` | `best_loop`, `best_adapter_path`, `best_tuned_score` | held-out eval (`run_pipeline.py` does it) / ReportAgent (not built yet) |
 
 Exit 1 with `{"status": "error"}` if the report is missing, isn't in the §3.4 format, or isn't a dev report.
 

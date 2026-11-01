@@ -88,7 +88,11 @@ check("format_run: idempotent (second run same output)",
       format_run(run)["kept"] == 5 and len((run / "train.jsonl").read_text().splitlines()) == 5)
 
 # --- 6. compatible with train_sft.py's loader (if the file is where we expect) ---
-tsft = HERE.parents[3] / "Model Training" / "brev-smoke" / "train_sft.py"
+import os
+_cands = [HERE.parents[3] / "Model Training" / "brev-smoke" / "train_sft.py",           # Owen's local layout
+          HERE.parents[2] / "scripts" / "brev-smoke" / "train_sft.py",                  # finetuner repo checkout
+          Path(os.environ.get("FINETUNER_DIR", Path.home() / "finetuner")) / "scripts" / "brev-smoke" / "train_sft.py"]
+tsft = next((c for c in _cands if c.exists()), _cands[0])
 if tsft.exists():
     spec = importlib.util.spec_from_file_location("train_sft", tsft)
     mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
@@ -115,6 +119,8 @@ check(f"3000 rows formatted in {dt:.2f}s (< 2 s)", dt < 2)
 # --- 9. gen_data top-up: M4 drops near-dups -> shortfall regenerated ---
 import gen_data
 gen_data.RUNS_DIR = tmp / "runs"
+gen_data.jsonparse.BAD_OUTPUT_DIR = gen_data.RUNS_DIR   # bad-output log into the temp dir
+gen_data.BENCH_DIR = gen_data.RUNS_DIR / '_no_bench'   # never auto-detect real benchmarks
 class TopUpFake:
     """Every second prompt is a reworded near-duplicate of the one before (same numbers, same words)."""
     def __init__(s): s.i = 0

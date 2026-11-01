@@ -153,10 +153,26 @@ def run_train(pl: Pipeline, spec, loop, train_path, cfg, overfit=False, parent=N
     d = pl.dir / "_sim" / "runs" / job_id
     d.mkdir(parents=True, exist_ok=True)
     n = sum(1 for _ in open(train_path))
+    # same shape as finetune-submit's pre-flight record (decides launch / reuse / wait / refuse)
+    est = round(60 + n * cfg["epochs"] * 0.35)
+    used_h, budget_h, cap = 0.11 * (loop - 1), spec["budget"]["max_gpu_hours"], 2 * spec["targets"]["max_loops"]
+    ck = lambda name, detail: {"check": name, "ok": True, "detail": detail, "overridden": False}   # noqa: E731
+    preflight = {"decision": "launch", "reason": "all checks passed", "estimate_s": est, "s_per_example_epoch": 0.35,
+                 "speed_from_n_runs": loop - 1, "pipeline_gpu_hours_used": round(used_h, 3),
+                 "pipeline_gpu_hours_budget": budget_h,
+                 "checks": [ck("not a duplicate", "no identical finished job"),
+                            ck("GPU memory free", "412 MiB in use (limit 2000)"),
+                            ck("disk space", "162 GB free (need 20)"),
+                            ck("job length", f"estimated {est / 60:.0f} min (cap 1 h, {loop - 1} past runs used)"),
+                            ck("rate limit", f"{loop - 1} jobs in the last hour (cap 6)"),
+                            ck("pipeline GPU budget", f"{used_h:.2f} h used + {est / 3600:.2f} h estimated vs {budget_h:g} h budget"),
+                            ck("pipeline job count", f"{loop - 1} jobs so far (cap {cap} = 2 x max_loops)")]}
     wjson(d / "run.json", {"job_id": job_id, "parent_job_id": parent, "created_at": now_iso(), "config": cfg,
                            "dataset": {"path": str(train_path), "sha256": "sim" + "0" * 61, "n_examples": n},
-                           "code": {"finetuner_git": "sim"}, "dry_run": False})
+                           "code": {"finetuner_git": "sim"}, "pipeline_dir": str(pl.dir), "preflight": preflight,
+                           "dry_run": False})
     pl.link("train_job_id", str(d), stage="train", append=True)
+    pl.emit("train", "log", f"Pre-flight launch: all checks passed (est. {est // 60} min)", loop=loop)
     pl.emit("train", "start", f"LoRA r={cfg['rank']} lr={cfg['lr']} epochs={cfg['epochs']} on {n} examples "
             f"({cfg['model'].split('/')[-1]}, L40S)", loop=loop, train_job_id=job_id)
     steps_per_epoch = max(40, n // 4)

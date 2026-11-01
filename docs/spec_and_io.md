@@ -98,6 +98,8 @@ a human. Without an API key it returns a template.
 ### 3.1 Training data (DataGen → Trainer): unchanged
 JSONL, one `{"messages": [{"role":"system"?}, {"role":"user"}, {"role":"assistant"}]}` per line.
 DataGen's result key is `train_path`; `finetune-submit` accepts it as `--train-path`.
+Run order: inside a pipeline, if `bench/` exists but is not frozen yet, DataGen returns `"state": "waiting_for_bench"`
+and exits 1 (no `train_path` yet), so the contamination check always uses this pipeline's benchmark.
 
 ### 3.2 Benchmark items (BenchGen → Eval, and DataGen's contamination check)
 `bench/dev.jsonl` and `bench/heldout.jsonl`, one item per line:
@@ -110,6 +112,11 @@ DataGen's result key is `train_path`; `finetune-submit` accepts it as `--train-p
  "difficulty": "easy", "source": "synthetic", "source_ref": null, "base_pass_rate": null}
 ```
 - `question` = plain user text. **Required**: `format_data.py --bench` reads it for the contamination check.
+- `scoring` = `exact` · `json` · `judge`: how `finetune-eval` scores the item (its `scoring.py`). BenchGen sets it;
+  `judge` items carry the answer key / rubric in a `GRADING NOTE` at the end of `reference`.
+- Extra fields (`grading`, `verify`) are BenchGen's own analysis data; consumers ignore them.
+- `bench/safety.jsonl` (optional, for finetune-eval's M9): same item shape, `category` = `should_refuse` | `should_help`.
+  BenchGen copies it from `--safety-file`; it does not write safety prompts itself.
 - `messages` = exactly what the model is sent (no assistant turn). `reference` = the ideal reply, as a **string**
   (for JSON tasks, the JSON text; the scorer parses it).
 - `category` ∈ `["typical cases"] + spec.edge_cases`. That makes failures map straight onto feedback categories.
@@ -160,7 +167,9 @@ Overwrite it every ~20 items (`Pipeline.progress("eval", ...)` does this):
 ```
 - `action`: `retrain` (writes `retrain_config.json` = finetune-submit's `--retrain-config-path` format:
   `{lr, epochs, rank, …, parent_job_id, reason}`) · `regenerate_data` (writes `data_feedback.json`) · `stop`.
-- Built: `skills/finetune-decide` (`--eval-report-path`). Its JSON output carries the hand-off keys for the reactor:
+- Built: `skills/finetune-decide` (`--eval-report-path`; `--spec` is accepted and ignored, the spec is read from the
+  pipeline folder). It reads this §3.4 `eval_report.json` only, not the eval skill's own `report.json`. Its JSON output
+  carries the hand-off keys for the reactor:
   `retrain` → `retrain_config_path` **and** `train_path` (finetune-submit requires both; same data, new settings) ·
   `regenerate_data` → `data_feedback_path` · `stop` → neither, but `best_loop` + `best_adapter_path` for the held-out
   run and the ReportAgent. A `stop` decision.json also has `best_loop` and `best_adapter_path`.
@@ -168,12 +177,22 @@ Overwrite it every ~20 items (`Pipeline.progress("eval", ...)` does this):
   reasoning: `docs/evaluator-notes.md`). `reason` is a templated sentence; there is no LLM call.
 - The Evaluator moves the pipeline to loop n+1 (`pipeline.json` → `loop`) unless it stops.
 
+**Passing the spec between skills:** the key is `spec` (the path to `task_spec.json`), matching DataGen's `--spec`.
+Skills that take a spec should accept `--spec`, optionally with `--task-spec-path` as an alias.
+
 ### 3.7 Final report: `final/final_report.json`
 `{pipeline_id, best_loop, train_job_id, adapter_path, hub_url, infinite_post_url, heldout: {systems, by_source}, dev_history: [{loop, tuned}], model_card_path, created_at}`.
 
 ### 3.8 Training progress (Trainer → UI): already exists
 `runs/<job_id>/status.json` (live), plus **new** `runs/<job_id>/train_log.jsonl`: `train_sft.py` now appends every
 Trainer log line (`{"loss", "learning_rate", "epoch", "step"}` or `{"eval_loss", ..., "step"}`), which drives the live loss curve.
+
+**Pre-flight (automatic GPU launch checks, no human OK):** `run.json` → `preflight` =
+`{decision: launch|reuse|wait|refuse, reason, checks: [{check, ok, detail, overridden}], estimate_s, s_per_example_epoch,
+speed_from_n_runs, pipeline_gpu_hours_used, pipeline_gpu_hours_budget}`, shown in the Trainer panel. A wait or refuse
+makes no job folder; it appears as a `train` event (`log` / `failed`) starting with "Pre-flight …". A reuse appears as
+"Skipped training …" plus a link to the reused job. The checks read `budget.max_gpu_hours` and `targets.max_loops` from
+the spec.
 
 ## 4. Events (`events.jsonl`): how a stage tells the UI what it's doing
 
@@ -228,16 +247,44 @@ python3 scripts/simulate_pipeline.py --speed 2          # fake run to watch (or 
   *Create pipeline* (shows the next commands) or *Simulate with this spec*.
 - `#p=<id>&once=1&stage=train&theme=light` in the URL gives a static snapshot (screenshots, slides).
 
-## 6. Open items for the team
-- Status per box: `docs/wireframe_v0.2.md`. BenchGen and ReportAgent are not built yet; build them against §3.
-- Eval (`skills/finetune-eval`) is built but doesn't follow §3.3–3.5 yet: it writes `<run dir>/eval_<split>/report.json`
-  with its own shape, `base_zero_shot`/`base_few_shot` names and `general` in points, reads a per-item `scoring` field
-  instead of `spec.scoring`, and writes no `progress.json` or events. The Evaluator reads §3.4 only, so the two
-  don't connect until Eval writes `loops/<n>/eval/eval_report.json`.
-- DataGen doesn't read the Evaluator's `data_feedback_path` yet (no `--data-feedback-path` flag), so the
-  `regenerate_data` loop has no consumer.
-- `gen_data.py` and `finetune-eval` don't emit events yet (`finetune-submit`/`-status` and `finetune-decide` do).
-  Until they do, run them with a pipeline and link their folders (`ftc.cli link`), or wrap them in `run_pipeline.py`
-  (not written yet), which can emit for them.
-- DataGen ignores the v2-only fields (seed examples, coverage topics) today. Using `seed_examples` as few-shot
-  examples and `coverage.topics` in the batch rotation is a cheap win.
+## 6. Running a real pipeline (`scripts/run_pipeline.py`)
+
+Press **▶ Start pipeline** in the dashboard, or run it in a terminal:
+```bash
+cd ~/finetuner && set -a && source .env && set +a          # API keys (ScienceClaw doesn't read .env itself)
+python3 scripts/run_pipeline.py --pipeline ~/finetuner/pipelines/<id>   # add --skip-general for faster loops
+```
+It calls the real skills as subprocesses, like ScienceClaw's executor does, using
+`$SCIENCECLAW_DIR/skills/<name>` (default `~/scienceclaw`, where `scripts/install.sh` copies them) or else this
+repo's `skills/`:
+
+1. BenchGen (background job, no `--run-id`, so it writes `<pipeline>/bench`) runs while DataGen runs. After
+   both finish, DataGen's M4 is re-run against dev + held-out for the contamination check.
+2. `finetune-submit` (its pre-flight decides; a "wait" is retried, a "refuse" ends the run), then poll
+   `finetune-status` until it reports done.
+3. Poll `finetune-eval` (dev) until done; its `report.json` is converted to §3.4 by `ftc/report_convert.py`.
+4. `finetune-decide`, then act on the action:
+   - `retrain`: same data, `--retrain-config-path`.
+   - `regenerate_data`: DataGen can't read `data_feedback.json` yet, so the runner writes
+     `loops/<n>/task_spec_data.json`, with the weak categories first (twice) in `edge_cases` and `n_examples` raised,
+     and runs DataGen on that.
+   - `stop`: score the held-out split once, then write `final/final_report.json`.
+
+State: `runner.json` (pid, current step, error), log: `runner.log`, both shown in the dashboard. **■ Stop**
+sends SIGTERM: the runner stops after its current call. Jobs it already launched (training, eval, BenchGen) keep
+running. A restart picks up where it was: DataGen, BenchGen and submit all resume or reuse.
+Needs: the Brev machine set up (`setup_brev.sh`, `install.sh`) and keys loaded. All skills it calls are on main.
+Test without GPU or API: `python3 tests/test_run_pipeline.py` (stand-in skills, 3 loops).
+
+## 7. Open items for the team
+- Status per box: `docs/wireframe_v0.2.md`. BenchGen is on main (`skills/finetune-bench-gen`, see
+  `docs/benchgen-progress.md`). The Evaluator on main is `skills/finetune-decide` from `feat/evaluator`;
+  `worktree-evaluator-decide` is an alternative version of the same skill.
+- `finetune-eval` writes its own `report.json`, not §3.4. `run_pipeline.py` converts it (`ftc/report_convert.py`), but
+  under the ScienceClaw reactor nothing does, and `finetune-decide` reads §3.4 only. Either Eval writes
+  `loops/<n>/eval/eval_report.json` itself, or the Evaluator calls `report_convert`.
+- ReportAgent (HF push, model card, Infinite post) is not built; the runner writes `final/final_report.json` for it.
+- DataGen doesn't read `--data-feedback-path` yet (the runner works around it, see §6) and ignores the v2-only
+  fields (seed examples, coverage topics). Using `seed_examples` as few-shot examples is a cheap win.
+- `finetune-eval` reports only a stage name while running (no item counts), so the Evaluation panel shows its
+  stage list.

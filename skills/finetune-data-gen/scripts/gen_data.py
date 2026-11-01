@@ -1,34 +1,32 @@
 #!/usr/bin/env python3
 """DataGen skill: spec JSON -> verified chat-format training data (M2 + M3, then M4)."""
-import argparse, hashlib, importlib.util, json, os, re, sys, threading, time
+import argparse, json, os, sys, threading, time
 _T_START = time.time()   # process start; the 30 s skill limit counts from here
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]          # .../scienceclaw
 sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))   # shared finetune_common/ lives here
 
-
-def _load_llm_client():
-    """Load core/llm_client.py by file path. A normal `import core.llm_client` first runs
-    core/__init__.py, which imports ScienceClaw's whole skill system (registry, executor, DAG,
-    tree search, ...) - several seconds on /mnt/c in WSL, out of a 30 s budget."""
-    if "core.llm_client" in sys.modules:
-        return sys.modules["core.llm_client"]
-    spec = importlib.util.spec_from_file_location("datagen_llm_client", REPO_ROOT / "core" / "llm_client.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-_llm_mod = _load_llm_client()
-LLMClient, get_llm_client = _llm_mod.LLMClient, _llm_mod.get_llm_client
 # Helper modules live in ../lib, NOT scripts/: the ScienceClaw executor runs the first *.py it finds
 # in scripts/, so gen_data.py must be the only one there.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
-from format_data import format_run   # M4
+from format_data import format_run, BENCH_DIR   # M4
+
+# Shared code (LLM access with hard timeouts, JSON parsing, timing model, spec handling) lives in
+# scienceclaw/finetune_common so DataGen and BenchGen use one copy. Some names are re-exported
+# here only for the tests (noqa).
+from finetune_common import llm as L, jsonparse, timing as T
+from finetune_common.llm import LLMClient, get_llm_client, make_client, Abandoned, call_llm, call_timeout, log, EMPTY_REPLIES
+from finetune_common.jsonparse import (FENCE_RE, TRAILING_COMMA_RE, STRICT_SUFFIX, parse_json_list,
+                                       parse_json_object as _parse_json_object, call_json_list, dump_bad_output)
+from finetune_common.timing import est_round, plan_batch, update_per_ex, regen_fits
+from finetune_common.spec import (REQUIRED_KEYS, load_spec, SPEC_PROMPT, GENERIC_SPEC, draft_spec,  # noqa: F401
+                                  default_run_id, spec_hash)
+from finetune_common.jsonl import read_jsonl, append_jsonl
 
 RUNS_DIR = Path.home() / ".scienceclaw/finetune/runs"
-REQUIRED_KEYS = ["task", "io_format", "success_criteria", "edge_cases", "n_examples"]
+jsonparse.BAD_OUTPUT_DIR = RUNS_DIR
 
 GEN_MAX_TOKENS = 3000   # ~10 examples fit easily; Gemini adds its own thinking headroom on top
 GEN_TEMPERATURE = 0.9   # high = more variety between examples
@@ -37,15 +35,11 @@ AVOID_LIMIT = 40        # only show the most recent N prompts to keep the prompt
 VERIFY_MAX_TOKENS = 1500  # ~10 short verdicts
 VERIFY_TEMPERATURE = 0.1  # the reviewer should be consistent, not creative
 MAX_REGEN_ROUNDS = 2      # rejected examples are regenerated at most twice
+
 # --- time management (Step 7). The skill executor kills the process at 30 s. ---
 SKILL_DEADLINE_S = 27.0   # default --time-budget: everything must finish by this, from process start
-CALL_OVERHEAD_S = 2.5     # fixed latency per LLM call, on top of time that scales with batch size
 PER_EX_INIT = 1.2         # starting guess: seconds per example for a full M2+M3 round (measured ~1.0-1.6)
-SAFETY = 1.3              # plan rounds as if they take 30% longer than estimated (Gemini latency varies)
 MIN_BATCH = 3             # don't start a batch smaller than this (unless that's all that's needed)
-LLM_CALL_CAP_S = 18.0     # hard limit for any single LLM call
-MIN_CALL_S = 2.0          # don't start an LLM call with less than this much time left
-CALL_MARGIN_S = 0.5       # keep this much time after a call for writing files
 PARALLEL_PENALTY = 1.35   # concurrent batches finish slower than a single one; plan them as 35% longer
 FEEDBACK_LIMIT = 10       # max reject reasons carried into the next M2 prompt
 MAX_TOP_UPS = 2           # if M4 drops rows (dups/invalid), generate the shortfall at most this many times
@@ -85,88 +79,9 @@ Return ONLY a JSON list with one item per example, in order:
 
 
 # ---------- Step 1: input ----------
-def load_spec(path: str) -> dict:
-    """Read the spec JSON and fail fast if a required key is missing."""
-    p = Path(path)
-    if not p.exists():
-        raise ValueError(f"spec file not found: {path}")
-    spec = json.loads(p.read_text())
-    missing = [k for k in REQUIRED_KEYS if k not in spec]
-    if missing:
-        raise ValueError(f"spec missing keys: {missing}")
-    return spec
 
 
 # ---------- M1-lite: draft a spec from a free-text request ----------
-SPEC_PROMPT = """Turn this fine-tuning request into a task spec for generating training data.
-
-REQUEST: {query}
-
-Return ONLY a JSON object with exactly these keys:
-"task": one sentence describing what the fine-tuned model should do,
-"io_format": the exact shape/style of the assistant reply,
-"success_criteria": a list of 3-5 concrete, checkable criteria every reply must meet,
-"edge_cases": a list of 3-5 kinds of tricky or unusual user inputs the model must handle"""
-
-GENERIC_SPEC = {
-    "io_format": "A helpful, accurate assistant reply that fully addresses the user's message, "
-                 "in the style and format the task implies.",
-    "success_criteria": ["The reply is correct and accurate",
-                         "The reply directly addresses the user's message",
-                         "The reply follows the style and format the task implies"],
-    "edge_cases": ["Ambiguous requests that need a clarifying question",
-                   "Requests that contain a false premise",
-                   "Very short or very long user messages"],
-}
-
-
-def _parse_json_object(raw: str):
-    text = (raw or "").strip()
-    if m := FENCE_RE.search(text):
-        text = m.group(1).strip()
-    a, b = text.find("{"), text.rfind("}")
-    if a == -1 or b <= a:
-        return None
-    for variant in (text[a:b + 1], TRAILING_COMMA_RE.sub(r"\1", text[a:b + 1])):
-        try:
-            obj = json.loads(variant)
-            return obj if isinstance(obj, dict) else None
-        except json.JSONDecodeError:
-            continue
-    return None
-
-
-def draft_spec(llm, query: str, n_examples: int, deadline: float = None) -> dict:
-    """Stand-in for M1 until it exists: one LLM call turns the request into a spec.
-    Missing or malformed fields fall back to GENERIC_SPEC, so this never fails."""
-    spec = {"task": query.strip(), **GENERIC_SPEC}
-    timeout = call_timeout(deadline)
-    obj = None
-    if timeout >= MIN_CALL_S:
-        obj = _parse_json_object(call_llm(llm, SPEC_PROMPT.format(query=query), 1500, 0.3, timeout))
-    if obj:
-        if isinstance(obj.get("task"), str) and obj["task"].strip():
-            spec["task"] = obj["task"].strip()
-        if isinstance(obj.get("io_format"), str) and obj["io_format"].strip():
-            spec["io_format"] = obj["io_format"].strip()
-        for k in ("success_criteria", "edge_cases"):
-            v = [str(x).strip() for x in obj.get(k) or [] if str(x).strip()] if isinstance(obj.get(k), list) else []
-            if v:
-                spec[k] = v[:6]
-        log(f"[M1-lite] drafted spec: {spec['task']!r}")
-    else:
-        log("[M1-lite] could not draft a spec; using the generic template with the request as the task")
-    spec.update({"n_examples": int(n_examples), "system_prompt": None,
-                 "source": {"query": query, "drafted_by": "M1-lite" if obj else "generic-template"}})
-    return spec
-
-
-def default_run_id(spec_path: str = None, query: str = None) -> str:
-    """Stable id so repeated calls with the same input resume the same run."""
-    if spec_path:
-        return Path(spec_path).stem
-    slug = re.sub(r"[^a-z0-9]+", "-", query.lower()).strip("-")[:40].strip("-") or "run"
-    return f"{slug}-{hashlib.sha1(query.strip().encode()).hexdigest()[:6]}"
 
 
 # ---------- Step 7: resumable state ----------
@@ -180,152 +95,9 @@ def save_state(run_dir: Path, state: dict) -> None:
 
 
 # ---------- LLM wrapper ----------
-class Abandoned(str):
-    """Empty result returned when WE cut a call off at its time limit (not an API failure)."""
-
-
-def call_llm(llm, prompt: str, max_tokens: int, temperature: float, timeout: float = None) -> str:
-    """Call the shared ScienceClaw client with a HARD time limit.
-    - llm_client ignores its own timeout argument and can sleep through retries, so the call runs
-      in a daemon thread and is abandoned after `timeout` seconds (it dies when the process exits).
-    - llm_client never raises on API errors; it returns "". Exceptions are caught too -> "".
-    - llm_client prints errors to stdout; main() points sys.stdout at stderr while it runs,
-      so even a late print from an abandoned thread cannot corrupt the JSON result."""
-    box = {}
-    def run():
-        try:
-            box["out"] = llm.call(prompt, max_tokens=max_tokens, temperature=temperature)
-        except Exception as e:                      # defensive: llm_client normally doesn't raise
-            box["err"] = e
-    th = threading.Thread(target=run, daemon=True)
-    th.start()
-    th.join(timeout)
-    if th.is_alive():
-        log(f"[LLM] call abandoned after {timeout:.1f}s (hard per-call limit)")
-        return Abandoned("")
-    if "err" in box:
-        log(f"[LLM] call raised {type(box['err']).__name__}: {box['err']}")
-        return ""
-    return box.get("out") or ""
-
-
-EMPTY_REPLIES = [0]               # empty LLM replies seen (rate-limit signal for --parallel)
-_EMPTY_LOCK = threading.Lock()
-
-
-def call_timeout(deadline) -> float:
-    """Time allowed for the next LLM call: capped, and leaving a margin before the deadline."""
-    if deadline is None:
-        return LLM_CALL_CAP_S
-    return min(LLM_CALL_CAP_S, deadline - time.time() - CALL_MARGIN_S)
-
-
-def log(msg: str) -> None:
-    """Progress messages go to stderr so stdout stays clean JSON for ScienceClaw."""
-    print(msg, file=sys.stderr, flush=True)
 
 
 # ---------- Step 4: robust JSON ----------
-FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.S | re.I)
-TRAILING_COMMA_RE = re.compile(r",\s*([\]}])")
-STRICT_SUFFIX = ("\n\nIMPORTANT: your previous reply could not be parsed as JSON. "
-                 "Reply with ONLY the JSON list: start with [ and end with ]. No other text.")
-
-
-def _as_list(obj) -> list:
-    """Accept a list, a single object, or a wrapper like {"examples": [...]}."""
-    if isinstance(obj, list):
-        return obj
-    if isinstance(obj, dict):
-        if "messages" in obj or "keep" in obj:
-            return [obj]
-        for v in obj.values():
-            if isinstance(v, list) and v and all(isinstance(x, dict) for x in v):
-                return v
-    return []
-
-
-def _filter(items: list, required_key) -> list:
-    return [x for x in items if isinstance(x, dict) and (required_key is None or required_key in x)]
-
-
-def _salvage_objects(text: str) -> list:
-    """Pull out every complete top-level {...} object, even if the list around it is broken
-    or cut off. raw_decode handles braces/brackets inside strings correctly."""
-    dec, out, i = json.JSONDecoder(), [], 0
-    while (i := text.find("{", i)) != -1:
-        try:
-            obj, end = dec.raw_decode(text, i)
-            out.append(obj)
-            i = end                      # skip past this whole object
-        except json.JSONDecodeError:
-            i += 1                       # not a complete object here; try the next "{"
-    return out
-
-
-def parse_json_list(raw: str, required_key: str = None) -> list:
-    """Turn LLM text into a list of dicts. Returns [] if nothing usable.
-    required_key: keep only dicts containing this key ("messages" for M2, "keep" for M3)."""
-    text = (raw or "").strip()
-    if not text:
-        return []
-    if m := FENCE_RE.search(text):
-        text = m.group(1).strip()
-    candidates = [text]
-    a, b = text.find("["), text.rfind("]")
-    if a != -1 and b > a:
-        candidates.append(text[a:b + 1])
-    for c in candidates:                                  # 1) clean parse, 2) trailing-comma fix
-        for variant in (c, TRAILING_COMMA_RE.sub(r"\1", c)):
-            try:
-                items = _filter(_as_list(json.loads(variant)), required_key)
-            except json.JSONDecodeError:
-                continue
-            if items:
-                return items
-    return _filter(_salvage_objects(text), required_key)  # 3) salvage what's complete
-
-
-def dump_bad_output(label: str, raw: str) -> None:
-    """Append unparseable replies to a log so you can see what the model actually sent."""
-    RUNS_DIR.mkdir(parents=True, exist_ok=True)
-    with (RUNS_DIR / "_bad_outputs.log").open("a") as f:
-        f.write(f"===== {time.strftime('%Y-%m-%d %H:%M:%S')} [{label}] {len(raw)} chars\n{raw[:4000]}\n")
-
-
-def call_json_list(llm, prompt: str, max_tokens: int, temperature: float, label: str,
-                   required_key: str = None, attempts: int = 2, deadline: float = None) -> list:
-    """Call the LLM and return a parsed JSON list, retrying on failure.
-    - Empty reply -> API error/rate limit/timeout: retry the same prompt.
-    - Unparseable reply -> log it, retry with a stricter instruction and lower temperature.
-    - deadline: absolute time; an attempt only starts if at least MIN_CALL_S is left."""
-    for attempt in range(1, attempts + 1):
-        timeout = call_timeout(deadline)
-        if timeout < MIN_CALL_S:
-            log(f"[{label}] attempt={attempt} skipped: only {max(timeout, 0):.1f}s left before the deadline")
-            break
-        t = time.time()
-        raw = call_llm(llm, prompt, max_tokens, temperature, timeout)
-        items = parse_json_list(raw, required_key)
-        dt = time.time() - t
-        if items:
-            log(f"[{label}] attempt={attempt} parsed={len(items)} in {dt:.1f}s")
-            return items
-        if isinstance(raw, Abandoned):
-            log(f"[{label}] attempt={attempt} cut off at the time limit after {dt:.1f}s")
-            break                                # a retry would get even less time: give up now
-        elif not raw.strip():
-            with _EMPTY_LOCK:                    # only real empty API replies count as a rate-limit signal
-                EMPTY_REPLIES[0] += 1
-            log(f"[{label}] attempt={attempt} empty reply from the API (error / rate limit) in {dt:.1f}s")
-        else:
-            log(f"[{label}] attempt={attempt} unparseable reply ({len(raw)} chars) in {dt:.1f}s "
-                f"-> saved to _bad_outputs.log")
-            dump_bad_output(label, raw)
-            if STRICT_SUFFIX not in prompt:
-                prompt += STRICT_SUFFIX
-            temperature = min(temperature, 0.5)
-    return []
 
 
 # ---------- Step 3: M2 generate ----------
@@ -422,27 +194,6 @@ def _reasons(rejected: list) -> list:
 
 
 # ---------- Step 7: timing model ----------
-def est_round(k: int, per_ex: float) -> float:
-    """Planned duration of one M2+M3 round for k examples, including the safety factor."""
-    return SAFETY * (2 * CALL_OVERHEAD_S + per_ex * k)
-
-
-def plan_batch(remaining: float, per_ex: float, max_k: int) -> int:
-    """Largest k <= max_k whose planned round fits in `remaining` seconds (0 if none)."""
-    k = int((remaining / SAFETY - 2 * CALL_OVERHEAD_S) / max(per_ex, 1e-6))
-    return max(0, min(k, max_k))
-
-
-def update_per_ex(per_ex: float, took: float, k: int) -> float:
-    """Blend in a new observation. Bigger rounds are weighted more: a 1-example round is mostly
-    fixed overhead and says little about per-example cost."""
-    obs = max(0.2, (took - 2 * CALL_OVERHEAD_S) / max(k, 1))
-    alpha = min(0.6, k / 15)
-    return (1 - alpha) * per_ex + alpha * obs
-
-
-def regen_fits(need: int, per_ex: float, deadline: float) -> bool:
-    return time.time() + est_round(need, per_ex) <= deadline
 
 
 def generate_and_verify(llm, llm_v, spec: dict, batch_size: int, focus: str, avoid: list[str],
@@ -488,13 +239,6 @@ def generate_and_verify(llm, llm_v, spec: dict, batch_size: int, focus: str, avo
 
 
 # ---------- I/O helpers ----------
-def append_jsonl(path: Path, rows: list) -> None:
-    with path.open("a") as f:
-        for r in rows:
-            f.write(json.dumps(r) + "\n")
-
-def read_jsonl(path: Path) -> list:
-    return [json.loads(l) for l in path.read_text().splitlines() if l.strip()] if path.exists() else []
 
 
 def existing_prompts(run_dir: Path) -> list[str]:
@@ -508,7 +252,7 @@ def verify_pending(llm_v, spec: dict, run_dir: Path, state: dict, deadline: floa
     Second chance only: anything still unverified goes to unverified.jsonl for good."""
     f = run_dir / "pending_verify.jsonl"
     items = read_jsonl(f)
-    if not items or call_timeout(deadline) < MIN_CALL_S:
+    if not items or call_timeout(deadline) < L.MIN_CALL_S:
         return
     log(f"[M3] verifying {len(items)} pending examples from the previous call")
     ok, bad, unv = verify_batch(llm_v, spec, items, deadline)
@@ -524,6 +268,45 @@ def verify_pending(llm_v, spec: dict, run_dir: Path, state: dict, deadline: floa
 
 
 # ---------- main loop ----------
+def find_bench(arg, spec, spec_path=None):
+    """--bench value, or auto-detect a FROZEN BenchGen benchmark with the same spec hash:
+    first <pipeline>/bench next to the spec (docs/spec_and_io.md), then ~/.scienceclaw/finetune/bench/*."""
+    if arg and arg.lower() == "none":
+        return None
+    if arg:
+        return arg
+    want = spec_hash(spec)
+    near = [Path(spec_path).resolve().parent / "bench" / "bench_meta.json"] if spec_path else []
+    for meta_f in near + sorted(BENCH_DIR.glob("*/bench_meta.json")):
+        if not meta_f.exists():
+            continue
+        try:
+            meta = json.loads(meta_f.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if meta.get("frozen") and meta.get("spec_hash") == want:
+            log(f"[M4] contamination check against benchmark '{meta_f.parent.name}' (same spec)")
+            return meta_f.parent
+    log("[M4] no benchmark for this spec found; skipping the contamination check")
+    return None
+
+
+def pending_bench(spec_path):
+    """A BenchGen benchmark for this pipeline that exists but is NOT frozen yet (<pipeline>/bench next to
+    the spec). DataGen then waits instead of writing train.jsonl without the contamination check."""
+    if not spec_path:
+        return None
+    b = Path(spec_path).resolve().parent / "bench"
+    meta = b / "bench_meta.json"
+    if (b / "state.json").exists() and not (meta.exists() and json.loads(meta.read_text()).get("frozen")):
+        return b
+    return None
+
+
+NO_BENCH_WARNING = ("no frozen benchmark found for this spec: contamination check skipped. Run BenchGen first, "
+                    "or call DataGen again after it finishes (M4 then re-checks automatically)")
+
+
 def build_result(run_id, state, target, fmt, run_dir, extra=None) -> dict:
     result = {"run_id": run_id, "done": state["done"], "target": target,
               "train_examples": fmt["kept"] if fmt else None,
@@ -531,11 +314,21 @@ def build_result(run_id, state, target, fmt, run_dir, extra=None) -> dict:
               "raw_kept": state["kept"], "rejected_total": state.get("rejected", 0),
               "unverified_total": state.get("unverified", 0),
               "pending_verify": len(read_jsonl(Path(run_dir) / "pending_verify.jsonl")),
-              "format": ({k: fmt[k] for k in ("read", "invalid", "exact_duplicates", "near_duplicates",
-                                              "contaminated")} if fmt else None),
+              "format": ({k: fmt.get(k) for k in ("read", "invalid", "exact_duplicates", "near_duplicates",
+                                                  "contaminated", "bench")} if fmt else None),
               "run_dir": str(run_dir), "elapsed_s": round(time.time() - _T_START, 1)}
     result.update(extra or {})
     return result
+
+
+def save_result(result) -> None:
+    """Also write the result to <run_dir>/result.json so callers can read it as a JSON file."""
+    try:
+        f = Path(result["run_dir"]) / "result.json"
+        result["result_path"] = str(f)
+        f.write_text(json.dumps(result, indent=2))
+    except Exception as e:                      # never fail the call over this
+        log(f"[result] could not write result.json: {e}")
 
 
 def summary_line(result) -> str:
@@ -546,7 +339,8 @@ def summary_line(result) -> str:
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--spec", default=None, help="Path to task spec JSON (preferred)")
+    p.add_argument("--spec", "--task-spec-path", dest="spec", default=None,
+                   help="Path to task spec JSON (preferred; --task-spec-path is the pipeline hand-off name)")
     p.add_argument("--query", default=None,
                    help="Free-text fine-tuning request; used to draft a spec when --spec is not given")
     p.add_argument("--n-examples", type=int, default=None,
@@ -562,9 +356,15 @@ def main():
     p.add_argument("--parallel", type=int, default=1,
                    help="Batches generated+verified at the same time (different focuses). "
                         "Falls back to 1 automatically if parallel calls come back empty (rate limit)")
+    p.add_argument("--bench", default=None,
+                   help="Benchmark for the contamination check: BenchGen run id, folder or file. "
+                        "Default: a frozen BenchGen benchmark built from the same spec, if one exists. 'none' disables")
     p.add_argument("--verify-backend", default=None,
-                   help="Optional different LLM backend for M3 (anthropic/openai/gemini). Default: same as M2")
-    p.add_argument("--format", default="summary", choices=["summary", "json"])
+                   help="Optional different LLM backend for M3 (gemini/anthropic/openai). Default: same as M2 (gemini)")
+    # Default is JSON: core/skill_executor.py json.loads() stdout, and the agent never passes
+    # --format, so a text default turned every result into {"output": "<text>"}.
+    p.add_argument("--format", default="json", choices=["summary", "json"],
+                   help="json (default, machine-readable) or summary (one human-readable line)")
     a, unknown = p.parse_known_args()   # agents sometimes add flags we don't use (e.g. --max-results)
 
     # Everything llm_client (or an abandoned call thread) prints goes to stderr; only the
@@ -580,16 +380,19 @@ def main():
         result, code = {"error": f"{type(e).__name__}: {e}", "done": False}, 1
     finally:
         sys.stdout = real_stdout
+    if "error" not in result:
+        save_result(result)
     if "error" in result:
         print(json.dumps(result, indent=2), flush=True)
     else:
         print(json.dumps(result, indent=2) if a.format == "json" else summary_line(result), flush=True)
-    if code:
-        sys.exit(code)
+    if code or result.get("state") == "waiting_for_bench":
+        sys.exit(code or 1)        # exit 1: ScienceClaw keeps the hand-off unconsumed and calls again
 
 
 def run(a) -> dict:
     deadline = _T_START + a.time_budget
+    jsonparse.BAD_OUTPUT_DIR = RUNS_DIR
     if not (a.spec or (a.query and a.query.strip())):
         raise ValueError("give --spec <file> or --query <fine-tuning request>")
     a.run_id = a.run_id or default_run_id(a.spec, a.query)
@@ -601,10 +404,29 @@ def run(a) -> dict:
     # Already finished: answer from the saved report without creating an LLM client.
     report_f = run_dir / "format_report.json"
     if state.get("done") and report_f.exists() and (run_dir / "train.jsonl").exists() and saved_spec.exists():
-        log("[run] already done; returning the saved result")
-        target = int(json.loads(saved_spec.read_text())["n_examples"])
-        return build_result(a.run_id, state, target, json.loads(report_f.read_text()), run_dir,
-                            {"batches_this_call": 0})
+        done_spec = json.loads(saved_spec.read_text())
+        target = int(done_spec["n_examples"])
+        fmt = json.loads(report_f.read_text())
+        late = None
+        if not state.get("bench_checked") and (a.bench or "").lower() != "none":
+            late = find_bench(a.bench, done_spec, a.spec)       # a benchmark that froze after we finished?
+        if not late:
+            log("[run] already done; returning the saved result")
+            fmt["bench"] = state.get("bench_checked")
+            warn = [NO_BENCH_WARNING] if not state.get("bench_checked") and (a.bench or "").lower() != "none" else []
+            return build_result(a.run_id, state, target, fmt, run_dir, {"batches_this_call": 0, "warnings": warn})
+        log(f"[M4] benchmark {late} is now available: re-running the contamination check (no LLM)")
+        fmt = format_run(run_dir, bench=late)
+        fmt["bench"] = state["bench_checked"] = str(late)
+        shortfall = target - fmt["kept"]
+        if shortfall <= 0 or state.get("top_ups", 0) >= MAX_TOP_UPS:
+            save_state(run_dir, state)
+            return build_result(a.run_id, state, target, fmt, run_dir, {"batches_this_call": 0})
+        state["top_ups"] = state.get("top_ups", 0) + 1                 # leaked rows removed: generate replacements
+        state["raw_target"] = state.get("raw_target", target) + shortfall
+        state["done"] = False
+        save_state(run_dir, state)
+        log(f"[M4] {shortfall} rows overlapped the benchmark; generating replacements")
 
     llm = get_llm_client("DataGen")
     if a.spec:
@@ -619,7 +441,7 @@ def run(a) -> dict:
     target = int(spec["n_examples"])
     # Separate instance for the verifier: get_llm_client caches ONE global client, so switching
     # backends through it would also switch M2's client.
-    llm_v = LLMClient(agent_name="DataGenVerify", backend=a.verify_backend) if a.verify_backend else llm
+    llm_v = make_client("DataGenVerify", a.verify_backend) if a.verify_backend else llm
     for k in ("rejected", "unverified"):
         state.setdefault(k, 0)
     timing = state.setdefault("timing", {"per_ex": PER_EX_INIT, "rounds": 0})
@@ -686,14 +508,27 @@ def run(a) -> dict:
         batches += 1
         save_state(run_dir, state)
         if not (kept or rejects or unverified):   # nothing came back at all
-            stop_reason = ("time budget used" if call_timeout(deadline) < MIN_CALL_S
+            stop_reason = ("time budget used" if call_timeout(deadline) < L.MIN_CALL_S
                            else "no output from LLM (API error / rate limit?)")
             break
 
     fmt = None
     if state["kept"] >= raw_target:
         # M4: validate + dedup -> train.jsonl. Deterministic and fast (<0.2 s for 2000 rows).
-        fmt = format_run(run_dir)
+        # Inside a pipeline, ITS benchmark is the one the Evaluator scores: wait for it even if another
+        # frozen benchmark for the same spec exists elsewhere.
+        waiting = pending_bench(a.spec) if a.bench is None else None
+        bench = None if waiting else find_bench(a.bench, spec, a.spec)
+        if waiting:
+            log(f"[M4] benchmark {waiting} is still being generated; waiting before writing train.jsonl")
+            save_state(run_dir, state)
+            return build_result(a.run_id, state, target, None, run_dir, {
+                "state": "waiting_for_bench", "waiting_for": str(waiting), "batches_this_call": batches,
+                "stop_reason": "all examples generated; waiting for BenchGen to freeze the benchmark "
+                               "(contamination check) - call again", "sec_per_example": timing["per_ex"]})
+        fmt = format_run(run_dir, bench=bench)
+        fmt["bench"] = str(bench) if bench else None
+        state["bench_checked"] = fmt["bench"]
         shortfall = target - fmt["kept"]
         if shortfall > 0 and state.get("top_ups", 0) < MAX_TOP_UPS:
             state["top_ups"] = state.get("top_ups", 0) + 1
@@ -704,9 +539,10 @@ def run(a) -> dict:
         else:
             state["done"] = True
     save_state(run_dir, state)
+    warnings = [NO_BENCH_WARNING] if fmt and fmt.get("bench") is None and (a.bench or "").lower() != "none" else []
     return build_result(a.run_id, state, target, fmt, run_dir,
                         {"batches_this_call": batches, "stop_reason": stop_reason if not state["done"] else "done",
-                         "sec_per_example": timing["per_ex"], "parallel": parallel})
+                         "sec_per_example": timing["per_ex"], "parallel": parallel, "warnings": warnings})
 
 
 if __name__ == "__main__":

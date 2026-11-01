@@ -222,7 +222,7 @@ pre.cmd { background: var(--surface-2); padding: 8px 10px; border-radius: 8px; o
   <div id="main" style="display:none">
     <div class="hero">
       <div style="flex:1;min-width:0">
-        <div style="display:flex;gap:10px;align-items:center"><h1 class="title" id="title"></h1><span id="status"></span></div>
+        <div style="display:flex;gap:10px;align-items:center"><h1 class="title" id="title"></h1><span id="status"></span><span id="runCtl" style="display:inline-flex;gap:8px;align-items:center"></span></div>
         <p class="task" id="task"></p>
         <div class="chips" id="chips"></div>
       </div>
@@ -240,7 +240,8 @@ pre.cmd { background: var(--surface-2); padding: 8px 10px; border-radius: 8px; o
 
     <div class="grid2">
       <div class="card" id="panel"></div>
-      <div class="card"><h3>Activity</h3><div class="feed" id="feed"></div></div>
+      <div class="card"><h3>Activity</h3><div class="feed" id="feed"></div>
+        <details id="runLogBox" style="display:none;margin-top:10px"><summary class="muted">Runner log</summary><pre class="cmd" id="runLog" style="max-height:300px;font-size:11px"></pre></details></div>
     </div>
 
     <div class="card" style="margin-top:16px" id="loopsCard">
@@ -507,12 +508,15 @@ function nodeSummary(k) {
   if (k === "bench") { const p = S.bench.progress || {}, sp = S.bench.splits || {};
     if (sp.dev && sp.heldout) return {kv: `<b>${sp.dev.n}</b> dev · <b>${sp.heldout.n}</b> held-out`, pct: 1};
     if (p.total) return {kv: `<b>${fmtNum(p.done)}</b> / ${fmtNum(p.total)} items`, pct: p.done / p.total}; return {kv: "waiting"}; }
-  if (k === "train") { const j = latestJob(); if (!j) return {kv: "waiting for data"};
+  if (k === "train") { const j = latestJob(), pf = preflightNotice();
+    if (pf) return {kv: `<b>${esc(pf.title)}</b>`};
+    if (!j) return {kv: "waiting for data"};
     const last = j.loss[j.loss.length - 1];
     if (j.state === "done") return {kv: `loss <b>${fmtNum(j.metrics?.train_loss, 3)}</b> · ${fmtDur(j.elapsed_s)}`, pct: 1};
     return {kv: `step <b>${fmtNum(j.step)}</b>/${fmtNum(j.max_steps)}${last ? ` · loss <b>${fmtNum(last.loss, 3)}</b>` : ""}`, pct: j.max_steps ? j.step / j.max_steps : null}; }
   if (k === "eval") { const l = curLoop(), p = l.eval_progress, r = l.eval_report;
-    if (p && p.state === "running") return {kv: `${esc(p.phase || "")} · <b>${fmtNum(p.done)}</b>/${fmtNum(p.total)}`, pct: p.total ? p.done / p.total : null};
+    if (p && p.state === "running") return p.total ? {kv: `${esc(p.phase || "")} · <b>${fmtNum(p.done)}</b>/${fmtNum(p.total)}`, pct: p.done / p.total}
+      : {kv: `<b>${esc(p.phase || "running")}</b>`};
     if (r) return {kv: `tuned <b>${fmtPct(r.systems.tuned.score)}</b> vs few-shot ${fmtPct(r.systems.base_fewshot.score)}`, pct: 1};
     return {kv: "waiting for adapter"}; }
   if (k === "decide") { const d = curLoop().decision; if (!d) return {kv: st === "running" ? "checking stop rules…" : "after evaluation"};
@@ -536,7 +540,33 @@ function render() {
   ].filter(c => c[1]).map(c => `<span class="chip">${c[0]} <b>${esc(c[1])}</b></span>`).join("");
   $("loopV").textContent = `${S.loop}${S.max_loops ? " / " + S.max_loops : ""}`;
   $("bestV").textContent = fmtPct(bestDev());
-  renderMap(); renderPanel(); renderFeed(); renderLoops();
+  renderMap(); renderPanel(); renderFeed(); renderLoops(); renderRunner();
+}
+
+// ▶ Start / ■ Stop: runs scripts/run_pipeline.py (the real skills) on the machine the dashboard runs on.
+function renderRunner() {
+  const r = S.runner || {}, sim = JSON.stringify(S.links || {}).includes("/_sim/");
+  let h = "";
+  if (r.alive) h = `<span class="muted" style="font-size:12px">runner: ${esc(r.step || "running")}</span><button class="btn" id="stopBtn">■ Stop</button>`;
+  else if (!sim && S.status !== "done") {
+    const why = r.state === "failed" || r.state === "died" ? `<span class="badge failed"><span class="ic">✕</span>Runner ${esc(r.state)}</span>` : r.state === "stopped" ? `<span class="muted" style="font-size:12px">stopped</span>` : "";
+    h = `${why}<button class="btn primary" id="startBtn" title="Run the real pipeline on this machine: DataGen, BenchGen, training (GPU, pre-flight checked), eval, Evaluator">▶ ${r.state ? "Restart" : "Start"} pipeline</button>`;
+  }
+  const ctl = $("runCtl"); if (ctl.dataset.h !== h) { ctl.innerHTML = h; ctl.dataset.h = h;
+    $("startBtn")?.addEventListener("click", startRun); $("stopBtn")?.addEventListener("click", stopRun); }
+  const box = $("runLogBox"); box.style.display = (r.log_tail || []).length ? "" : "none";
+  $("runLog").textContent = (r.error ? "ERROR: " + r.error + "\n\n" : "") + (r.log_tail || []).join("\n");
+}
+async function startRun() {
+  if (!confirm("Start the real pipeline on this machine?\n\nIt runs DataGen + BenchGen (API calls), then LoRA training on the GPU (finetune-submit's pre-flight checks decide), evaluation and the Evaluator, looping until it stops.\n\nNeeds the Brev machine set up (scripts/setup_brev.sh, install.sh, .env keys loaded).")) return;
+  $("startBtn").disabled = true;
+  const r = await fetch(`/api/pipelines/${encodeURIComponent(PID)}/start`, {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"}).then(r => r.json());
+  if (!r.ok) alert(r.error || "Could not start");
+}
+async function stopRun() {
+  if (!confirm("Stop the runner? It stops after its current step. Jobs it already launched (training, eval) keep running on the GPU.")) return;
+  const r = await fetch(`/api/pipelines/${encodeURIComponent(PID)}/stop`, {method: "POST"}).then(r => r.json());
+  if (!r.ok) alert(r.error || "Could not stop");
 }
 function lastDoneStage() { let last = "spec"; STAGES.forEach(s => { if (S.stages[s.key].status === "done") last = s.key; }); return last; }
 
@@ -669,23 +699,54 @@ function pBench() {
     hbars($("bCat"), Object.entries(sp.dev?.by_category || {}).map(([k, v]) => ({label: k, values: [{name: "items", color: "--s1", v}]})), {aria: "Dev items per category", empty: "–"});
     hbars($("bSrc"), Object.entries(sp.heldout?.by_source || {}).map(([k, v]) => ({label: k, values: [{name: "items", color: "--s1", v}]})), {aria: "Held-out items by source", empty: "–"});
     if (sp.dev) fetch(`/api/file?p=${encodeURIComponent(PID)}&path=bench/dev.jsonl&n=4`).then(r => r.json()).then(r => { const el = $("bSample"); if (!el || !r.lines) return;
-      el.classList.remove("muted"); el.innerHTML = r.lines.map(l => { try { const it = JSON.parse(l); return `<div class="ex"><div class="muted" style="font-size:11.5px">${esc(it.id)} · ${esc(it.category)} · ${esc(it.difficulty)} · ${esc(it.source)}</div><div class="u">${esc(it.question)}</div><div class="a">${esc(it.reference)}</div></div>`; } catch { return ""; } }).join(""); });
+      el.classList.remove("muted"); el.innerHTML = r.lines.map(l => { try { const it = JSON.parse(l); return `<div class="ex"><div class="muted" style="font-size:11.5px">${esc(it.id)} · ${esc(it.category)} · ${esc(it.difficulty)} · ${esc(it.source)}</div><div class="u">${esc(it.question || (it.messages || []).filter(m => m.role === "user").map(m => m.content).join(" "))}</div><div class="a">${esc(it.reference)}</div></div>`; } catch { return ""; } }).join(""); });
   }};
 }
 
+// A pre-flight "wait" / "refuse" / "reused" that happened AFTER the latest job started (no job folder for it).
+function preflightNotice() {
+  const e = S.train_last_event; if (!e || !e.msg) return null;
+  const m = e.msg;
+  if (/^Pre-flight wait/i.test(m)) return {kind: "warn", title: "pre-flight: waiting", msg: m};
+  if (/^Pre-flight refuse/i.test(m)) return {kind: "warn", title: "pre-flight: refused", msg: m};
+  if (/^Skipped training/i.test(m)) return {kind: "stop", title: "reused earlier job", msg: m};
+  return null;
+}
+
+function preflightSection(j) {
+  const pf = j.preflight; if (!pf) return "";
+  const mark = c => c.ok ? `<span class="badge done"><span class="ic">✓</span>OK</span>`
+    : c.overridden ? `<span class="badge running"><span class="ic"></span>Overridden</span>` : `<span class="badge failed"><span class="ic">✕</span>Failed</span>`;
+  const used = pf.pipeline_gpu_hours_used, budget = pf.pipeline_gpu_hours_budget;
+  const took = j.state === "done" && j.elapsed_s ? ` · took ${fmtDur(j.elapsed_s)}` : "";
+  const gpu = budget ? `<div class="tile" style="margin-top:10px"><div class="l">Pipeline GPU budget (before this job)</div>
+      <div class="v" style="font-size:18px">${fmtNum(used, 2)} h <small>of ${fmtNum(budget, 1)} h used</small></div>
+      <div class="bar ${used / budget > 0.8 ? "" : "done"}"><i style="width:${Math.min(100, used / budget * 100)}%"></i></div></div>` : "";
+  return `<div class="sec"><h4>Pre-flight checks <span class="muted">(automatic, no human OK needed)</span></h4>
+    <div class="callout ${pf.decision === "launch" && !pf.clamped ? "stop" : "warn"}"><b>${esc(pf.decision)}${pf.clamped ? " (shortened)" : ""}</b>: ${esc(pf.reason)}
+      ${pf.clamped?.epochs ? `<div style="font-size:12.5px">Epochs cut from <b>${esc(pf.clamped.epochs[0])}</b> to <b>${esc(pf.clamped.epochs[1])}</b> to fit ${esc(pf.clamped.because)}. Scores from this run may be lower than a full run would give.</div>` : ""}
+      <div class="muted" style="font-size:12px">estimated ${fmtDur(pf.estimate_s)}${took} · ${fmtNum(pf.s_per_example_epoch, 2)} s per example-epoch, learned from ${fmtNum(pf.speed_from_n_runs)} past runs</div></div>
+    ${gpu}
+    <table class="t" style="margin-top:10px"><tr><th>check</th><th>result</th><th>detail</th></tr>${(pf.checks || []).map(c =>
+      `<tr><td>${esc(c.check)}</td><td>${mark(c)}</td><td>${esc(c.detail)}</td></tr>`).join("")}</table></div>`;
+}
+
 function pTrain() {
-  if (!S.train.length) return {html: `<p class="muted">No training job yet. The Trainer starts when the training data is ready.</p>`};
+  const notice = preflightNotice(), noticeHtml = notice ? `<div class="callout ${notice.kind}" style="margin-bottom:12px">${esc(notice.msg)}</div>` : "";
+  if (!S.train.length) return {html: noticeHtml + `<p class="muted">No training job yet. The Trainer starts when the training data is ready; finetune-submit's pre-flight checks decide whether to launch.</p>`};
   const jobs = S.train, j = jobs[jobs.length - 1], c = j.config || {}, last = j.loss[j.loss.length - 1];
   const tiles = `<div class="tiles">
     <div class="tile"><div class="v">${fmtNum(j.step)}<small> / ${fmtNum(j.max_steps)}</small></div><div class="l">step · epoch ${fmtNum(j.epoch, 2)}</div><div class="bar ${j.state === "done" ? "done" : ""}"><i style="width:${j.max_steps ? j.step / j.max_steps * 100 : 0}%"></i></div></div>
     <div class="tile"><div class="v">${last ? fmtNum(last.loss, 3) : "–"}</div><div class="l">latest train loss</div></div>
     <div class="tile"><div class="v">${j.eval_loss.length ? fmtNum(j.eval_loss[j.eval_loss.length - 1].loss, 3) : "–"}</div><div class="l">latest eval loss</div></div>
     <div class="tile"><div class="v">${j.state === "done" ? fmtDur(j.elapsed_s) : fmtDur(j.eta_s)}</div><div class="l">${j.state === "done" ? "runtime" : "time left (est.)"}</div></div></div>`;
-  const cfg = `<div class="chips">${[["model", (c.model || "").split("/").pop()], ["LoRA r", c.rank], ["α", c.alpha], ["lr", c.lr], ["epochs", c.epochs], ["batch", c.batch_size && `${c.batch_size}×${c.grad_accum}`], ["examples", j.dataset?.n_examples]].filter(x => x[1] != null).map(x => `<span class="chip">${x[0]} <b>${esc(x[1])}</b></span>`).join("")}</div>`;
+  const cfg = `<div class="chips">${[["model", (c.model || "").split("/").pop()], ["LoRA r", c.rank], ["α", c.alpha], ["lr", c.lr], ["epochs", j.requested_config && j.requested_config.epochs != null && j.requested_config.epochs != c.epochs
+    ? `${c.epochs} (asked ${j.requested_config.epochs}, clamped)` : c.epochs], ["batch", c.batch_size && `${c.batch_size}×${c.grad_accum}`], ["examples", j.dataset?.n_examples]].filter(x => x[1] != null).map(x => `<span class="chip">${x[0]} <b>${esc(x[1])}</b></span>`).join("")}</div>`;
   const hist = `<table class="t" style="margin-top:12px"><tr><th>loop</th><th>job</th><th>config</th><th class="n">train loss</th><th class="n">eval loss</th><th>state</th></tr>${jobs.map(x =>
     `<tr><td>${x.loop ?? "–"}</td><td class="mono">${esc(x.job_id)}</td><td>lr ${esc(x.config?.lr)} · ${esc(x.config?.epochs)} ep · r ${esc(x.config?.rank)}</td><td class="n">${fmtNum(x.metrics?.train_loss, 3)}</td><td class="n">${fmtNum(x.metrics?.eval_loss, 3)}</td><td>${badge({starting: "running", running: "running", done: "done", failed: "failed"}[x.state] || "pending")}</td></tr>`).join("")}</table>`;
   const err = j.error ? `<div class="callout warn sec"><b>Training failed:</b> <span class="mono">${esc(j.error)}</span></div>` : "";
-  return {html: tiles + cfg + `<div class="sec"><h4>Loss by training step (live) · loop ${j.loop ?? "?"}</h4><div id="lossChart"></div></div>` + err + `<div class="sec"><h4>All training runs</h4>${hist}</div>`,
+  return {html: noticeHtml + tiles + cfg + `<div class="sec"><h4>Loss by training step (live) · loop ${j.loop ?? "?"}</h4><div id="lossChart"></div></div>` + err +
+    preflightSection(j) + `<div class="sec"><h4>All training runs</h4>${hist}</div>`,
     after: () => lineChart($("lossChart"), [
       {name: "Train loss", color: "--s1", points: j.loss.map(p => ({x: p.step, y: p.loss}))},
       {name: "Eval loss", color: "--s2", points: j.eval_loss.map(p => ({x: p.step, y: p.loss})), dots: true}],
@@ -695,7 +756,14 @@ function pTrain() {
 function pEval() {
   const l = curLoop(), p = l.eval_progress, r = l.eval_report, sp = S.spec;
   let html = "";
-  if (p && p.state === "running") {
+  if (p && p.state === "running" && !p.total) {
+    // the real finetune-eval only reports which stage it is in: show its stage list with the current one marked
+    const STEPS = ["loading model", "M7/M9 base model", "M8 base model (lm-eval)", "M7/M9 tuned model", "M8 tuned model (lm-eval)", "M7 teacher (Claude)", "scoring"];
+    const cur = STEPS.indexOf(p.phase);
+    html += `<div class="callout" style="margin-bottom:12px"><b>${esc(p.phase || "starting")}</b> on the ${esc(p.split || "dev")} split</div>
+      <table class="t">${STEPS.map((s, i) => `<tr><td style="width:120px">${badge(cur < 0 ? "pending" : i < cur ? "done" : i === cur ? "running" : "pending")}</td><td>${esc(s)}</td></tr>`).join("")}</table>
+      <p class="muted" style="font-size:12px">Base-model and teacher results are cached after loop 1, so later loops only re-run the tuned model.</p>`;
+  } else if (p && p.state === "running") {
     const sysP = p.metrics?.systems || {};
     html += `<div class="callout" style="margin-bottom:12px"><b>${esc(p.phase || "Scoring")}</b> on the ${esc(p.split || "dev")} split · ${fmtNum(p.done)}/${fmtNum(p.total)} ${esc(p.unit || "")}</div>
       <table class="t"><tr><th>system</th><th style="width:45%">progress</th><th class="n">running score</th></tr>${SYSTEMS.map(s => { const v = sysP[s.key] || {};

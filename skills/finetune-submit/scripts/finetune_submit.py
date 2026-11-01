@@ -116,6 +116,7 @@ MIN_FREE_DISK_GB = 5.0
 GPU_MEM_BUSY_MIB = 2000          # more than this in use = another program (e.g. eval/vLLM) holds the GPU
 DEFAULT_S_PER_EXAMPLE_EPOCH = 0.5
 STARTUP_S = 30                   # model load etc.
+MIN_EPOCHS = 0.25                # never clamp below a quarter pass over the data
 
 
 def past_runs(runs: Path):
@@ -148,67 +149,100 @@ def gpu_memory_used_mib():
 
 
 def preflight(cfg, n_examples, data_sha, runs: Path, force: bool):
-    """Checks before launching. Returns (decision, reason, checks, extra).
-    decision: launch | reuse (identical job already done) | wait (retry next cycle) | refuse."""
-    checks, history = [], past_runs(runs)
+    """Checks before launching. Too long / over budget -> CLAMP the job (fewer epochs) instead of refusing.
+    May change cfg["epochs"] in place. Returns (decision, reason, checks, extra).
+    decision: launch | reuse (identical job already done) | wait (retry next cycle) | refuse (cannot run at all)."""
+    checks, history, extra = [], past_runs(runs), {}
+    requested = dict(cfg)  # before any clamping
 
     def check(name, ok, detail, soft=False):
         checks.append({"check": name, "ok": bool(ok), "detail": detail, "overridden": bool(soft and force and not ok)})
         return ok or (soft and force)
 
-    # 1. identical job already finished -> reuse it instead of training again
-    if not force:
-        for h in history:
-            r = h["run"]
-            if h["state"] == "done" and r.get("dataset", {}).get("sha256") == data_sha and r.get("config") == cfg \
-                    and Path(r["outputs"]["adapter"]).exists():
-                check("not a duplicate", False, f"identical data + settings already trained: {r['job_id']}")
-                return "reuse", f"identical job {r['job_id']} already done", checks, {"reuse_job_id": r["job_id"]}
-    check("not a duplicate", True, "no identical finished job")
-
-    # 2. physical resources (never overridable)
+    # 1. physical resources: these can't be clamped
     used = gpu_memory_used_mib()
     if used is None:
         check("GPU memory free", True, "nvidia-smi unavailable: check skipped")
     elif not check("GPU memory free", used < GPU_MEM_BUSY_MIB, f"{used} MiB in use (limit {GPU_MEM_BUSY_MIB})"):
-        return "wait", f"GPU memory in use by another program ({used} MiB)", checks, {}
+        return "wait", f"GPU memory in use by another program ({used} MiB)", checks, extra
     free_gb = shutil.disk_usage(runs).free / 1e9
     if not check("disk space", free_gb >= MIN_FREE_DISK_GB, f"{free_gb:.0f} GB free (need {MIN_FREE_DISK_GB:.0f})"):
-        return "refuse", f"only {free_gb:.1f} GB disk free", checks, {}
+        return "refuse", f"only {free_gb:.1f} GB disk free (delete old runs/ checkpoints)", checks, extra
 
-    # 3. how long will it take? (learned from earlier finished jobs)
-    speeds = [h["runtime_s"] / (h["n_train"] * float(h["run"]["config"]["epochs"])) for h in history
-              if h["state"] == "done" and h["n_train"] and h["runtime_s"] > 0]
+    # 2. how long will it take? (speed learned from earlier finished jobs)
+    speeds = [max(0.0, h["runtime_s"] - STARTUP_S) / (h["n_train"] * float(h["run"]["config"]["epochs"]))
+              for h in history if h["state"] == "done" and h["n_train"] and h["runtime_s"] > STARTUP_S]
     spe = statistics.median(speeds) if speeds else DEFAULT_S_PER_EXAMPLE_EPOCH
-    est_s = STARTUP_S + n_examples * float(cfg["epochs"]) * spe
-    extra = {"estimate_s": round(est_s), "s_per_example_epoch": round(spe, 3), "speed_from_n_runs": len(speeds)}
-    if not check("job length", est_s <= MAX_JOB_HOURS * 3600,
-                 f"estimated {est_s / 60:.0f} min (cap {MAX_JOB_HOURS:g} h, {len(speeds)} past runs used)", soft=True):
-        return "refuse", f"estimated {est_s / 3600:.1f} h > {MAX_JOB_HOURS:g} h cap", checks, extra
 
-    # 4. runaway guard: jobs started in the last hour (all pipelines)
+    def estimate(epochs):
+        return STARTUP_S + n_examples * float(epochs) * spe
+
+    # 3. how much time may it take? min(per-job cap, what's left of the pipeline's GPU budget)
+    allowed_s, limits = MAX_JOB_HOURS * 3600, [f"{MAX_JOB_HOURS:g} h per-job cap"]
+    if PL:
+        spec = PL.spec()
+        budget_h = float((spec.get("budget") or {}).get("max_gpu_hours") or 2.0)
+        mine = [h for h in history if h["run"].get("pipeline_dir") == str(PL.dir)]
+        used_h = sum(h["runtime_s"] for h in mine) / 3600
+        left_s = max(0.0, budget_h * 3600 - used_h * 3600)
+        extra.update(pipeline_gpu_hours_used=round(used_h, 3), pipeline_gpu_hours_budget=budget_h,
+                     pipeline_jobs_so_far=len(mine))
+        if left_s < allowed_s:
+            allowed_s, limits = left_s, [f"{left_s / 60:.0f} min left of the {budget_h:g} h pipeline GPU budget"]
+        max_jobs = 2 * int((spec.get("targets") or {}).get("max_loops") or 3)
+        check("pipeline job count", len(mine) < max_jobs,
+              f"{len(mine)} jobs so far (expected at most {max_jobs} = 2 x max_loops): warning only, the budget is the hard limit")
+        checks[-1]["ok"] = True  # informational: never blocks
+
+    # 4. clamp: shorten (fewer epochs) instead of refusing
+    want_epochs = float(cfg["epochs"])
+    est_s = estimate(want_epochs)
+    if est_s > allowed_s and not force:
+        fit = (allowed_s - STARTUP_S) / (n_examples * spe) if allowed_s > STARTUP_S else 0.0
+        fit = int(fit * 100) / 100  # round DOWN to 0.01 epoch
+        if fit < MIN_EPOCHS:
+            check("fits in time/budget", False,
+                  f"even {MIN_EPOCHS} epoch needs ~{estimate(MIN_EPOCHS) / 60:.0f} min; only {allowed_s / 60:.0f} min allowed "
+                  f"({limits[0]})")
+            return "refuse", f"nothing left to clamp: {limits[0]}", checks, extra
+        cfg["epochs"] = fit
+        extra["clamped"] = {"epochs": [want_epochs, fit], "because": limits[0]}
+        check("fits in time/budget", True, f"clamped epochs {want_epochs:g} -> {fit:g} to fit {limits[0]} "
+                                           f"(~{estimate(fit) / 60:.0f} min instead of ~{est_s / 60:.0f} min)")
+        est_s = estimate(fit)
+    else:
+        check("fits in time/budget", est_s <= allowed_s or force,
+              f"estimated {est_s / 60:.0f} min within {limits[0]}" + (" (--force: not clamped)" if force and est_s > allowed_s else ""))
+        if force and est_s > allowed_s:
+            checks[-1]["overridden"] = True
+    extra.update(estimate_s=round(est_s), s_per_example_epoch=round(spe, 3), speed_from_n_runs=len(speeds))
+
+    # 5. identical job already finished -> reuse it. Compare what was REQUESTED (before clamping), since the
+    #    clamp amount depends on past speeds and budget and would otherwise differ on every resubmission.
+    if not force:
+        for h in history:
+            r = h["run"]
+            if h["state"] == "done" and r.get("dataset", {}).get("sha256") == data_sha \
+                    and (r.get("requested_config") or r.get("config")) == requested \
+                    and Path(r["outputs"]["adapter"]).exists():
+                check("not a duplicate", False, f"identical data + settings already trained: {r['job_id']}")
+                return "reuse", f"identical job {r['job_id']} already done", checks, {**extra, "reuse_job_id": r["job_id"]}
+    check("not a duplicate", True, "no identical finished job")
+
+    # 6. runaway guard: jobs started in the last hour (all pipelines) -> wait, don't refuse
     recent = sum(1 for h in history if time.time() - h["created"] < 3600)
     if not check("rate limit", recent < MAX_JOBS_PER_HOUR, f"{recent} jobs in the last hour (cap {MAX_JOBS_PER_HOUR})",
                  soft=True):
         return "wait", f"{recent} jobs started in the last hour", checks, extra
 
-    # 5. pipeline budget + job count (from the task spec, if this job belongs to a pipeline)
-    if PL:
-        spec = PL.spec()
-        budget_h = float((spec.get("budget") or {}).get("max_gpu_hours") or 2.0)
-        max_jobs = 2 * int((spec.get("targets") or {}).get("max_loops") or 3)
-        mine = [h for h in history if h["run"].get("pipeline_dir") == str(PL.dir)]
-        used_h = sum(h["runtime_s"] for h in mine) / 3600
-        extra.update(pipeline_gpu_hours_used=round(used_h, 3), pipeline_gpu_hours_budget=budget_h)
-        if not check("pipeline GPU budget", used_h + est_s / 3600 <= budget_h,
-                     f"{used_h:.2f} h used + {est_s / 3600:.2f} h estimated vs {budget_h:g} h budget", soft=True):
-            return "refuse", f"GPU budget: {used_h:.2f} h used, this job needs ~{est_s / 3600:.2f} h, budget {budget_h:g} h", \
-                checks, extra
-        if not check("pipeline job count", len(mine) < max_jobs, f"{len(mine)} jobs so far (cap {max_jobs} = 2 x max_loops)",
-                     soft=True):
-            return "refuse", f"pipeline already ran {len(mine)} training jobs", checks, extra
     overridden = [c["check"] for c in checks if c["overridden"]]
-    reason = f"--force overrode: {', '.join(overridden)}" if overridden else "all checks passed"
+    if overridden:
+        reason = f"--force overrode: {', '.join(overridden)}"
+    elif "clamped" in extra:
+        c = extra["clamped"]
+        reason = f"clamped epochs {c['epochs'][0]:g} -> {c['epochs'][1]:g} to fit {c['because']}"
+    else:
+        reason = "all checks passed"
     return "launch", reason, checks, extra
 
 
@@ -271,6 +305,7 @@ def main():
             fail(f"GPU busy: job {busy} is still training; will retry next cycle", busy_job_id=busy)
 
     runs.mkdir(parents=True, exist_ok=True)
+    requested_cfg = dict(cfg)
     decision, reason, checks, pf_extra = preflight(cfg, n_examples, data_sha, runs, args.force)
     preflight_record = {"decision": decision, "reason": reason, "checks": checks, **pf_extra}
     log(f"pre-flight: {decision} ({reason})")
@@ -286,6 +321,9 @@ def main():
     if decision in ("wait", "refuse") and not args.dry_run:
         if PL:
             PL.emit("train", "log" if decision == "wait" else "failed", f"Pre-flight {decision}: {reason}")
+            if decision == "refuse":  # no train_job_id is emitted, so the agent chain ends here: show it as a stop
+                PL.emit("decide", "decision", f"Stopped: training refused by pre-flight ({reason})",
+                        action="stop", stop_reason=f"preflight_refused: {reason}", decided_by="finetune-submit")
         print(json.dumps({"status": "error", "error": f"pre-flight {decision}: {reason}", "retry": decision == "wait",
                           "preflight": preflight_record,
                           "summary": f"Not training ({decision}): {reason}"}))
@@ -307,6 +345,7 @@ def main():
         "parent_job_id": args.parent_job_id,
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "config": cfg,
+        "requested_config": requested_cfg,
         "dataset": {"path": str(data), "sha256": data_sha, "n_examples": n_examples},
         "code": {"finetuner_git": git_commit(root)},
         "command": cmd,
@@ -328,8 +367,9 @@ def main():
         if PL:
             PL.link("train_job_id", job_id, stage="train", append=True)
             PL.emit("train", "start", f"LoRA r={cfg['rank']} lr={cfg['lr']} epochs={cfg['epochs']} on "
-                    f"{n_examples} examples ({cfg['model']})", train_job_id=job_id, run_dir=str(run_dir),
-                    parent_job_id=args.parent_job_id)
+                    f"{n_examples} examples ({cfg['model']})" + (f"; {reason}" if "clamped" in pf_extra else ""),
+                    train_job_id=job_id, run_dir=str(run_dir), parent_job_id=args.parent_job_id,
+                    clamped=pf_extra.get("clamped"))
 
     print(json.dumps({
         "status": "dry_run" if args.dry_run else "submitted",
@@ -341,7 +381,7 @@ def main():
         "preflight": preflight_record,
         "summary": f"{'Validated' if args.dry_run else 'Submitted'} LoRA job {job_id}: {cfg['model']} on "
                    f"{n_examples} examples (r={cfg['rank']}, lr={cfg['lr']}, epochs={cfg['epochs']}); "
-                   f"pre-flight: {decision}, est. {pf_extra.get('estimate_s', '?')} s.",
+                   f"pre-flight: {reason}, est. {pf_extra.get('estimate_s', '?')} s.",
     }))
 
 

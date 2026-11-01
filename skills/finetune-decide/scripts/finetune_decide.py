@@ -123,7 +123,8 @@ def decide(report, targets, history, cfg, signals, n_examples):
     if fails and sum(f.get("share") or 0 for f in fails[:2]) >= CONCENTRATED_SHARE:
         top = fails[:2]
         return more_data("failures concentrated in categories",
-                         f"{sum(f['share'] for f in top):.0%} of dev failures are in {len(top)} categories: "
+                         f"{sum(f['share'] for f in top):.0%} of dev failures are in "
+                         f"{'1 category' if len(top) == 1 else f'{len(top)} categories'}: "
                          + ", ".join(repr(f["category"]) for f in top), [f["category"] for f in top])
     if not beats and s and s["drop"] < UNDERFIT_DROP:
         rank, epochs = int(cfg.get("rank", DEFAULT_RANK)), float(cfg.get("epochs", 2))

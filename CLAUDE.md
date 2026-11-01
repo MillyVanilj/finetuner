@@ -14,11 +14,12 @@ Hackathon ends Sunday night. Favor working demos over perfect code. Keep things 
 |---|---|---|
 | M1 + task spec | `ftc/m1.py`, `ftc/spec.py` | user goal → `task_spec.json` |
 | L1 data (M2–M4) | `skills/finetune-data-gen` | spec → `train_path` |
-| L2 benchmark (M5–M6) | not built | spec → `bench_dir` (dev / held-out) |
+| L2 benchmark (M5–M6) | `skills/finetune-bench-gen` | `spec` → `bench_dir` (dev / held-out) |
 | Trainer | `skills/finetune-submit`, `skills/finetune-status` | `train_path` (+ `retrain_config_path`) → `train_job_id` → `adapter_path` |
 | L3 eval (M7–M9) | `skills/finetune-eval` | `adapter_path` + `bench_dir` → `eval_report_path` |
 | Iterate? (Evaluator) | `skills/finetune-decide` | `eval_report_path` → `retrain_config_path` + `train_path` · `data_feedback_path` · stop (`best_adapter_path`) |
-| Output | not built | best adapter → HF Hub, model card, Infinite post |
+| Output | not built (`run_pipeline.py` scores held-out once and writes `final/final_report.json`) | best adapter → HF Hub, model card, Infinite post |
+| Runner without agents | `scripts/run_pipeline.py` (dashboard ▶ Start) | runs the stages above in order, converts Eval's report to §3.4 |
 | Live view | `dashboard/`, `ftc/pipeline.py`, `scripts/simulate_pipeline.py` | reads the pipeline folder |
 
 Every training run saves its config, dataset hash, metrics and adapter location (`run.json`, `metrics.json`), so results are reproducible.
@@ -92,7 +93,7 @@ finetuner/
 
 - Never commit secrets. API keys go in `.env` (gitignored). Also ignore `*_config.json` and `.scienceclaw/`.
 - Ask before deleting files or force-pushing.
-- GPU jobs don't need a human OK, but start training only through `skills/finetune-submit`: its automatic pre-flight checks (GPU free, not a duplicate, job ≤ 1 h, rate limit, pipeline GPU budget, disk) decide, and the reasons are saved in `run.json`. For other GPU work (eval, ad-hoc tests), apply the same checks yourself: GPU idle, short, within budget. Stop the Brev instance when idle.
+- GPU jobs don't need a human OK, but start training only through `skills/finetune-submit`: its automatic pre-flight checks decide (GPU free, not a duplicate, rate limit, disk; jobs longer than 1 h or over the pipeline GPU budget are clamped to fewer epochs, not refused), and the reasons are saved in `run.json`. For other GPU work (eval, ad-hoc tests), apply the same checks yourself: GPU idle, short, within budget. Stop the Brev instance when idle.
 - Don't edit the ScienceClaw source unless asked; put our code in our repo.
 - Push work to GitHub often. Cloud accounts are deleted after the event.
 - Explain changes simply and briefly. Teammates are not all experienced programmers.

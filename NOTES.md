@@ -16,9 +16,9 @@ Status of every wireframe box: `docs/wireframe_v0.2.md`.
 - [ ] Post results to Infinite
 
 ## Next
-- [ ] L2 BenchGen (`finetune-bench-gen`), item format in `docs/spec_and_io.md` §3.2
-- [ ] Eval writes the §3.4 report, so the Evaluator (`finetune-decide`) can read it
-- [ ] DataGen reads `--data-feedback-path` (the Evaluator's data loop)
+- [x] L2 BenchGen (`skills/finetune-bench-gen`)
+- [ ] Eval writes the §3.4 report itself (today only `run_pipeline.py` converts it), so the Evaluator works under the reactor too
+- [ ] DataGen reads `--data-feedback-path` (the runner works around it with a spec copy)
 - [ ] Output / ReportAgent: held-out once, HF push, model card, Infinite post
 - [ ] Agent profiles in `agents/` and a first `scienceclaw-post --dry-run` through the chain
-- [ ] `scripts/run_pipeline.py`: the same steps in order without agents (demo fallback)
+- [x] `scripts/run_pipeline.py`: the same steps in order without agents (demo fallback)

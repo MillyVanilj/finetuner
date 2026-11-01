@@ -146,17 +146,22 @@ def read_train_job(job_id) -> dict:
                  for h in hist if "eval_loss" in h and h.get("step") is not None]
     state = st.get("state") or ("starting" if (d / "train.pid").exists() else ("dry_run" if run.get("dry_run") else None))
     step, max_steps = st.get("step"), st.get("max_steps")
+    if step is None and loss:   # the final status.json (state "done") no longer carries step counts
+        step = loss[-1]["step"]
+        max_steps = max_steps or (step if state == "done" else None)
     elapsed = st.get("elapsed_s") or st.get("runtime_s")
     eta = None
     if state == "running" and step and max_steps and elapsed:
         eta = round(elapsed / step * (max_steps - step))
     return {
         "job_id": d.name, "state": state, "step": step, "max_steps": max_steps,
-        "epoch": st.get("epoch"), "elapsed_s": elapsed, "eta_s": eta,
+        "epoch": st.get("epoch") if st.get("epoch") is not None else (loss[-1].get("epoch") if loss else None), "elapsed_s": elapsed, "eta_s": eta,
         "config": run.get("config") or st.get("config"), "dataset": run.get("dataset"),
         "parent_job_id": run.get("parent_job_id"), "metrics": st.get("metrics"),
         "adapter_path": st.get("adapter_path"), "hub_url": st.get("hub_url"),
         "error": st.get("error"), "loss": loss, "eval_loss": eval_loss,
+        "preflight": run.get("preflight"),   # finetune-submit's automatic launch checks
+        "requested_config": run.get("requested_config"),   # before pre-flight clamping (config = what ran)
     }
 
 
@@ -190,6 +195,29 @@ def stage_status(events, loop) -> dict:
             st[s]["since"] = ev.get("ts")
         st[s]["status"], st[s]["msg"] = new, ev.get("msg", "")
     return st
+
+
+def pid_alive(pid) -> bool:
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def read_runner(pdir: Path) -> dict:
+    """scripts/run_pipeline.py's state (runner.json) + whether its process is alive + the last log lines."""
+    r = _read_json(pdir / "runner.json", {}) or {}
+    if not r:
+        return {}
+    r["alive"] = r.get("state") == "running" and pid_alive(r.get("pid"))
+    if r.get("state") == "running" and not r["alive"]:
+        r["state"] = "died"     # killed without cleaning up (machine restart, OOM...)
+    try:
+        r["log_tail"] = (pdir / "runner.log").read_text(errors="replace").splitlines()[-40:]
+    except Exception:
+        r["log_tail"] = []
+    return r
 
 
 def snapshot(pipeline_dir) -> dict:
@@ -245,7 +273,14 @@ def snapshot(pipeline_dir) -> dict:
 
     running = [s for s in STAGES if stages[s]["status"] == "running"]
     failed = [s for s in STAGES if stages[s]["status"] == "failed"]
-    overall = "failed" if failed else ("done" if final else ("running" if running else "idle"))
+    runner = read_runner(pdir)
+    overall = "failed" if failed else ("done" if final else ("running" if running or runner.get("alive") else "idle"))
+    if runner.get("state") in ("failed", "died") and not final:
+        overall = "failed"
+
+    # latest Trainer event: shows pre-flight "wait"/"refuse"/"reused" even when no job folder was made
+    train_ev = next((e for e in reversed(events) if e.get("stage") == "train"
+                     and e.get("type") in ("start", "done", "failed", "log")), None)
 
     t0 = _ts(meta.get("created_at") or "") or None
     last_ts = _ts(events[-1]["ts"]) if events else None
@@ -255,7 +290,7 @@ def snapshot(pipeline_dir) -> dict:
         "elapsed_s": round((last_ts if overall in ("done", "failed") and last_ts else time.time()) - t0) if t0 else None,
         "status": overall, "active_stages": running, "loop": loop,
         "max_loops": (spec.get("targets") or {}).get("max_loops"),
-        "spec": spec, "links": links, "stages": stages,
+        "spec": spec, "links": links, "stages": stages, "train_last_event": train_ev, "runner": runner,
         "data": data, "bench": bench, "train": jobs, "loops": loops, "final": final,
         "budget": meta.get("budget_used") or {},
         "events": events[-TAIL_EVENTS:], "n_events": len(events),

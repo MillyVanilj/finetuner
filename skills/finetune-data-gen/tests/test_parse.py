@@ -7,6 +7,8 @@ import gen_data
 from gen_data import parse_json_list, call_json_list, STRICT_SUFFIX
 
 gen_data.RUNS_DIR = Path(tempfile.mkdtemp())        # don't write test logs into your real runs folder
+gen_data.jsonparse.BAD_OUTPUT_DIR = gen_data.RUNS_DIR   # bad-output log into the temp dir
+gen_data.BENCH_DIR = gen_data.RUNS_DIR / '_no_bench'   # never auto-detect real benchmarks
 
 ex  = '{"messages":[{"role":"user","content":"Q1"},{"role":"assistant","content":"A1"}]}'
 ex2 = '{"messages":[{"role":"user","content":"Q2"},{"role":"assistant","content":"A2"}]}'
