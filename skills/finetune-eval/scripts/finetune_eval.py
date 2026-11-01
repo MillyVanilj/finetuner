@@ -20,6 +20,21 @@ RUNS = Path(os.environ.get("FINETUNER_RUNS", FINETUNER_DIR / "runs"))
 LAST_BENCH = RUNS / ".last_bench_dir"      # last bench_dir this skill was handed (agent mode fallback)
 
 
+def _spec_judge(adapter_path):
+    """models.judge from the run's task spec, when it names a Claude model (judge and teacher call Claude).
+    None when $FINETUNE_JUDGE_MODEL is set: that machine-wide override (e.g. to save credits) beats the spec,
+    and run_eval.py reads it itself. Order: $FINETUNE_JUDGE_MODEL > spec models.judge > run_eval's default."""
+    if os.environ.get("FINETUNE_JUDGE_MODEL"):
+        return None
+    try:
+        pdir = json.loads((Path(adapter_path).resolve().parent / "run.json").read_text()).get("pipeline_dir") \
+            or os.environ.get("FTC_PIPELINE_DIR")
+        judge = (json.loads((Path(pdir) / "task_spec.json").read_text()).get("models") or {}).get("judge")
+    except (OSError, ValueError, TypeError):
+        return None
+    return judge if isinstance(judge, str) and judge.startswith("claude-") else None
+
+
 def _pipeline_bench(pdir):
     try:
         return json.loads((Path(pdir) / "pipeline.json").read_text()).get("links", {}).get("bench_dir")
@@ -167,6 +182,9 @@ def main():
                "--bench-dir", a.bench_dir, "--split", a.split, "--out-dir", str(out)]
         if a.skip_general:
             cmd.append("--skip-general")
+        judge = _spec_judge(a.adapter_path)
+        if judge:
+            cmd += ["--claude-model", judge]
         with open(log_f, "ab") as log:
             proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         if not status_f.exists():  # the job writes its own status; this only covers its first moments
