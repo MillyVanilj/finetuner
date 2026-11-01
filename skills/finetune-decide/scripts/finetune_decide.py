@@ -433,7 +433,9 @@ def main():
         if spec_path:
             result["spec"] = spec_path
     else:
-        result.update(final_adapter_path=best["adapter_path"], best_job_id=best["job_id"], stop_reason=dec["reason"])
+        result.update(final_adapter_path=best["adapter_path"], best_job_id=best["job_id"], stop_reason=dec["reason"],
+                      best_loop=record["best_loop"], best_adapter_path=best["adapter_path"],  # names Rohan's
+                      best_tuned_score=best["tuned"])                                         # version uses
         if n["split"] == "dev":
             result["next_step"] = (f"run the held-out eval once: finetune_eval.py --adapter-path {best['adapter_path']} "
                                    f"--bench-dir {bench_dir} --split heldout")
