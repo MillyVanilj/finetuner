@@ -265,7 +265,7 @@ def draft(goal: str, spec: dict = None, answers: dict = None) -> dict:
     full["m1"] = {"goal": goal, "answers": answers, "source": out.get("source"),
                   "assumptions": list({a["field"]: a for a in prev + new}.values())}   # newest entry per field wins
     if search:
-        full["m1"]["real_search"] = {k: search.get(k) for k in ("queries", "dataset", "license", "why")}
+        full["m1"]["real_search"] = {k: search.get(k) for k in ("queries", "dataset", "license", "why", "columns", "quality")}
     full, errors, warnings = check_spec(full)   # drops earlier assumptions whose field the answers changed
     r = {"spec": full, "questions": questions, "errors": errors, "warnings": warnings, "source": out.get("source")}
     if llm_error:

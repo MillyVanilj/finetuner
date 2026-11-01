@@ -24,6 +24,7 @@ from finetune_common.timing import est_round, plan_batch, update_per_ex, regen_f
 from finetune_common.spec import (REQUIRED_KEYS, load_spec, SPEC_PROMPT, GENERIC_SPEC, draft_spec,  # noqa: F401
                                   default_run_id, spec_hash)
 from finetune_common.jsonl import read_jsonl, append_jsonl
+from finetune_common.categories import focus_cycle, focus_hint
 
 RUNS_DIR = Path.home() / ".scienceclaw/finetune/runs"
 jsonparse.BAD_OUTPUT_DIR = RUNS_DIR
@@ -54,7 +55,7 @@ EVERY EXAMPLE MUST SATISFY:
 {criteria}
 
 THIS BATCH FOCUSES ON: {focus}
-
+{focus_hint}
 Write {k} new examples. Vary the topic, difficulty, phrasing and length of the user
 messages. Write them the way real users type, not as templates. Also vary the wording and
 sentence structure of the assistant replies: do not start every explanation the same way.
@@ -115,7 +116,8 @@ def build_gen_prompt(spec: dict, k: int, focus: str, avoid: list[str], feedback:
         feedback_block = "\nEarlier examples were REJECTED by a reviewer for these reasons. Avoid these mistakes:\n" + \
                          "\n".join(f"- {r}" for r in dict.fromkeys(feedback)) + "\n"
     return GEN_PROMPT.format(task=spec["task"], io_format=spec["io_format"], criteria=criteria,
-                             focus=focus, k=k, avoid_block=avoid_block, feedback_block=feedback_block)
+                             focus=focus, focus_hint=focus_hint(focus), k=k, avoid_block=avoid_block,
+                             feedback_block=feedback_block)
 
 
 def _user_key(example: dict):
@@ -601,7 +603,8 @@ def run(a) -> dict:
     for k in ("rejected", "unverified"):
         state.setdefault(k, 0)
     timing = state.setdefault("timing", {"per_ex": PER_EX_INIT, "rounds": 0})
-    focuses = ["typical cases"] + list(spec["edge_cases"])
+    # typical 40 %, misleading inputs 25 % (always), other edge cases the rest: finetune_common/categories.py
+    focuses = focus_cycle(spec["edge_cases"])
     raw_target = state.setdefault("raw_target", target)   # grows if M4 drops rows (top-ups)
     batches, stop_reason = 0, "target reached"
     waiting = verify_pending(llm_v, spec, run_dir, state, deadline, a.time_budget)
