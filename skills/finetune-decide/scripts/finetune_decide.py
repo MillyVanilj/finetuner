@@ -266,8 +266,10 @@ def main():
     pl = find_pipeline(Pipeline, a.spec, report_path, report.get("adapter_path"))
     spec_path = a.spec or (str(pl.dir / "task_spec.json") if pl.active else None)
     spec = read_json(spec_path) if spec_path else {}
-    targets = {**DEFAULTS["targets"], **(spec.get("targets") or {})}
-    budget = {**DEFAULTS.get("budget", {}), **(spec.get("budget") or {})}
+    # A null (an empty dashboard field) means "use the default"; it must not override it and crash a comparison.
+    set_ = lambda d: {k: v for k, v in (d or {}).items() if v is not None}
+    targets = {**DEFAULTS["targets"], **set_(spec.get("targets"))}
+    budget = {**DEFAULTS.get("budget", {}), **set_(spec.get("budget"))}
     split = report.get("split") or "dev"
 
     from_eval = "task" in report   # finetune-eval's own format: convert it to §3.4
@@ -291,12 +293,12 @@ def main():
             r = read_json(pl.loop_dir(n) / "eval" / "eval_report.json")
             if r.get("systems"):
                 history.append({"loop": n, "report": r, "decision": read_json(pl.loop_dir(n) / "decision.json")})
-    else:   # no pipeline (plain ScienceClaw agents): count loops in a history file, one entry per training job
-        by_job = {}
-        for h in read_jsonl(hist_f):
-            if h.get("split") == split and h.get("job_id") != info["job_id"]:
-                by_job[h["job_id"]] = h
-        history = list(by_job.values())
+    else:   # no pipeline (plain ScienceClaw agents): one history entry per evaluation handed to the Evaluator
+        # Each call is one loop. Counting distinct training jobs kept a reused job (finetune-submit found identical
+        # data + settings, so finetune-eval returns the same report) on its old loop, and max_loops never fired.
+        # shortcut: re-running the Evaluator by hand on the same report also counts as a loop (stops sooner,
+        # never later); a pipeline folder numbers loops exactly.
+        history = [h for h in read_jsonl(hist_f) if h.get("split") == split]
         loop = len(history) + 1
     report["loop"] = loop
 
@@ -313,7 +315,8 @@ def main():
             vs_last = mean_ci([a_s[i] - b_s[i] for i in a_s if i in b_s and None not in (a_s[i], b_s[i])])
         tried = [run_info(h["report"].get("adapter_path"), split) for h in history]
         tried = [x["cfg"] for x in tried if x["train_path"] == info["train_path"]] + [info["cfg"]]
-        gpu_h = info["gpu_hours"] + sum(run_info(h["report"].get("adapter_path"), split)["gpu_hours"] for h in history)
+        earlier_jobs = {h["report"].get("adapter_path") for h in history} - {report.get("adapter_path"), None}
+        gpu_h = info["gpu_hours"] + sum(run_info(a, split)["gpu_hours"] for a in earlier_jobs)   # a reused job once
         ctx = {"actual_epochs": info["actual_epochs"], "clamped": info["clamped"], "gpu_hours": gpu_h,
                "max_gpu_hours": budget.get("max_gpu_hours"), "vs_last_loop": vs_last, "tried": tried}
         n_examples = int(spec.get("n_examples") or info["metrics"].get("n_train") or 100)
