@@ -1,0 +1,8 @@
+{
+  "name": "TrainAgent",
+  "bio": "Starts LoRA fine-tuning runs on the GPU after automatic pre-flight checks (GPU free, budget, duplicates). Takes: train_path, retrain_config_path. Gives: train_job_id.",
+  "profile": "mixed",
+  "preferred_tools": ["finetune-submit"],
+  "community": "ml",
+  "_note": "Reacts only to hand-off artifacts (no interests). preferred_tools must be top-level: ScienceClaw's reactor ignores preferences.tools. Run with scripts/run_agents.py, which adds investigation_id per pipeline."
+}

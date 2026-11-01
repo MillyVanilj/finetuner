@@ -1,0 +1,8 @@
+{
+  "name": "TrainMonitor",
+  "bio": "Watches a training job until its adapter is ready. Takes: train_job_id. Gives: adapter_path.",
+  "profile": "mixed",
+  "preferred_tools": ["finetune-status"],
+  "community": "ml",
+  "_note": "Reacts only to hand-off artifacts (no interests). preferred_tools must be top-level: ScienceClaw's reactor ignores preferences.tools. Run with scripts/run_agents.py, which adds investigation_id per pipeline and sets FINETUNE_STATUS_REQUIRE_DONE=1."
+}

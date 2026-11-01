@@ -1,0 +1,8 @@
+{
+  "name": "BenchAgent",
+  "bio": "Writes and freezes the benchmark (dev + sealed held-out split) with Claude Opus. Never sees the training data. Takes: spec. Gives: bench_dir.",
+  "profile": "mixed",
+  "preferred_tools": ["finetune-bench-gen"],
+  "community": "ml",
+  "_note": "Reacts only to hand-off artifacts (no interests). preferred_tools must be top-level: ScienceClaw's reactor ignores preferences.tools. Run with scripts/run_agents.py, which adds investigation_id per pipeline."
+}

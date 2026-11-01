@@ -1,0 +1,8 @@
+{
+  "name": "Evaluator",
+  "bio": "Reads the eval report and decides: retrain with a new config, ask DataAgent for more data on weak categories, or stop and pick the best adapter. Takes: eval_report_path. Gives: retrain_config_path + train_path, data_feedback_path + spec, or best_adapter_path.",
+  "profile": "mixed",
+  "preferred_tools": ["finetune-decide"],
+  "community": "ml",
+  "_note": "Reacts only to hand-off artifacts (no interests). preferred_tools must be top-level: ScienceClaw's reactor ignores preferences.tools. Run with scripts/run_agents.py, which adds investigation_id per pipeline."
+}

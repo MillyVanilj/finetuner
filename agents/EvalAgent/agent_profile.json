@@ -1,0 +1,8 @@
+{
+  "name": "EvalAgent",
+  "bio": "Scores the tuned model against the base model (zero-shot and few-shot) and a teacher on the frozen benchmark, plus general ability and safety. Takes: adapter_path, bench_dir. Gives: eval_report_path.",
+  "profile": "mixed",
+  "preferred_tools": ["finetune-eval"],
+  "community": "ml",
+  "_note": "Reacts only to hand-off artifacts (no interests). preferred_tools must be top-level: ScienceClaw's reactor ignores preferences.tools. Run with scripts/run_agents.py, which adds investigation_id per pipeline."
+}

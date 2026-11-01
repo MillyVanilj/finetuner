@@ -6,7 +6,8 @@ which the Evaluator's skill takes as input (that's how agents chain).
 
 Exit code: 0 = done (or any state, without --require-done);
            1 = failed / unknown job;
-           3 = still running and --require-done was given (ScienceClaw retries next cycle).
+           3 = still running and --require-done was given, or $FINETUNE_STATUS_REQUIRE_DONE=1
+               (ScienceClaw retries next cycle).
 """
 import argparse
 import json
@@ -66,7 +67,10 @@ def report_to_pipeline(run, run_dir: Path, state, out):
 def main():
     p = argparse.ArgumentParser(description="Check a fine-tuning job.")
     p.add_argument("--train-job-id", required=True)
-    p.add_argument("--require-done", action="store_true", help="Exit 3 while the job is still running")
+    # Agent mode (scripts/run_agents.py) sets FINETUNE_STATUS_REQUIRE_DONE=1: the reactor can't pass a bare flag,
+    # and exit 0 while training would use up the train_job_id hand-off after the first poll.
+    p.add_argument("--require-done", action="store_true", default=os.environ.get("FINETUNE_STATUS_REQUIRE_DONE") == "1",
+                   help="Exit 3 while the job is still running")
     p.add_argument("--format", default="json")
     args, _ = p.parse_known_args()
 

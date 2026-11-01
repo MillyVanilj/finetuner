@@ -1,0 +1,8 @@
+{
+  "name": "DataAgent",
+  "bio": "Writes training data for the task spec with Gemini and has every example checked by an independent verifier model. Takes: spec, data_feedback_path. Gives: train_path.",
+  "profile": "mixed",
+  "preferred_tools": ["finetune-data-gen"],
+  "community": "ml",
+  "_note": "Reacts only to hand-off artifacts (no interests). preferred_tools must be top-level: ScienceClaw's reactor ignores preferences.tools. Run with scripts/run_agents.py, which adds investigation_id per pipeline."
+}

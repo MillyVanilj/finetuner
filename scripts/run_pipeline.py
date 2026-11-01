@@ -410,7 +410,12 @@ def run(pl: Pipeline, max_loops_cap: int, skip_general: bool):
             raise RunnerError(f"unknown Evaluator action {action!r}")
         pl.emit("bench", "done", "Benchmark unchanged (fixed across loops)", loop=nxt)
 
-    # Output: held-out once
+    finish(pl, best, bench_dir)
+
+
+def finish(pl: Pipeline, best: tuple, bench_dir: str, extra: dict = None):
+    """Output: score the held-out split once with the best adapter, write final/final_report.json.
+    best = (adapter_path, train_job_id, loop). Also used by scripts/run_agents.py (agent mode)."""
     best_adapter, best_job, best_loop = best
     loop = pl.current_loop()
     pl.emit("output", "start", f"Scoring the held-out split once (adapter from loop {best_loop})", loop=loop)
@@ -425,7 +430,7 @@ def run(pl: Pipeline, max_loops_cap: int, skip_general: bool):
     final = {"pipeline_id": pl.id, "best_loop": best_loop, "train_job_id": best_job, "adapter_path": best_adapter,
              "hub_url": None, "infinite_post_url": None,
              "heldout": {"systems": ho.get("systems"), "by_source": ho.get("by_source")},
-             "dev_history": history, "model_card_path": None, "created_at": now_iso()}
+             "dev_history": history, "model_card_path": None, "created_at": now_iso(), **(extra or {})}
     pl.write_json("final/final_report.json", final)
     t = (ho.get("systems") or {}).get("tuned", {}).get("score")
     pl.emit("output", "done", f"Done. Held-out score of the tuned model: {t if t is None else round(t, 3)}", loop=loop)
