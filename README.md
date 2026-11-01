@@ -3,6 +3,10 @@ building an automated fine-tuner with an agent collective
 
 A user states a goal; ScienceClaw agents turn it into a task spec, generate and verify training data, build a benchmark, LoRA fine-tune Qwen3-4B on a Brev GPU, evaluate tuned vs base, decide whether to iterate, and publish the result.
 
+[![Wireframe v0.2 build status: every stage built and run end to end on Brev](docs/img/wireframe_status.png)](https://claude.ai/artifact/7cHTdiTr6tjfeboRTKNywS)
+
+Build status on Nov 1, 2026. [Open the live page](https://claude.ai/artifact/7cHTdiTr6tjfeboRTKNywS) for the task tracker and the results of the test runs on Brev.
+
 - **Where things stand (open PRs, next steps, demo pitch):** [`docs/handover.md`](docs/handover.md)
 - **Design:** [`docs/wireframe_v0.2.md`](docs/wireframe_v0.2.md) (diagram, and which code implements each box)
 - **Decisions and reasoning:** [`docs/decisions.md`](docs/decisions.md)
