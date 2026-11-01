@@ -8,6 +8,8 @@ import gen_data
 from gen_data import call_llm, call_json_list, plan_batch, update_per_ex, est_round
 
 tmp = Path(tempfile.mkdtemp()); gen_data.RUNS_DIR = tmp / "runs"
+gen_data.jsonparse.BAD_OUTPUT_DIR = gen_data.RUNS_DIR   # bad-output log into the temp dir
+gen_data.BENCH_DIR = gen_data.RUNS_DIR / '_no_bench'   # never auto-detect real benchmarks
 SPEC = json.loads((Path(__file__).resolve().parents[1] / "examples/spec_chem.json").read_text())
 fails = 0
 def check(name, ok):
@@ -80,8 +82,8 @@ def run_main(args, fake):
 
 spec_path = tmp / "spec.json"; spec_path.write_text(json.dumps(dict(SPEC, n_examples=40)))
 # scale the time constants down so a 4 s budget behaves like the real 27 s one
-gen_data.CALL_OVERHEAD_S, gen_data.PER_EX_INIT = 0.1, 0.15
-gen_data.MIN_CALL_S, gen_data.CALL_MARGIN_S = 0.2, 0.05
+gen_data.T.CALL_OVERHEAD_S, gen_data.PER_EX_INIT = 0.1, 0.15
+gen_data.L.MIN_CALL_S, gen_data.L.CALL_MARGIN_S = 0.2, 0.05
 fake = Timed(gen_per_ex=0.12)
 stdout, stderr, dt = run_main(["--spec", str(spec_path), "--run-id", "adapt", "--format", "json",
                                "--time-budget", "4", "--parallel", "1"], fake)
@@ -132,10 +134,10 @@ class SlowVerifier(Timed):
         if prompt.startswith("You are a strict quality reviewer"):
             time.sleep(5)
         return super().call(prompt, max_tokens, temperature)
-gen_data.LLM_CALL_CAP_S = 0.5
+gen_data.L.LLM_CALL_CAP_S = 0.5
 stdout, stderr, dt = run_main(["--spec", str(spec_path), "--run-id", "slowv", "--format", "json",
                                "--time-budget", "4", "--parallel", "2", "--max-batches", "1"], SlowVerifier(0.01))
-gen_data.LLM_CALL_CAP_S = 18.0
+gen_data.L.LLM_CALL_CAP_S = 18.0
 res = json.loads(stdout)
 check("our own timeouts are not mistaken for rate limits (parallel stays on)",
       "cut off at the time limit" in stderr and res["parallel"] == 2 and res["pending_verify"] > 0)
@@ -150,13 +152,13 @@ class HungVerifier(Timed):
         if prompt.startswith("You are a strict quality reviewer"):
             time.sleep(10)
         return super().call(prompt, max_tokens, temperature)
-gen_data.LLM_CALL_CAP_S = 1.0
+gen_data.L.LLM_CALL_CAP_S = 1.0
 stdout, stderr, dt = run_main(["--spec", str(spec_path), "--run-id", "hung", "--format", "json",
                                "--time-budget", "4", "--max-batches", "1", "--parallel", "1"], HungVerifier(0.01))
 res = json.loads(stdout)
 check(f"hung verifier abandoned, call returns in {dt:.2f}s, batch kept as pending_verify",
       dt < 3 and res["pending_verify"] == 10 and res["raw_kept"] == 0 and "abandoned" in stderr)
-gen_data.LLM_CALL_CAP_S = 18.0
+gen_data.L.LLM_CALL_CAP_S = 18.0
 fake2 = Timed(0.01)
 stdout, stderr, dt = run_main(["--spec", str(spec_path), "--run-id", "hung", "--format", "json",
                                "--time-budget", "4", "--max-batches", "0"], fake2)
@@ -170,8 +172,8 @@ check("pending examples kept once, no duplicate questions", len(qs) == len(set(q
 
 # finish a small run, then call again: early exit, no client created
 spec_small = tmp / "spec_small.json"; spec_small.write_text(json.dumps(dict(SPEC, n_examples=5)))
-gen_data.CALL_OVERHEAD_S, gen_data.PER_EX_INIT = 2.5, 1.2
-gen_data.MIN_CALL_S, gen_data.CALL_MARGIN_S = 2.0, 0.5
+gen_data.T.CALL_OVERHEAD_S, gen_data.PER_EX_INIT = 2.5, 1.2
+gen_data.L.MIN_CALL_S, gen_data.L.CALL_MARGIN_S = 2.0, 0.5
 run_main(["--spec", str(spec_small), "--run-id", "small", "--format", "json"], Timed(0))
 def boom(name): raise AssertionError("client should not be created")
 gen_data.get_llm_client = boom

@@ -723,7 +723,8 @@ function preflightSection(j) {
       <div class="v" style="font-size:18px">${fmtNum(used, 2)} h <small>of ${fmtNum(budget, 1)} h used</small></div>
       <div class="bar ${used / budget > 0.8 ? "" : "done"}"><i style="width:${Math.min(100, used / budget * 100)}%"></i></div></div>` : "";
   return `<div class="sec"><h4>Pre-flight checks <span class="muted">(automatic, no human OK needed)</span></h4>
-    <div class="callout ${pf.decision === "launch" ? "stop" : "warn"}"><b>${esc(pf.decision)}</b>: ${esc(pf.reason)}
+    <div class="callout ${pf.decision === "launch" && !pf.clamped ? "stop" : "warn"}"><b>${esc(pf.decision)}${pf.clamped ? " (shortened)" : ""}</b>: ${esc(pf.reason)}
+      ${pf.clamped?.epochs ? `<div style="font-size:12.5px">Epochs cut from <b>${esc(pf.clamped.epochs[0])}</b> to <b>${esc(pf.clamped.epochs[1])}</b> to fit ${esc(pf.clamped.because)}. Scores from this run may be lower than a full run would give.</div>` : ""}
       <div class="muted" style="font-size:12px">estimated ${fmtDur(pf.estimate_s)}${took} · ${fmtNum(pf.s_per_example_epoch, 2)} s per example-epoch, learned from ${fmtNum(pf.speed_from_n_runs)} past runs</div></div>
     ${gpu}
     <table class="t" style="margin-top:10px"><tr><th>check</th><th>result</th><th>detail</th></tr>${(pf.checks || []).map(c =>
@@ -739,7 +740,8 @@ function pTrain() {
     <div class="tile"><div class="v">${last ? fmtNum(last.loss, 3) : "–"}</div><div class="l">latest train loss</div></div>
     <div class="tile"><div class="v">${j.eval_loss.length ? fmtNum(j.eval_loss[j.eval_loss.length - 1].loss, 3) : "–"}</div><div class="l">latest eval loss</div></div>
     <div class="tile"><div class="v">${j.state === "done" ? fmtDur(j.elapsed_s) : fmtDur(j.eta_s)}</div><div class="l">${j.state === "done" ? "runtime" : "time left (est.)"}</div></div></div>`;
-  const cfg = `<div class="chips">${[["model", (c.model || "").split("/").pop()], ["LoRA r", c.rank], ["α", c.alpha], ["lr", c.lr], ["epochs", c.epochs], ["batch", c.batch_size && `${c.batch_size}×${c.grad_accum}`], ["examples", j.dataset?.n_examples]].filter(x => x[1] != null).map(x => `<span class="chip">${x[0]} <b>${esc(x[1])}</b></span>`).join("")}</div>`;
+  const cfg = `<div class="chips">${[["model", (c.model || "").split("/").pop()], ["LoRA r", c.rank], ["α", c.alpha], ["lr", c.lr], ["epochs", j.requested_config && j.requested_config.epochs != null && j.requested_config.epochs != c.epochs
+    ? `${c.epochs} (asked ${j.requested_config.epochs}, clamped)` : c.epochs], ["batch", c.batch_size && `${c.batch_size}×${c.grad_accum}`], ["examples", j.dataset?.n_examples]].filter(x => x[1] != null).map(x => `<span class="chip">${x[0]} <b>${esc(x[1])}</b></span>`).join("")}</div>`;
   const hist = `<table class="t" style="margin-top:12px"><tr><th>loop</th><th>job</th><th>config</th><th class="n">train loss</th><th class="n">eval loss</th><th>state</th></tr>${jobs.map(x =>
     `<tr><td>${x.loop ?? "–"}</td><td class="mono">${esc(x.job_id)}</td><td>lr ${esc(x.config?.lr)} · ${esc(x.config?.epochs)} ep · r ${esc(x.config?.rank)}</td><td class="n">${fmtNum(x.metrics?.train_loss, 3)}</td><td class="n">${fmtNum(x.metrics?.eval_loss, 3)}</td><td>${badge({starting: "running", running: "running", done: "done", failed: "failed"}[x.state] || "pending")}</td></tr>`).join("")}</table>`;
   const err = j.error ? `<div class="callout warn sec"><b>Training failed:</b> <span class="mono">${esc(j.error)}</span></div>` : "";

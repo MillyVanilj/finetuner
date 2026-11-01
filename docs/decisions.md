@@ -63,10 +63,12 @@ Same-family models favour their own outputs (self-preference bias), so:
 |---|---|
 | M2 generate training data | Gemini (Flash) |
 | M3 verify training data, M7 judge | Claude |
-| M5/M6 write + check benchmark | OpenAI |
+| M5/M6 write + check benchmark | Claude Opus (`claude-opus-5-5`), changed from OpenAI on Nov 1, see below |
 | Student (being trained) | Qwen |
 
 (This updates the review doc, which originally had Claude as the generator. Gemini's free high-volume key changed that.)
+
+*Update Nov 1:* the team chose **Claude Opus** for the benchmark (BenchGen, `skills/finetune-bench-gen`). Caveat: the Evaluator's judge and teacher are also Claude, so Claude may grade Claude-written items generously. Mitigations in place: an independent solve (M6a) checks every answer key, the benchmark is frozen, and the decision rule is "tuned must beat base few-shot", which compares two non-Claude systems on the same items.
 
 ## Decision 4: always include real data where possible
 
@@ -105,14 +107,14 @@ Brev machine
 - Every run saves `run.json`: spec, model IDs + prompts, LoRA config, seeds, dataset SHA-256s, git commit, metrics, adapter location.
 - **Evaluator decision rules** (when to retrain with new settings, when to try LoRA r=64, when to send failure categories back to DataGen, when to stop): `docs/evaluator-notes.md`.
 - Eval report always shows: base zero-shot, **base few-shot (must beat this)**, teacher (ceiling), tuned, all with 95% confidence intervals.
-- **GPU jobs start automatically (no human OK).** `finetune-submit` runs pre-flight checks and decides **launch / reuse / wait / refuse**:
+- **GPU jobs start automatically (no human OK), and are clamped, not refused.** `finetune-submit` runs pre-flight checks and decides **launch / reuse / wait / refuse**:
   1. GPU free: no training job alive, and < 2 GB GPU memory used by other programs. Otherwise **wait** (retried next cycle).
-  2. Not a duplicate: identical data hash + settings already trained → **reuse** that job, no GPU time.
-  3. Job length: estimated from past runs' speed (default 0.5 s per example-epoch + 30 s startup); > 1 h → **refuse** (`FTC_MAX_JOB_HOURS`).
+  2. Time allowed = min(1 h per job (`FTC_MAX_JOB_HOURS`), what's left of the pipeline's `budget.max_gpu_hours`). Estimated length (learned from past runs' speed; default 0.5 s per example-epoch + 30 s startup) over that → **clamp**: lower the epochs (even below 1, i.e. part of the data) so it fits. The original request is kept as `requested_config` in run.json.
+  3. Not a duplicate: identical data hash + requested settings already trained → **reuse** that job, no GPU time.
   4. Rate limit: ≥ 6 jobs started in the last hour → **wait** (`FTC_MAX_JOBS_PER_HOUR`), against runaway agents.
-  5. Pipeline budget: GPU hours used + estimate > spec `budget.max_gpu_hours` (default 2) → **refuse**; more than 2 × `targets.max_loops` jobs in one pipeline → **refuse**.
-  6. Disk: < 5 GB free → **refuse**.
-  Every decision + reasons go into `run.json` (`preflight`) and the pipeline event log. `--force` overrides 2–5 (not GPU-busy or disk) and records what it overrode.
+  5. Job count per pipeline > 2 × `targets.max_loops`: **warning only**.
+  6. **Refuse** only when nothing can be clamped: less than 0.25 epoch fits (budget used up), or < 5 GB disk.
+  Every decision + reasons go into `run.json` (`preflight`) and the pipeline event log. `--force` skips clamping/duplicate/rate (not GPU-busy or disk) and records what it overrode.
 - **Task spec v2, all hand-off file formats, the event log and the live dashboard:** `docs/spec_and_io.md`. Spec v2 is a superset of DataGen's v1 (`ftc/spec.py`); every pipeline gets a folder `~/finetuner/pipelines/<id>/` that links the DataGen run and Trainer jobs; `python3 dashboard/server.py` shows it live.
 
 ## Open: reconcile with `docs/setup-and-agent-plan.md` (Owen)

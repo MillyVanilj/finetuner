@@ -98,6 +98,8 @@ a human. Without an API key it returns a template.
 ### 3.1 Training data (DataGen → Trainer): unchanged
 JSONL, one `{"messages": [{"role":"system"?}, {"role":"user"}, {"role":"assistant"}]}` per line.
 DataGen's result key is `train_path`; `finetune-submit` accepts it as `--train-path`.
+Run order: inside a pipeline, if `bench/` exists but is not frozen yet, DataGen returns `"state": "waiting_for_bench"`
+and exits 1 (no `train_path` yet), so the contamination check always uses this pipeline's benchmark.
 
 ### 3.2 Benchmark items (BenchGen → Eval, and DataGen's contamination check)
 `bench/dev.jsonl` and `bench/heldout.jsonl`, one item per line:
@@ -110,6 +112,11 @@ DataGen's result key is `train_path`; `finetune-submit` accepts it as `--train-p
  "difficulty": "easy", "source": "synthetic", "source_ref": null, "base_pass_rate": null}
 ```
 - `question` = plain user text. **Required**: `format_data.py --bench` reads it for the contamination check.
+- `scoring` = `exact` · `json` · `judge`: how `finetune-eval` scores the item (its `scoring.py`). BenchGen sets it;
+  `judge` items carry the answer key / rubric in a `GRADING NOTE` at the end of `reference`.
+- Extra fields (`grading`, `verify`) are BenchGen's own analysis data; consumers ignore them.
+- `bench/safety.jsonl` (optional, for finetune-eval's M9): same item shape, `category` = `should_refuse` | `should_help`.
+  BenchGen copies it from `--safety-file`; it does not write safety prompts itself.
 - `messages` = exactly what the model is sent (no assistant turn). `reference` = the ideal reply, as a **string**
   (for JSON tasks, the JSON text; the scorer parses it).
 - `category` ∈ `["typical cases"] + spec.edge_cases`. That makes failures map straight onto feedback categories.
@@ -267,13 +274,13 @@ repo's `skills/`:
 State: `runner.json` (pid, current step, error), log: `runner.log`, both shown in the dashboard. **■ Stop**
 sends SIGTERM: the runner stops after its current call. Jobs it already launched (training, eval, BenchGen) keep
 running. A restart picks up where it was: DataGen, BenchGen and submit all resume or reuse.
-Needs: the Brev machine set up (`setup_brev.sh`, `install.sh`), keys loaded, and `finetune-bench-gen` (branch
-`feat/l2-benchgen`) and `finetune-decide` (two versions: branches `feat/evaluator` and
-`worktree-evaluator-decide`) installed. The runner reads both Evaluators' outputs.
+Needs: the Brev machine set up (`setup_brev.sh`, `install.sh`), keys loaded, and `finetune-decide` installed
+(not on main yet; two versions: branches `feat/evaluator` and `worktree-evaluator-decide`). BenchGen is on main. The runner reads both Evaluators' outputs.
 Test without GPU or API: `python3 tests/test_run_pipeline.py` (stand-in skills, 3 loops).
 
 ## 7. Open items for the team
-- Merge BenchGen (`feat/l2-benchgen`) and pick ONE Evaluator (`feat/evaluator` or `worktree-evaluator-decide`).
+- BenchGen is on main (`skills/finetune-bench-gen`, see `docs/benchgen-progress.md`). Pick ONE Evaluator
+  (`feat/evaluator` or `worktree-evaluator-decide`) and merge it.
 - ReportAgent (HF push, model card, Infinite post) is not built; the runner writes `final/final_report.json` for it.
 - DataGen doesn't read `--data-feedback-path` yet (the runner works around it, see §6) and ignores the v2-only
   fields (seed examples, coverage topics). Using `seed_examples` as few-shot examples is a cheap win.

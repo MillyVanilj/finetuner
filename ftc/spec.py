@@ -53,7 +53,7 @@ DEFAULTS = {
     "models": {"student": "Qwen/Qwen3-4B-Instruct-2507",
                "generator": "gemini-3.6-flash",
                "verifier": "claude-sonnet-5-5",
-               "bench_writer": "gpt",          # a third family, see docs/decisions.md Decision 3
+               "bench_writer": "claude-opus-5-5",   # BenchGen's model (team choice Nov 1, docs/decisions.md Decision 3)
                "judge": "claude-sonnet-5-5"},
     "training": {},                # optional LoRA overrides for the first run: rank, alpha, lr, epochs ...
 }

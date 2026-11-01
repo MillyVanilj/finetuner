@@ -12,11 +12,12 @@ ScienceClaw agent despite the 30–45 s skill time limit.
 What it does, in order:
 1. **Checks the data.** Every line must be `{"messages": [...]}` with a user message and a final assistant message, and there must be ≥10 examples. Bad data → error, no GPU time used.
 2. **Picks the settings.** Defaults (Qwen3-4B-Instruct-2507, LoRA r=16, α=32, lr 2e-4, 2 epochs), then overrides from the Evaluator's `--retrain-config-path`, then explicit flags.
-3. **Pre-flight checks decide automatically (no human needed)** whether to spend GPU time:
-   - **wait** (exit 1, retried next cycle): another training job is alive, or another program holds > 2 GB of GPU memory, or ≥ 6 jobs started in the last hour.
-   - **reuse** (exit 0, `status: "reused"`, returns the old `train_job_id`): identical data + settings were already trained.
-   - **refuse** (exit 1): estimated length > 1 h, pipeline GPU budget (`budget.max_gpu_hours` in the task spec) would be exceeded, too many jobs in this pipeline (> 2 × `targets.max_loops`), or < 5 GB disk free.
-   - The decision, reason and every check are saved in `run.json` → `preflight` and sent to the dashboard. `--force` overrides the soft limits (duplicate, length, rate, budget) but never GPU-busy or disk.
+3. **Pre-flight checks decide automatically (no human needed)** whether and how to spend GPU time:
+   - **clamp**: if the estimated length is over the time allowed (1 h per job, or what's left of the pipeline's `budget.max_gpu_hours`), it lowers `epochs` (even below 1) so the job fits, then launches. The original request is kept as `requested_config`.
+   - **wait** (exit 1, retried next cycle): another training job is alive, another program holds > 2 GB of GPU memory, or ≥ 6 jobs started in the last hour.
+   - **reuse** (exit 0, `status: "reused"`, returns the old `train_job_id`): identical data + requested settings were already trained.
+   - **refuse** (exit 1): only when nothing fits (< 0.25 epoch left in the budget) or < 5 GB disk.
+   - The decision, reason and every check are saved in `run.json` → `preflight` and sent to the dashboard. `--force` skips clamping/duplicate/rate (never GPU-busy or disk).
 4. **Writes `runs/<job_id>/run.json`**: config, dataset SHA-256 + example count, git commit, exact command, output locations.
 5. **Launches training in the background** and returns `train_job_id` within ~2 s.
 

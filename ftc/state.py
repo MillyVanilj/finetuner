@@ -161,6 +161,7 @@ def read_train_job(job_id) -> dict:
         "adapter_path": st.get("adapter_path"), "hub_url": st.get("hub_url"),
         "error": st.get("error"), "loss": loss, "eval_loss": eval_loss,
         "preflight": run.get("preflight"),   # finetune-submit's automatic launch checks
+        "requested_config": run.get("requested_config"),   # before pre-flight clamping (config = what ran)
     }
 
 
