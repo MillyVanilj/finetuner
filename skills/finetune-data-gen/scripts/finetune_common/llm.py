@@ -20,13 +20,35 @@ REPO_ROOT = _find_scienceclaw_root()
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+MIN_CALL_S = 2.0          # don't start an LLM call with less than this much time left
 # Hard limit for any single LLM call. 18 s fits ScienceClaw's 30 s skill limit; a caller with a long time budget
 # (run_pipeline.py, BenchGen's background worker) raises it to LONG_CALL_CAP_S, because a reasoning model (the Sol
-# data checker) can need longer than 18 s. $FINETUNE_LLM_CALL_CAP_S overrides both.
-LLM_CALL_CAP_S = float(os.environ.get("FINETUNE_LLM_CALL_CAP_S") or 18.0)
+# data checker) can need longer than 18 s. $FINETUNE_LLM_CALL_CAP_S pins it (read once, here).
+DEFAULT_CALL_CAP_S = 18.0
 LONG_CALL_CAP_S = 120.0
-LONG_BUDGET_S = 60.0      # a time budget above this (or none) allows long calls
-MIN_CALL_S = 2.0          # don't start an LLM call with less than this much time left
+LONG_BUDGET_S = 60.0      # a time budget above this allows long calls
+CAP_RANGE_S = (5.0, 3600.0)
+
+
+def _env_call_cap():
+    """$FINETUNE_LLM_CALL_CAP_S as seconds ("45" or "45s"), or None if unset. A value that isn't a number in
+    CAP_RANGE_S is ignored with a warning: "abc" must not crash the skill, and 0 would make every call give up."""
+    raw = (os.environ.get("FINETUNE_LLM_CALL_CAP_S") or "").strip()
+    if not raw:
+        return None
+    try:
+        v = float(raw[:-1] if raw[-1:].lower() == "s" else raw)
+    except ValueError:
+        v = None
+    if v is None or not CAP_RANGE_S[0] <= v <= CAP_RANGE_S[1]:
+        print(f"[warning] ignoring FINETUNE_LLM_CALL_CAP_S={raw!r}: want seconds between {CAP_RANGE_S[0]:g} and "
+              f"{CAP_RANGE_S[1]:g}", file=sys.stderr, flush=True)
+        return None
+    return v
+
+
+ENV_CALL_CAP_S = _env_call_cap()
+LLM_CALL_CAP_S = ENV_CALL_CAP_S or DEFAULT_CALL_CAP_S
 CALL_MARGIN_S = 0.5       # keep this much time after a call for writing files
 
 
@@ -182,19 +204,21 @@ _EMPTY_LOCK = threading.Lock()
 
 
 def allow_long_calls(time_budget) -> float:
-    """Raise the per-call cap for a long (> LONG_BUDGET_S) or unlimited (<= 0) time budget, unless
-    $FINETUNE_LLM_CALL_CAP_S pins it. Returns the cap in force."""
+    """Raise the per-call cap to LONG_CALL_CAP_S for a time budget over LONG_BUDGET_S seconds, unless
+    $FINETUNE_LLM_CALL_CAP_S pins it. A caller whose "no budget" is 0 passes float("inf"). Returns the cap."""
     global LLM_CALL_CAP_S
-    if not os.environ.get("FINETUNE_LLM_CALL_CAP_S") and (time_budget <= 0 or time_budget > LONG_BUDGET_S):
+    if ENV_CALL_CAP_S is None and time_budget > LONG_BUDGET_S:
         LLM_CALL_CAP_S = LONG_CALL_CAP_S
     return LLM_CALL_CAP_S
 
 
-def call_timeout(deadline) -> float:
-    """Time allowed for the next LLM call: capped, and leaving a margin before the deadline."""
+def call_timeout(deadline, cap=None) -> float:
+    """Time allowed for the next LLM call: capped (LLM_CALL_CAP_S, or `cap` for this call), leaving a margin
+    before the deadline."""
+    cap = LLM_CALL_CAP_S if cap is None else cap
     if deadline is None:
-        return LLM_CALL_CAP_S
-    return min(LLM_CALL_CAP_S, deadline - time.time() - CALL_MARGIN_S)
+        return cap
+    return min(cap, deadline - time.time() - CALL_MARGIN_S)
 
 def log(msg: str) -> None:
     """Progress messages go to stderr so stdout stays clean JSON for ScienceClaw."""

@@ -639,7 +639,7 @@ def accept(run_dir, state, items):
 def run(a):
     budget = a.time_budget
     deadline = _T_START + (budget if budget > 0 else 10 ** 9)
-    L.allow_long_calls(budget)               # the background worker (no budget): 120 s per call
+    L.allow_long_calls(budget if budget > 0 else float("inf"))   # BenchGen's 0 = no budget (the background worker)
     jsonparse.BAD_OUTPUT_DIR = BENCH_DIR
     if not (a.spec or (a.query and a.query.strip())):
         raise ValueError("give --spec <file> or --query <fine-tuning request>")

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Offline tests for BenchGen (no API calls). Run: python3 -B skills/finetune-bench-gen/tests/test_bench.py"""
+import os as _os; _os.environ.pop("FINETUNE_LLM_CALL_CAP_S", None)   # tests set per-call limits themselves
 import contextlib, io, json, re, sys, tempfile, threading, time
 from pathlib import Path
 HERE = Path(__file__).resolve().parent
@@ -256,12 +257,13 @@ check("not finished -> exit 1 (ScienceClaw retries), finished -> exit 0, no benc
       code == 0 and "bench_dir" not in outs[0])
 
 # --- 9. pending verification survives a hung reviewer ---
-saved_cap, saved_min = B.L.LONG_CALL_CAP_S, B.L.MIN_CALL_S
+saved_cap, saved_min, saved_env = B.L.LONG_CALL_CAP_S, B.L.MIN_CALL_S, B.L.ENV_CALL_CAP_S
 B.L.LONG_CALL_CAP_S, B.L.MIN_CALL_S = 0.5, 0.1          # calls are cut off after 0.5 s
+B.L.ENV_CALL_CAP_S = None                               # (a pinned cap from the environment would block that)
 res, err, code = run_main(["--spec", str(spec_f), "--run-id", "arith-hang", "--n-items", "6", "--time-budget", "0",
                            "--max-rounds", "1", "--format", "json"], Fake(hang_review=True))
 check("hung reviewer -> items pending, nothing lost", res["pending_verify"] > 0 and res["verified"] == 0)
-B.L.LONG_CALL_CAP_S, B.L.MIN_CALL_S = saved_cap, saved_min
+B.L.LONG_CALL_CAP_S, B.L.MIN_CALL_S = saved_cap, saved_min; B.L.ENV_CALL_CAP_S = saved_env
 res, err, code = run_main(["--spec", str(spec_f), "--run-id", "arith-hang", "--n-items", "6", "--time-budget", "0",
                            "--format", "json"], Fake())
 check("next call verifies pending first, then finishes", "verifying" in err and "pending items" in err and res["done"]
