@@ -132,7 +132,7 @@ def t_plateau_picks_best(root):
                   losses=(1.9, 1.85, 1.82, 1.8, 1.8, 1.79))
     out = decide(r2)
     assert out["loop"] == 2 and out["action"] == "stop" and out["rule"] == "no gain over last loop", out
-    assert out["best_job_id"] == "j1", out
+    assert out["best_job_id"] == "j1" and out["best_loop"] == 1 and out["best_tuned_score"] == 0.52, out
 
 
 def t_max_loops(root):
