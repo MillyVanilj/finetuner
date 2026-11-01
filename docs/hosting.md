@@ -14,6 +14,21 @@ So never put the normal server on a public URL. There are two safe ways to share
 The team keeps using the normal dashboard privately through port-forwarding, as before
 (`brev port-forward <instance> --port 8765:8765`, then http://localhost:8765).
 
+## Quickest: the full dashboard on a public link (no protection)
+
+If you don't care who can press the buttons (e.g. a short demo), tunnel the normal dashboard directly:
+
+```bash
+cd ~/finetuner
+nohup python3 dashboard/server.py --port 8765 > ~/dashboard.log 2>&1 &     # skip if it is already running
+curl -L -o ~/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+chmod +x ~/cloudflared
+nohup ~/cloudflared tunnel --url http://localhost:8765 > ~/tunnel.log 2>&1 &
+sleep 5; grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' ~/tunnel.log
+```
+
+Everything works through that link (New task, ▶ Start, the wall…), for anyone who has it. Stop: `pkill cloudflared`.
+
 ---
 
 ## A. Live, read-only, through a Cloudflare tunnel (for judges during the event)
