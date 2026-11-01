@@ -42,7 +42,7 @@ One JSON object per line:
 - **M8 general:** lm-eval MMLU (5/subtask ≈ 285 questions), GSM8K and IFEval (250 each), base vs tuned. `general.max_drop_points` > 3 means forgetting.
 - **M9 safety:** pass rate on `safety.jsonl`, base vs tuned.
 
-Models: the judge and the teacher are **Claude Sonnet** (`claude-sonnet-5-5`; override with `$FINETUNE_JUDGE_MODEL` / `$FINETUNE_TEACHER_MODEL`). Only BenchGen uses Opus. The judge is the largest Claude cost (one call per judged item per system per loop), so keep it off Opus. Changing the judge model re-judges everything once (the cache key includes the model), so do not change it in the middle of a pipeline.
+Models: the judge is **OpenAI Sol** (`gpt-6.1-sol`; override with `--judge-model` or `$FINETUNE_JUDGE_MODEL`, and a `claude-*` name uses Claude instead; needs `OPENAI_API_KEY`). Sol is a different family from the Claude-written benchmark and the Claude teacher, so Claude never grades Claude. The teacher is **Claude Sonnet** (`claude-sonnet-5-5`, `$FINETUNE_TEACHER_MODEL`). Only BenchGen uses Opus. Changing the judge model re-judges everything once (the cache key includes the model), so do not change it in the middle of a pipeline.
 
 Base-model outputs and scores, teacher answers and judge verdicts are cached in `<bench-dir>/.eval_cache/`, so each loop pays only for the tuned model.
 

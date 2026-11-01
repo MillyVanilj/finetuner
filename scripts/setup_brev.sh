@@ -46,13 +46,14 @@ echo "== 2/5 ScienceClaw Python environment =="
 [ -x "$SC_DIR/.venv/bin/pip" ] || { rm -rf "$SC_DIR/.venv"; python3 -m venv "$SC_DIR/.venv"; }   # rebuild if a previous run left it half-made
 "$SC_DIR/.venv/bin/pip" install -q --upgrade pip
 "$SC_DIR/.venv/bin/pip" install -q -r "$SC_DIR/requirements.txt"
+"$SC_DIR/.venv/bin/pip" install -q anthropic openai   # our finetune skills call Claude / OpenAI Sol directly
 (cd "$SC_DIR" && ./install_scienceclaw_command.sh >/dev/null)
 echo "✓ ScienceClaw installed"
 
 echo "== 3/5 Training environment (separate, so GPU packages don't clash with ScienceClaw) =="
 [ -x "$REPO_DIR/.venv-train/bin/pip" ] || { rm -rf "$REPO_DIR/.venv-train"; python3 -m venv "$REPO_DIR/.venv-train"; }   # rebuild if a previous run left it half-made
 "$REPO_DIR/.venv-train/bin/pip" install -q --upgrade pip
-"$REPO_DIR/.venv-train/bin/pip" install -q torch "transformers>=5" "trl>=1" peft datasets accelerate huggingface_hub "lm-eval[ifeval]" anthropic
+"$REPO_DIR/.venv-train/bin/pip" install -q torch "transformers>=5" "trl>=1" peft datasets accelerate huggingface_hub "lm-eval[ifeval]" anthropic openai
 "$REPO_DIR/.venv-train/bin/python" - <<'EOF'
 import torch
 ok = torch.cuda.is_available()

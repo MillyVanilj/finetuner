@@ -360,7 +360,9 @@ def main():
     p.add_argument("--max-batches", type=int, default=0, help=H)
     p.add_argument("--parallel", type=int, default=1, help=H)
     p.add_argument("--bench", default=None, help=H)
-    p.add_argument("--verify-backend", default=None, help=H)
+    # M3 runs on OpenAI Sol by default (a different model family from the Gemini generator).
+    # "same" = verify with the M2 backend (old behaviour, no OpenAI key needed).
+    p.add_argument("--verify-backend", default=os.environ.get("DATAGEN_VERIFY_BACKEND") or "openai", help=H)
     # Default is JSON: core/skill_executor.py json.loads() stdout, and the agent never passes --format.
     p.add_argument("--format", default="json", choices=["summary", "json"], help=H)
     a, unknown = p.parse_known_args()   # agents sometimes add flags we don't use (e.g. --max-results)
@@ -479,7 +481,7 @@ def run(a) -> dict:
     target = int(spec["n_examples"])
     # Separate instance for the verifier: get_llm_client caches ONE global client, so switching
     # backends through it would also switch M2's client.
-    llm_v = make_client("DataGenVerify", a.verify_backend) if a.verify_backend else llm
+    llm_v = make_client("DataGenVerify", a.verify_backend) if a.verify_backend not in (None, "", "same") else llm
     for k in ("rejected", "unverified"):
         state.setdefault(k, 0)
     timing = state.setdefault("timing", {"per_ex": PER_EX_INIT, "rounds": 0})

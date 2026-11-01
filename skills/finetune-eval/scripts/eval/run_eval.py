@@ -5,7 +5,7 @@ Started in the background by the finetune-eval skill (../finetune_eval.py); can 
 
   M7 task benchmark   <bench-dir>/<split>.jsonl. Systems: base zero-shot, base few-shot (k training
                       examples as prior turns: the baseline tuning must beat), teacher (Claude, the
-                      ceiling) and tuned. Code scoring first, Claude judge only for "judge" items.
+                      ceiling) and tuned. Code scoring first, OpenAI Sol judge only for "judge" items.
   M8 general ability  lm-eval-harness MMLU / GSM8K / IFEval subsets, base vs tuned (flags forgetting).
   M9 behaviour        <bench-dir>/safety.jsonl (optional, same item format, "judge" scoring, reference =
                       expected behaviour): refuse harmful asks, don't over-refuse benign ones. Base vs tuned.
@@ -61,10 +61,11 @@ def parse_args():
     p.add_argument("--split", choices=["dev", "heldout"], default="dev")
     p.add_argument("--out-dir", help="default: <run dir>/eval_<split>")
     p.add_argument("--model", help="base model; default: the one in the run's metrics.json")
-    # Sonnet, not Opus: the judge runs once per item per system per loop, so it is the biggest Claude cost.
-    # BenchGen alone stays on Opus (writing + checking the benchmark). See docs/decisions.md Decision 3.
-    p.add_argument("--claude-model", default=os.environ.get("FINETUNE_JUDGE_MODEL") or "claude-sonnet-5-5",
-                   help="judge (M7); $FINETUNE_JUDGE_MODEL")
+    # Judge = OpenAI Sol: a different family from the Claude-written benchmark and the Claude teacher, so
+    # Claude never grades Claude. A "claude-*" name switches the judge back to Claude. docs/decisions.md Decision 3.
+    p.add_argument("--judge-model", "--claude-model", dest="judge_model",
+                   default=os.environ.get("FINETUNE_JUDGE_MODEL") or "gpt-6.1-sol",
+                   help="judge (M7); $FINETUNE_JUDGE_MODEL; OpenAI unless the name starts with claude")
     p.add_argument("--teacher-model", default=os.environ.get("FINETUNE_TEACHER_MODEL") or "claude-sonnet-5-5",
                    help="teacher system (M7 ceiling); $FINETUNE_TEACHER_MODEL")
     p.add_argument("--few-shot", type=int, default=3)
@@ -141,6 +142,22 @@ def claude(client, model, msgs, effort, schema=None):
     if r.stop_reason == "refusal":
         return None
     return next((b.text for b in r.content if b.type == "text"), "")
+
+
+def openai_judge(client, model, prompt):
+    """One OpenAI (Sol) judge call with structured output -> JSON text, or None if it refused."""
+    r = client.responses.create(
+        model=model,
+        input=prompt,
+        reasoning={"effort": "low"},
+        max_output_tokens=16000,
+        text={"format": {"type": "json_schema", "name": "verdict", "schema": JUDGE_SCHEMA, "strict": True}},
+    )
+    for item in r.output:
+        for c in getattr(item, "content", None) or []:
+            if getattr(c, "type", "") == "refusal":
+                return None
+    return r.output_text or None
 
 
 def score_all(items, outputs, judge, pool):
@@ -259,14 +276,22 @@ def main():
                 lambda m: cache.get(["teacher", a.teacher_model, m], lambda: claude(client, a.teacher_model, m, "medium") or ""),
                 prompts))
 
+        judge_is_claude = a.judge_model.startswith("claude")
+        if not judge_is_claude:
+            import openai
+            oai = openai.OpenAI(max_retries=5)    # OPENAI_API_KEY from the environment
+
         def judge(item, output):
             conv = "\n\n".join(f"[{m['role']}]\n{m['content']}" for m in item["messages"])
             prompt = JUDGE_PROMPT.format(conversation=conv, reference=item["reference"], output=output)
 
             def ask():
-                text = claude(client, a.claude_model, [{"role": "user", "content": prompt}], "low", JUDGE_SCHEMA)
+                if judge_is_claude:
+                    text = claude(client, a.judge_model, [{"role": "user", "content": prompt}], "low", JUDGE_SCHEMA)
+                else:
+                    text = openai_judge(oai, a.judge_model, prompt)
                 return json.loads(text) if text else None
-            return cache.get(["judge", a.claude_model, prompt], ask)
+            return cache.get(["judge", a.judge_model, prompt], ask)
 
         status(state="running", stage="scoring")
         scored = {name: score_all(items, outs, judge, pool) for name, outs in outputs.items()}
@@ -282,7 +307,7 @@ def main():
             "bench_file": str(bench_file.resolve()),
             "bench_sha256": hashlib.sha256(bench_file.read_bytes()).hexdigest(),
             "n_items": len(items),
-            "judge_model": a.claude_model,
+            "judge_model": a.judge_model,
             "teacher_model": None if a.skip_teacher else a.teacher_model,
             "few_shot_k": a.few_shot if shots else 0,
             "task": {name: summarize(items, s) for name, s in scored.items()},

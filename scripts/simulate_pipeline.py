@@ -261,7 +261,7 @@ def run_eval(pl: Pipeline, spec, loop, job_id, adapter, tuned_score, cat_scores,
     systems = {s: {"score": sys_prog[s]["running_score"], "ci95": ci(sys_prog[s]["running_score"], n), "n": n,
                    "format_rate": round(min(1, true_scores[s] + 0.25), 3),
                    "model": {"tuned": f"{spec['models']['student']} + {job_id}",
-                             "teacher": spec["models"]["verifier"]}.get(s, spec["models"]["student"]),
+                             "teacher": "claude-sonnet-5-5"}.get(s, spec["models"]["student"]),
                    "cached": s in cached}
                for s in true_scores}
     cats = ["typical cases"] + spec["edge_cases"]
