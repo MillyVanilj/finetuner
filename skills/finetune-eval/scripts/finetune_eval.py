@@ -21,7 +21,11 @@ LAST_BENCH = RUNS / ".last_bench_dir"      # last bench_dir this skill was hande
 
 
 def _spec_judge(adapter_path):
-    """models.judge from the run's task spec, when it names a Claude model (judge and teacher call Claude)."""
+    """models.judge from the run's task spec, when it names a Claude model (judge and teacher call Claude).
+    None when $FINETUNE_JUDGE_MODEL is set: that machine-wide override (e.g. to save credits) beats the spec,
+    and run_eval.py reads it itself. Order: $FINETUNE_JUDGE_MODEL > spec models.judge > run_eval's default."""
+    if os.environ.get("FINETUNE_JUDGE_MODEL"):
+        return None
     try:
         pdir = json.loads((Path(adapter_path).resolve().parent / "run.json").read_text()).get("pipeline_dir") \
             or os.environ.get("FTC_PIPELINE_DIR")

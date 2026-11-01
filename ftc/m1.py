@@ -35,8 +35,8 @@ Return ONLY one JSON object (no prose, no code fences) with two keys:
      format_regex (or null)}}, success_criteria (3-6 checkable statements), edge_cases (3-6 concrete
      tricky situations), coverage {{topics (4-8 subtopics), difficulty: ["easy","medium","hard"]}},
      n_examples (integer, 300-1000 typical), system_prompt (or null),
-     seed_examples ([{{"input": "...", "output": "...", "source": "user"}}]: ONLY examples the user actually gave,
-     as text (for JSON tasks the JSON as a string); never invent them; [] if none),
+     seed_examples ([{{"input": "...", "output": "...", "source": "user"}}]: the current draft's examples unchanged,
+     plus any new ones the user gave, as text (for JSON tasks the JSON as a string); never invent them),
      scoring {{method: one of {SCORING_METHODS}, format_check: none|regex|json_schema,
      judge_rubric (only if method is judge), pass_threshold}},
      targets {{target_score (0-1), max_loops: 3}}
@@ -94,9 +94,12 @@ def _parse(raw: str) -> dict:
 
 
 def _merge(base, over):
-    """over's keys win; nested objects merge, so a field the LLM leaves out keeps the user's value."""
+    """over's keys win; nested objects merge, so a field the LLM leaves out keeps the user's value. An empty
+    list from the LLM never clears a non-empty one (e.g. seed_examples: [] when the user didn't repeat them)."""
     out = dict(base) if isinstance(base, dict) else {}
     for k, v in (over or {}).items():
+        if v == [] and isinstance(out.get(k), list) and out[k]:
+            continue
         out[k] = _merge(out.get(k), v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
     return out
 
@@ -125,16 +128,19 @@ def _apply_template_answers(s: dict, answers: dict) -> dict:
     a = {k: v for k, v in a.items() if v and v != defaults.get(k)}
     if a.get("q1"):
         s["io_format"] = a["q1"]
-    seeds = _seed_lines(a.get("q2", ""))
-    if seeds:
-        s["seed_examples"] = list(s.get("seed_examples") or []) + seeds
+    have = list(s.get("seed_examples") or [])
+    seen = {(e.get("input"), e.get("output")) for e in have if isinstance(e, dict)}
+    new = [e for e in _seed_lines(a.get("q2", "")) if (e["input"], e["output"]) not in seen]   # Apply twice = once
+    if new:
+        s["seed_examples"] = have + new
     cases = [c.strip() for c in re.split(r"[\n;]", a.get("q3", "")) if c.strip()]
     if cases:
         s["edge_cases"] = cases
     m = re.search(r"\d+(?:\.\d+)?", a.get("q4", ""))
-    if m:
+    if m:   # the question asks for 0-100%: "1" is 1%; only a decimal like "0.8" is already a fraction
         x = float(m.group())
-        s["targets"] = {**(s.get("targets") or {}), "target_score": x / 100 if x > 1 else x}
+        frac = "." in m.group() and x <= 1 and "%" not in a["q4"]
+        s["targets"] = {**(s.get("targets") or {}), "target_score": min(x if frac else x / 100, 1.0)}
     return s
 
 

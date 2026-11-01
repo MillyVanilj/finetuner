@@ -253,9 +253,18 @@ def validate_spec(spec: dict) -> tuple[list[str], list[str]]:
         if bu.get(k) is not None and not (_num(bu[k]) and bu[k] > 0):
             errors.append(f"budget.{k} must be a number > 0 (leave it empty for the default)")
 
-    bad = set(spec.get("training") or {}) - TRAINING_KEYS
+    tr = spec.get("training") or {}
+    bad = set(tr) - TRAINING_KEYS
     if bad:
         errors.append(f"training: unknown settings {sorted(bad)} (allowed: {', '.join(sorted(TRAINING_KEYS))})")
+    for k, v in tr.items():   # finetune-submit passes these straight to train_sft.py
+        if v is None or k not in TRAINING_KEYS:
+            continue
+        ok = _text(v) if k == "model" else (_num(v) and v > 0) if k in ("lr", "epochs") else \
+            (isinstance(v, int) and not isinstance(v, bool) and (v >= 0 if k == "seed" else v > 0))
+        if not ok:
+            want = "text" if k == "model" else "a number > 0" if k in ("lr", "epochs") else "a whole number"
+            errors.append(f"training.{k} must be {want} (got {v!r})")
     judge = (spec.get("models") or {}).get("judge")
     if judge and not str(judge).startswith("claude-"):
         warnings.append(f"models.judge '{judge}' is not a Claude model: the eval judge stays on its default Claude model")

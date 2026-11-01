@@ -49,6 +49,15 @@ def test_apply_answers_keeps_what_the_llm_leaves_out():
     assert s["benchmark"]["n_dev"] == 50 and s["models"]["student"] == "Qwen/Qwen3-8B" and s["training"] == {"rank": 32}
 
 
+def test_empty_lists_from_the_llm_keep_the_users_entries():
+    """Told to list only examples the user gave, Claude may return seed_examples: [] when the user didn't
+    repeat them in their answers. That must not wipe the examples already in the form (same for other lists)."""
+    seeds = [{"input": "pH of 0.01 M HCl?", "output": "ANSWER: 2", "source": "user"}]
+    form = {**BASE, "seed_examples": seeds}
+    reply = json.dumps({"spec": {**BASE, "seed_examples": [], "edge_cases": [], "title": "Chem"}, "questions": []})
+    s = with_reply(reply, lambda: m1.draft("chemistry", form, {"q1": "q? -> fine"}))["spec"]
+    assert s["seed_examples"] == seeds and s["edge_cases"] == BASE["edge_cases"] and s["title"] == "Chem"
+
 def test_malformed_llm_replies_fall_back_with_a_reason():
     for reply in ('{"spec": "todo", "questions": []}', '{"spec": {}, "questions": {"q1": "?"}}', "[1, 2]",
                   "Sure! Here is your spec.", RuntimeError("model declined the request")):
@@ -80,17 +89,36 @@ def test_no_api_key_applies_template_answers():
         m1._client = orig
 
 
+def test_no_api_key_answers_are_idempotent_and_read_as_percent():
+    orig = m1._client
+    m1._client = lambda: None
+    try:
+        r1 = m1.draft("classify sentiment")
+        qs = {q["id"]: q for q in r1["questions"]}
+        ans = lambda target: {"q2": f"{qs['q2']['question']} -> great film => positive",
+                              "q4": f"{qs['q4']['question']} -> {target}"}
+        s = m1.draft("x", r1["spec"], ans("80%"))["spec"]
+        s = m1.draft("x", s, ans("80%"))["spec"]          # "Apply answers" clicked twice
+        assert len(s["seed_examples"]) == 1, s["seed_examples"]
+        for typed, want in (("1", 0.01), ("1%", 0.01), ("80", 0.8), ("0.8", 0.8), ("100", 1.0)):
+            got = m1.draft("x", r1["spec"], ans(typed))["spec"]["targets"]["target_score"]
+            assert abs(got - want) < 1e-9, (typed, got)
+    finally:
+        m1._client = orig
+
 def test_check_spec_turns_bad_input_into_errors():
     bad = [{"task": 123}, {"output": "json"}, {"targets": {"target_score": "80%"}}, {"targets": {"max_loops": 0}},
            {"output": {"type": "label", "labels": "pos,neg"}}, {"output": {"type": "json", "json_schema": "{oops"}},
            {"seed_examples": [{"input": "a", "output": {"x": 1}}]}, {"benchmark": {"n_heldout": 0}},
-           {"scoring": {"method": "label_accuracy"}}, {"budget": {"max_gpu_hours": 0}}, {"training": {"rnk": 8}}]
+           {"scoring": {"method": "label_accuracy"}}, {"budget": {"max_gpu_hours": 0}}, {"training": {"rnk": 8}},
+           {"training": {"epochs": "2"}}, {"training": {"rank": 8.5}}, {"training": {"lr": -1}}, {"training": {"model": 3}}]
     for extra in bad:
         _, errors, _ = check_spec({**BASE, **extra})
         assert errors, extra
     assert check_spec("not an object")[1] == ["the spec must be a JSON object"]
     # empty fields mean "default", and the shipped examples stay valid
     assert check_spec({**BASE, "targets": {"max_loops": None, "min_gain": None}})[1] == []
+    assert check_spec({**BASE, "training": {"rank": 32, "lr": 1e-4, "epochs": 1.5, "model": "Qwen/Qwen3-8B"}})[1] == []
     for p in (ROOT / "examples/specs").glob("*.json"):
         assert check_spec(json.loads(p.read_text()))[1] == [], p
     w = check_spec({**BASE, "models": {"generator": "gpt-x"}})[2]
@@ -155,6 +183,12 @@ def test_trainer_and_eval_read_the_specs_choices():
         fe = importlib.util.module_from_spec(es)
         es.loader.exec_module(fe)
         assert fe._spec_judge(str(job / "adapter")) == "claude-sonnet-5-5"
+        # $FINETUNE_JUDGE_MODEL (a machine-wide override, e.g. to save credits) beats the spec
+        os.environ["FINETUNE_JUDGE_MODEL"] = "claude-haiku-5-5"
+        try:
+            assert fe._spec_judge(str(job / "adapter")) is None   # not passed: run_eval reads the env var
+        finally:
+            os.environ.pop("FINETUNE_JUDGE_MODEL")
 
 
 if __name__ == "__main__":

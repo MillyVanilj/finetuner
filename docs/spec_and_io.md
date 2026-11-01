@@ -84,7 +84,7 @@ validation warns when one is changed from its default, so nobody expects it to t
 | `targets.max_loops` | | `3` | Evaluator | |
 | `targets.max_general_drop` | | `0.03` | Evaluator | M8 drop above this = forgetting |
 | `budget.max_api_usd` / `max_gpu_hours` | | 20 / 2 | `max_gpu_hours`: Trainer pre-flight, Evaluator. `max_api_usd`: **not read yet** | Hard stop |
-| `models.student/generator/verifier/bench_writer/judge` | | see `ftc/spec.py` | `student`: Trainer (every run). `judge`: Eval, if it is a `claude-…` model. The other three: **not read yet** (DataGen and BenchGen pick their model from env/flags) | Different families per role (decisions.md, Decision 3). Validation warns if generator = judge |
+| `models.student/generator/verifier/bench_writer/judge` | | see `ftc/spec.py` | `student`: Trainer (every run). `judge`: Eval, if it is a `claude-…` model and `$FINETUNE_JUDGE_MODEL` isn't set (that machine-wide override wins). The other three: **not read yet** (DataGen and BenchGen pick their model from env/flags) | Different families per role (decisions.md, Decision 3). Validation warns if generator = judge |
 | `training` | | `{}` | Trainer (first run; later runs take the Evaluator's retrain config) | LoRA overrides: model, rank, alpha, lr, epochs, batch_size, grad_accum, max_length, seed (other keys are an error) |
 | `m1` | | | UI | `{goal, answers, source}`: how M1 produced the spec |
 

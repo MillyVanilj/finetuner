@@ -20,7 +20,7 @@ Scores a LoRA adapter from `train_sft.py` against its base model. The job takes 
 
 Unknown flags (e.g. a `--query` ScienceClaw adds) are ignored.
 
-Needs `ANTHROPIC_API_KEY` in the environment (Claude judges free-text items and safety items and plays the teacher; inside a pipeline, the task spec's `models.judge` picks the Claude model) and the training venv at `$FINETUNER_DIR/.venv-train` (default `~/finetuner`).
+Needs `ANTHROPIC_API_KEY` in the environment (Claude judges free-text items and safety items and plays the teacher; which Claude model: `$FINETUNE_JUDGE_MODEL` if set, else the pipeline's task spec `models.judge`, else the default. Here one `--claude-model` serves as judge and teacher) and the training venv at `$FINETUNER_DIR/.venv-train` (default `~/finetuner`).
 
 ## Benchmark item format (what L2 must write)
 
