@@ -103,6 +103,9 @@ select.btn { padding-right: 8px; max-width: 360px; }
 .bar { height: 4px; border-radius: 4px; background: var(--grid); overflow: hidden; margin-top: 6px; }
 .bar > i { display: block; height: 100%; background: var(--s1); border-radius: 4px; transition: width .6s ease; }
 .bar.done > i { background: var(--good); }
+.bar.indet > i { width: 30%; animation: indet 1.6s ease-in-out infinite; }
+@keyframes indet { 0% { margin-left: -30%; } 100% { margin-left: 100%; } }
+@media (prefers-reduced-motion: reduce) { .bar.indet > i { animation: none; width: 100%; opacity: .35; } }
 .edge { fill: none; stroke: var(--axis); stroke-width: 1.5; }
 .edge.active { stroke: var(--s1); stroke-width: 2; stroke-dasharray: 6 5; animation: flow 0.9s linear infinite; }
 .edge.done { stroke: var(--ink-2); }
@@ -645,7 +648,8 @@ function nodeSummary(k) {
     return {kv: `step <b>${fmtNum(j.step)}</b>/${fmtNum(j.max_steps)}${last ? ` · loss <b>${fmtNum(last.loss, 3)}</b>` : ""}`, pct: j.max_steps ? j.step / j.max_steps : null}; }
   if (k === "eval") { const l = curLoop(), p = l.eval_progress, r = l.eval_report;
     if (p && p.state === "running") return p.total ? {kv: `${esc(p.phase || "")} · <b>${fmtNum(p.done)}</b>/${fmtNum(p.total)}`, pct: p.done / p.total}
-      : {kv: `<b>${esc(p.phase || "running")}</b>`};
+      : {kv: `<b>${esc(p.phase || "running")}</b>${p.stage_total ? ` · ${fmtNum(p.stage_done)}/${fmtNum(p.stage_total)}` : ""}`,
+        pct: p.stage_total ? Math.min(1, (p.stage_done || 0) / p.stage_total) : null};   // the bar matches the count shown
     if (r) return {kv: `tuned <b>${fmtPct(r.systems.tuned.score)}</b> vs few-shot ${fmtPct(r.systems.base_fewshot.score)}`, pct: 1};
     return {kv: "waiting for adapter"}; }
   if (k === "decide") { const d = curLoop().decision; if (!d) return {kv: st === "running" ? "checking stop rules…" : "after evaluation"};
@@ -1130,15 +1134,31 @@ function pTrain() {
       {height: 240, xName: "step", xMax: j.max_steps, yDigits: 2, aria: "Training loss by step", empty: "Waiting for the first loss value…"})};
 }
 
+// finetune-eval's stages, in order (run_eval.py). Steps it skips (M8 with --skip-general) just pass by.
+const EVAL_STEPS = ["loading model", "M7/M9 base model", "M8 base model (lm-eval)", "M7/M9 tuned model", "M8 tuned model (lm-eval)", "M7 teacher (Claude)", "scoring"];
+function evalOverall(p) {   // 0..1 across all steps, counting the items done inside the current one
+  const i = EVAL_STEPS.indexOf(p.phase);
+  if (i < 0) return null;
+  const frac = p.stage_total ? Math.min(1, (p.stage_done || 0) / p.stage_total) : 0;
+  return (i + frac) / EVAL_STEPS.length;
+}
+function evalStepBar(p) {   // "123 / 400 · 31% · ~4 min left" under the running step
+  if (!p.stage_total) return `<div class="bar indet"><i></i></div><div class="muted" style="font-size:12px;margin-top:3px">working… (this step reports no item count)</div>`;
+  const d = p.stage_done || 0, t = p.stage_total, el = p.stage_started_at ? Date.now() / 1000 - p.stage_started_at : null;
+  const left = d > 0 && d < t && el > 0 ? el / d * (t - d) : null;
+  return `<div class="bar ${d >= t ? "done" : ""}"><i style="width:${Math.min(100, d / t * 100)}%"></i></div>
+    <div class="muted" style="font-size:12px;margin-top:3px"><b>${fmtNum(d)}</b> / ${fmtNum(t)} · ${Math.round(d / t * 100)}%${left != null ? ` · ~${fmtDur(left)} left` : ""}${el != null ? ` · ${fmtDur(el)} so far` : ""}</div>`;
+}
+
 function pEval() {
   const l = curLoop(), p = l.eval_progress, r = l.eval_report, sp = S.spec;
   let html = "";
   if (p && p.state === "running" && !p.total) {
     // the real finetune-eval only reports which stage it is in: show its stage list with the current one marked
-    const STEPS = ["loading model", "M7/M9 base model", "M8 base model (lm-eval)", "M7/M9 tuned model", "M8 tuned model (lm-eval)", "M7 teacher (Claude)", "scoring"];
-    const cur = STEPS.indexOf(p.phase);
+    const STEPS = EVAL_STEPS, cur = STEPS.indexOf(p.phase), all = evalOverall(p);
     html += `<div class="callout" style="margin-bottom:12px"><b>${esc(p.phase || "starting")}</b> on the ${esc(p.split || "dev")} split</div>
-      <table class="t">${STEPS.map((s, i) => `<tr><td style="width:120px">${badge(cur < 0 ? "pending" : i < cur ? "done" : i === cur ? "running" : "pending")}</td><td>${esc(s)}</td></tr>`).join("")}</table>
+      ${all != null ? `<div class="muted" style="font-size:12px">Overall: step ${cur + 1} of ${STEPS.length}</div><div class="bar" style="margin-bottom:12px"><i style="width:${all * 100}%"></i></div>` : ""}
+      <table class="t">${STEPS.map((s, i) => `<tr><td style="width:120px">${badge(cur < 0 ? "pending" : i < cur ? "done" : i === cur ? "running" : "pending")}</td><td>${esc(s)}${i === cur ? evalStepBar(p) : ""}</td></tr>`).join("")}</table>
       <p class="muted" style="font-size:12px">Base-model and teacher results are cached after loop 1, so later loops only re-run the tuned model.</p>`;
   } else if (p && p.state === "running") {
     const sysP = p.metrics?.systems || {};

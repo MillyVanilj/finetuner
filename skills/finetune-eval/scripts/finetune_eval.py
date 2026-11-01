@@ -171,7 +171,8 @@ def main():
     if report_f.exists():
         result = headline(report_f, a.adapter_path)
     elif status and status.get("state") != "failed" and alive(status.get("pid")):
-        result = {"state": "running", "stage": status.get("stage"), "eval_dir": str(out)}
+        result = {"state": "running", "stage": status.get("stage"), "eval_dir": str(out),
+                  **{k: status[k] for k in ("done", "total", "stage_started_at") if status.get(k) is not None}}
     elif status:
         # Failed or died (e.g. OOM-killed). Not relaunched automatically, so a broken run can't burn GPU in a loop.
         result = {"state": "failed", "error": status.get("error", "job exited without finishing"),
