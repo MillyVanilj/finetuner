@@ -18,6 +18,8 @@ Scores a LoRA adapter from `train_sft.py` against its base model. The job takes 
 | `--skip-general` | Skip M8 (lm-eval) for faster loops | off |
 | `--format` | `json` or `summary` | json |
 
+Unknown flags (e.g. a `--query` ScienceClaw adds) are ignored.
+
 Needs `ANTHROPIC_API_KEY` in the environment (Claude judges free-text items and safety items and plays the teacher) and the training venv at `$FINETUNER_DIR/.venv-train` (default `~/finetuner`).
 
 ## Benchmark item format (what L2 must write)
@@ -46,7 +48,7 @@ Deciding what to do with the report (retrain settings, LoRA rank, data feedback,
 
 ## Output
 
-`<run dir>/eval_<split>/`: `report.json` (everything above, plus train loss from `metrics.json`), `outputs.jsonl` (every answer with its score), `status.json`, `eval.log`. On success it also writes `eval_report.json` (or `heldout_report.json`) next to `report.json` in the docs/spec_and_io.md §3.4 format that finetune-decide reads, plus a copy in `<pipeline>/loops/<n>/eval/` when the run belongs to a pipeline. It prints `eval_report_path` (the §3.4 file, so the reactor hands it straight to finetune-decide), `report_path` (the raw report.json) and headline numbers. A failed job is not restarted automatically: fix the cause, delete the folder, and call again.
+`<run dir>/eval_<split>/`: `report.json` (everything above, plus train loss from `metrics.json`), `outputs.jsonl` (every answer with its score), `status.json`, `eval.log`. On success it also writes `eval_report.json` (or `heldout_report.json`) next to `report.json` in the docs/spec_and_io.md §3.4 format that finetune-decide reads, plus a copy in `<pipeline>/loops/<n>/eval/` when the run belongs to a pipeline. Inside a pipeline that copy is rewritten on every call for the pipeline's *current* loop, so a reused training job (finetune-submit found identical data and settings, and the report already exists) is filed under the loop that asked for it, with that loop's number. It prints `eval_report_path` (the §3.4 file, so the reactor hands it straight to finetune-decide), `report_path` (the raw report.json) and headline numbers. A failed job is not restarted automatically: fix the cause, delete the folder, and call again.
 
 ## Examples
 

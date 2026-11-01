@@ -149,6 +149,7 @@ Systems: `base_zeroshot`, `base_fewshot` (prompted with 3–5 train examples: **
  "created_at": "..."}
 ```
 Scores are in 0–1. `ci95` = bootstrap (or normal-approximation) 95% interval. `general` is empty when M8 was skipped.
+Inside a pipeline, `finetune-eval` writes this file itself (converted with `ftc/report_convert.py`) for the pipeline's current loop on every call, so a reused training job gets the new loop number.
 The final held-out run writes the same shape to `heldout_report.json` with `"split": "heldout"`.
 
 ### 3.5 Live eval progress (Eval → UI): `loops/<n>/eval/progress.json`
