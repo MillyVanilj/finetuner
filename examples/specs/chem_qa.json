@@ -78,10 +78,10 @@
   },
   "models": {
     "student": "Qwen/Qwen3-4B-Instruct-2507",
-    "generator": "gemini-3.6-flash",
-    "verifier": "gpt-6.1-sol",
+    "generator": "gpt-6.1-sol",
+    "verifier": "claude-sonnet-5-5",
     "bench_writer": "claude-opus-5-5",
-    "judge": "gpt-6.1-sol"
+    "judge": "claude-sonnet-5-5"
   },
   "training": {}
 }

@@ -293,3 +293,10 @@ if __name__ == "__main__":
         if name.startswith("test_"):
             fn()
             print("ok", name)
+
+
+def test_best_adapter_prefers_no_forgetting():
+    forgot = report(tuned=0.82, general=[("gsm8k", -0.08)], loop=2)
+    kept = report(tuned=0.80, general=[("gsm8k", -0.01)], loop=3)
+    assert fd.pick_best([forgot, kept], 0.03) is kept
+    assert fd.pick_best([report(tuned=0.7, loop=1), kept], 0.03) is kept       # no forgetting: higher score wins

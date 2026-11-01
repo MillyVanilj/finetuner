@@ -113,6 +113,12 @@ def item_scores(orig_report):
             if o.get("system") == "tuned" and o.get("id") is not None}
 
 
+def pick_best(reports, max_drop):
+    """Best loop: an adapter that kept its general skills beats a slightly higher dev score that forgot them."""
+    return max(reports, key=lambda r: (not any(g["delta"] < -max_drop for g in r.get("general") or []),
+                                       r["systems"]["tuned"]["score"]))
+
+
 def decide(report, targets, history, cfg, signals, n_examples, ctx=None):
     """Pure rule table. history = earlier loops' [{"loop", "report", "decision"}], oldest first.
     ctx (optional, all keys optional): actual_epochs, clamped, gpu_hours, max_gpu_hours,
@@ -243,10 +249,13 @@ def find_pipeline(Pipeline, *paths):
 
 
 def main():
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    # No docstring in --help: ScienceClaw treats every --word in the help text as an input flag.
+    p = argparse.ArgumentParser(description="Evaluator: decide retrain, regenerate_data or stop from a dev eval report")
     p.add_argument("--eval-report-path", required=True,
                    help="finetune-eval's report.json or loops/<n>/eval/eval_report.json (§3.4)")
-    p.add_argument("--spec", "--task-spec-path", dest="spec", help="task_spec.json (default: the pipeline's)")
+    # Hidden from --help, so the reactor never wakes the Evaluator with a `spec` artifact (the kickoff, or its own
+    # regenerate_data output); run_pipeline.py passes it explicitly. Default: the pipeline's task_spec.json.
+    p.add_argument("--spec", "--task-spec-path", dest="spec", help=argparse.SUPPRESS)
     p.add_argument("--format", default="json")  # ScienceClaw may pass this; we always print JSON
     a, _ = p.parse_known_args()                  # ignore extras like --query that ScienceClaw passes
 
@@ -327,7 +336,7 @@ def main():
         pl.emit("decide", "start", "Evaluator checking stop rules", loop=loop)
         d = decide(report, targets, history, info["cfg"], train_signals(info["metrics"]), n_examples, ctx)
         d["vs_last_loop"], d["gpu_hours_used"] = vs_last, round(gpu_h, 3)
-        best = max([*(h["report"] for h in history), report], key=lambda r: r["systems"]["tuned"]["score"])
+        best = pick_best([*(h["report"] for h in history), report], targets["max_general_drop"])
 
     d = {"loop": loop, **d, "tuned_score": report["systems"]["tuned"]["score"],
          "target_score": targets["target_score"], "train_job_id": info["job_id"],

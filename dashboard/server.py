@@ -22,6 +22,15 @@ API (all JSON):
     GET  /api/wall?p=<id>                       the poster wall (p omitted = the lobby wall)
     POST /api/wall?p=<id> {author, text, to?, kind?, reply_to?}   pin a note (humans can talk to the agents)
     POST /api/wall/react?p=<id> {post, author, emoji}
+    GET  /api/answers?p=<id>                    every held-out item with every system's answer (final/heldout_answers.jsonl)
+    GET  /api/model_card?p=<id>                 final/model_card.md as text
+    POST /api/pipelines/<id>/publish {target: "hub"|"infinite", public?, repo?, community?}
+
+Sharing it with people outside the team (docs/hosting.md):
+    python3 dashboard/server.py --read-only --port 8766    # every POST refused, write buttons hidden
+    cloudflared tunnel --url http://localhost:8766         # prints a public https://….trycloudflare.com URL
+    python3 scripts/export_static.py --out site/           # frozen copy for GitHub Pages / any static host
+                                                -> python3 -m ftc.publish in the background (status: final/publish_state.json)
 """
 import argparse
 import hashlib
@@ -44,6 +53,15 @@ from ftc.wall import Wall, summary as wall_summary          # noqa: E402
 STATIC = Path(__file__).resolve().parent
 POLL_S = 1.0
 SIM_PROCS = []
+READ_ONLY = False   # --read-only: a view for the public (no runs, no API spend, no publishing, no wall posts)
+
+
+def render_index(flags: dict) -> bytes:
+    """index.html with window.FTC set, so the page knows it is read-only ({readOnly}) or a static export ({static})."""
+    html = (STATIC / "index.html").read_text()
+    if flags:
+        html = html.replace("<script>", f"<script>window.FTC = {json.dumps(flags)};</script>\n<script>", 1)
+    return html.encode()
 
 
 def pipeline_dir(pid: str) -> Path:
@@ -93,6 +111,53 @@ def start_runner(d: Path, body: dict) -> dict:
     return {"ok": True, "pid": proc.pid}
 
 
+def start_publish(d: Path, body: dict) -> dict:
+    """Push the adapter + model card to the HF Hub, or post the result to Infinite (ftc/publish.py), in the
+    background: an upload can take minutes. Its progress is final/publish_state.json + the Activity feed."""
+    from ftc.state import read_publish
+    target = body.get("target")
+    if target not in ("hub", "infinite"):
+        return {"ok": False, "error": "target must be 'hub' or 'infinite'"}
+    try:
+        final = json.loads((d / "final" / "final_report.json").read_text())
+    except (OSError, ValueError):
+        return {"ok": False, "error": "no final report yet: the pipeline hasn't finished"}
+    if final.get("simulated"):
+        return {"ok": False, "error": "this is a simulated run: there is no real adapter to publish"}
+    if read_publish(d).get("alive"):
+        return {"ok": False, "error": "a publish step is already running"}
+    args = [sys.executable, "-m", "ftc.publish", str(d), "--" + target]
+    if target == "hub" and body.get("public"):
+        args.append("--public")
+    if target == "hub" and body.get("repo"):
+        args += ["--repo", str(body["repo"]).strip()]
+    if target == "infinite" and body.get("community"):
+        args += ["--community", str(body["community"]).strip()]
+    logf = open(d / "final" / "publish.log", "a")
+    logf.write(f"\n===== {target} from the dashboard {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n")
+    logf.flush()
+    proc = subprocess.Popen(args, stdout=logf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                            cwd=str(ROOT), start_new_session=True)
+    (d / "final" / "publish_state.json").write_text(json.dumps({"target": target, "state": "running", "pid": proc.pid,
+                                                                "msg": "starting…"}))
+    return {"ok": True, "pid": proc.pid}
+
+
+def read_answers(d: Path) -> dict:
+    """Every held-out item with every system's answer, for the Result card's 'all answers' browser."""
+    rows = []
+    try:
+        rows = [json.loads(x) for x in (d / "final" / "heldout_answers.jsonl").read_text().splitlines() if x.strip()]
+    except (OSError, ValueError):
+        pass
+    try:
+        final = json.loads((d / "final" / "final_report.json").read_text())
+    except (OSError, ValueError):
+        final = {}
+    return {"rows": rows, "baseline": (final.get("verdict") or {}).get("baseline") or "base_fewshot",
+            "pass_threshold": (final.get("heldout") or {}).get("pass_threshold") or 0.5}
+
+
 def stop_runner(d: Path) -> dict:
     """■ Stop: SIGTERM the runner (it finishes its current call, then stops). Jobs it already launched
     (training, eval, BenchGen background jobs) keep running; stop them on the GPU box if needed."""
@@ -139,13 +204,9 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return (self.headers.get("Content-Type") or "").split(";")[0].strip().lower() == "application/json"
 
-    def _static(self, name, ctype):
-        p = STATIC / name
-        if not p.exists():
-            return self._json({"error": "not found"}, 404)
-        body = p.read_bytes()
+    def _html(self, body: bytes):
         self.send_response(200)
-        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -157,8 +218,10 @@ class Handler(BaseHTTPRequestHandler):
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
         try:
             if u.path in ("/", "/index.html"):
-                return self._static("index.html", "text/html; charset=utf-8")
+                return self._html(render_index({"readOnly": True} if READ_ONLY else {}))
             if u.path == "/api/pipelines":
+                if READ_ONLY:   # don't show the machine's folder layout to the public
+                    return self._json({"pipelines": list_pipelines()})
                 return self._json({"root": str(pipelines_root()), "pipelines": list_pipelines()})
             if u.path == "/api/examples":
                 ex = {p.stem: json.loads(p.read_text()) for p in sorted((ROOT / "examples" / "specs").glob("*.json"))}
@@ -169,6 +232,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._stream(pipeline_dir(q.get("p")))
             if u.path == "/api/wall":
                 return self._json(wall_summary(self._wall(q)))
+            if u.path == "/api/answers":
+                return self._json(read_answers(pipeline_dir(q.get("p"))))
+            if u.path == "/api/model_card":
+                f = pipeline_dir(q.get("p")) / "final" / "model_card.md"
+                return self._json({"text": f.read_text() if f.exists() else None})
             if u.path == "/api/file":
                 return self._file(pipeline_dir(q.get("p")), q.get("path", ""), int(q.get("n", 20)))
             return self._json({"error": "not found"}, 404)
@@ -224,6 +292,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         u = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
+        if READ_ONLY:
+            return self._json({"error": "this dashboard is read-only", "errors": ["this dashboard is read-only"]}, 403)
         if not self._same_origin():
             return self._json({"error": "refused: cross-site request, or not Content-Type: application/json"}, 403)
         try:
@@ -264,6 +334,8 @@ class Handler(BaseHTTPRequestHandler):
                 w.rename(d / "bench" / f"worker.json.failed-{time.strftime('%H%M%S')}")
                 Pipeline(d).emit("bench", "log", "BenchGen reset from the dashboard (worker.json set aside); press Start to retry", loop=0)
                 return self._json({"ok": True})
+            if u.path.startswith("/api/pipelines/") and u.path.endswith("/publish"):
+                return self._json(start_publish(pipeline_dir(u.path.split("/")[3]), body))
             if u.path.startswith("/api/pipelines/") and u.path.endswith(("/start", "/stop")):
                 pid_, action = u.path.split("/")[3], u.path.rsplit("/", 1)[1]
                 d = pipeline_dir(pid_)
@@ -305,12 +377,16 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--read-only", action="store_true",
+                    help="refuse every POST and hide the write buttons: safe to expose through a public tunnel")
     a = ap.parse_args()
+    global READ_ONLY
+    READ_ONLY = a.read_only
     pipelines_root().mkdir(parents=True, exist_ok=True)
     srv = ThreadingHTTPServer((a.host, a.port), Handler)
     srv.daemon_threads = True
     print(f"Dashboard: http://{'localhost' if a.host in ('127.0.0.1', '0.0.0.0') else a.host}:{a.port}  "
-          f"(pipelines in {pipelines_root()})", file=sys.stderr)
+          f"(pipelines in {pipelines_root()}){'  READ-ONLY' if READ_ONLY else ''}", file=sys.stderr)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

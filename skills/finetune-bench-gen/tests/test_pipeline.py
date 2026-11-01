@@ -2,6 +2,7 @@
 """BenchGen inside a pipeline folder (docs/spec_and_io.md): writes <pipeline>/bench, progress.json,
 events and the bench_dir link. Needs the team repo's ftc package ($FINETUNER_DIR or the repo checkout);
 skips otherwise. Run: python3 -B skills/finetune-bench-gen/tests/test_pipeline.py"""
+import os as _os; _os.environ.pop("FINETUNE_LLM_CALL_CAP_S", None)   # tests set per-call limits themselves
 import contextlib, io, json, os, re, sys, tempfile, time
 from pathlib import Path
 HERE = Path(__file__).resolve().parent

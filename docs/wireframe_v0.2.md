@@ -1,12 +1,12 @@
 # Wireframe v0.2: the fine-tuning collective
 
-*The design everything in this repo builds, drawn **as built (2026-11-01, after BenchGen and run_pipeline.py landed)**: box colours show status, arrows carry the real hand-off keys (the JSON keys the ScienceClaw reactor matches to the next skill's `--flags`). Original interactive version: https://claude.ai/artifact/CaQXjvVYfHTfFpGgNz2feQ · PDF: `docs/Claude_Wireframe_v0.2.pdf` (hand-drawn v0.1: `docs/Wireframe_v0.1.pdf`). Critique and build advice: `docs/wireframe_v0.2_review.md`. File formats between the boxes: `docs/spec_and_io.md`.*
+*The design everything in this repo builds, drawn **as built (2026-11-01, after agent mode and the M1 assumptions work)**: box colours show status, arrows carry the real hand-off keys (the JSON keys the ScienceClaw reactor matches to the next skill's `--flags`). Original interactive version: https://claude.ai/artifact/CaQXjvVYfHTfFpGgNz2feQ · PDF: `docs/Claude_Wireframe_v0.2.pdf` (hand-drawn v0.1: `docs/Wireframe_v0.1.pdf`). Critique and build advice: `docs/wireframe_v0.2_review.md`. File formats between the boxes: `docs/spec_and_io.md`.*
 
-**Legend:** green = built · amber = built, but not connected yet (the note says why) · grey dashed = not built · dotted arrow = planned hand-off that nothing reads yet.
+**Legend:** green = built · amber = built, but not connected yet (the note says why) · grey dashed = not built.
 
 ```mermaid
 flowchart TD
-    IN([User prompt]) --> M1["M1 · Prompt verification<br/>ftc/m1.py: CLI or dashboard, runs before the agents"]
+    IN([User prompt]) --> M1["M1 · Prompt verification<br/>ftc/m1.py: CLI or dashboard, runs before the agents<br/>records skipped answers + assumed values; finds real examples on HF"]
     M1 <-->|questions / answers| U([User])
     M1 --> SPEC[/"Task spec v2 · task_spec.json<br/>task · I/O format · success criteria · edge cases · targets<br/>ftc/spec.py"/]
 
@@ -25,7 +25,7 @@ flowchart TD
         M6 --> HO[(Held-out split<br/>scored once, at the end)]
     end
 
-    DEV -.->|bench items| CC
+    DEV -->|bench items| CC
     CC -->|train_path| TR["Trainer · finetune-submit → finetune-status<br/>automatic pre-flight checks<br/>LoRA r=16 · Qwen3-4B · Brev L40S"]
     TR -->|adapter_path| L3
     DEV -->|bench_dir| L3
@@ -36,11 +36,11 @@ flowchart TD
         M9["M9 · Behavioral<br/>safety.jsonl, base vs. tuned<br/>(needs team-written prompts)"]
     end
 
-    L3 -->|"eval_report_path<br/>(run_pipeline.py converts it to §3.4; the reactor doesn't yet)"| EV{"Iterate? · skills/finetune-decide<br/>fixed rules, one change per loop"}
+    L3 -->|eval_report_path| EV{"Iterate? · skills/finetune-decide<br/>fixed rules, one change per loop"}
     EV -->|"retrain: retrain_config_path + train_path<br/>(training issue → new hyperparameters)"| TR
-    EV -.->|"regenerate_data: data_feedback_path<br/>(failure categories only; DataGen doesn't read it yet)"| M2
+    EV -->|"regenerate_data: data_feedback_path<br/>(failure categories only)"| M2
     EV -->|"stop: best_adapter_path<br/>(target met · gain below min_gain · 3 loops)"| OUT
-    HO --> OUT["Output · ReportAgent (not built)<br/>held-out once + final_report.json: run_pipeline.py<br/>adapter on HF Hub · model card · Infinite post: not yet"]
+    HO --> OUT["Output · ReportAgent · skills/finetune-report<br/>held-out once → verdict, side-by-side examples, model card<br/>adapter on HF Hub (private) · Infinite post (opt-in)"]
 
     DASH[["Live dashboard · dashboard/server.py<br/>reads the pipeline folder and events.jsonl"]]
     RUN[["scripts/run_pipeline.py<br/>runs the whole chain without agents (dashboard ▶ Start)"]]
@@ -48,8 +48,8 @@ flowchart TD
     classDef built fill:#d6f0dc,stroke:#2f7d43,color:#10301a
     classDef partial fill:#fdebc8,stroke:#b7791f,color:#3a2604
     classDef todo fill:#eeeeee,stroke:#8a8a8a,stroke-dasharray:5 3,color:#333333
-    class M1,SPEC,M2,M3,M4,CC,M5,M6,DEV,HO,TR,M8,EV,DASH,RUN built
-    class M7,M9,OUT partial
+    class M1,SPEC,M2,M3,M4,CC,M5,M6,DEV,HO,TR,M7,M8,EV,OUT,DASH,RUN built
+    class M9 partial
 ```
 
 ## What changed from v0.1
@@ -65,13 +65,14 @@ flowchart TD
 
 | Box | Code | Status |
 |---|---|---|
-| M1 · Prompt verification | `ftc/m1.py` (CLI, and the dashboard's *New task* page) | Built. Runs before the agents, since ScienceClaw can't pause to ask a human |
+| M1 · Prompt verification | `ftc/m1.py` (CLI, and the dashboard's *New task* page) | Built. Runs before the agents, since ScienceClaw can't pause to ask a human. Records skipped answers and every assumed value (`spec.m1.assumptions`, listed in the model card); with no user examples, searches Hugging Face for real ones (`ftc/real_data.py`) |
 | Task spec | `ftc/spec.py` (v2, superset of DataGen's v1) | Built |
-| L1 · M2–M4 + contamination | `skills/finetune-data-gen` (`lib/format_data.py` = M4, `--bench` = contamination check) | Built. Doesn't read the Evaluator's `data_feedback_path` yet |
+| L1 · M2–M4 + contamination | `skills/finetune-data-gen` (`lib/format_data.py` = M4, `--bench` = contamination check) | Built. Reads the Evaluator's `data_feedback_path` (`--data-feedback-path`: weak categories first in the next loop's spec) |
 | L2 · M5–M6, dev / held-out | `skills/finetune-bench-gen` (`docs/benchgen-progress.md`) | Built. Item format: `docs/spec_and_io.md` §3.2 |
 | Trainer | `skills/finetune-submit`, `skills/finetune-status`, `scripts/brev-smoke/train_sft.py` | Built, with automatic pre-flight checks |
-| L3 · M7–M9 | `skills/finetune-eval` | Built and smoke-tested. Writes its own report format; `run_pipeline.py` converts it to §3.4 (`ftc/report_convert.py`). M9 needs a team-written `safety.jsonl` |
+| L3 · M7–M9 | `skills/finetune-eval` | Built and smoke-tested. Writes its own `report.json` and also the §3.4 `eval_report.json` the Evaluator reads (`ftc/report_convert.py`), in both modes. M9 is skipped until the team writes `<bench>/safety.jsonl` |
 | Iterate? · Evaluator | `skills/finetune-decide` | Built (rules: `docs/evaluator-notes.md`) |
-| Output | (`ReportAgent`, planned) | **Partly:** `run_pipeline.py` scores held-out once and writes `final/final_report.json`. HF push (`train_sft.py --push-to-hub` exists), model card and Infinite post aren't built |
+| Output | `skills/finetune-report` (agents), `ftc/report.py` (report, model card), `ftc/publish.py` (HF Hub, Infinite) | Built. `run_pipeline.py` and the skill share `ftc.publish.finalize`; the dashboard's **Result** card shows it. HF push needs `HF_TOKEN`; the Infinite post is opt-in (`FTC_POST_INFINITE=1` or the Result card button) |
 | *(not in the wireframe)* Live view | `dashboard/`, `ftc/pipeline.py` event log, `scripts/simulate_pipeline.py` | Built |
 | *(not in the wireframe)* Runner | `scripts/run_pipeline.py` | Built: the whole chain as subprocesses, no agents |
+| *(not in the wireframe)* Agent mode | `agents/` (7 profiles), `ftc/agents.py` (`ftc.cli agents start / kickoff / status / stop`) | Built: kickoff artifact + one ScienceClaw agent per skill; tested with ScienceClaw's reactor, not yet on the Brev machine |

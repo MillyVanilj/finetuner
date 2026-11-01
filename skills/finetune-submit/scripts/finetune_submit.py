@@ -117,6 +117,7 @@ GPU_MEM_BUSY_MIB = 2000          # more than this in use = another program (e.g.
 DEFAULT_S_PER_EXAMPLE_EPOCH = 0.5
 STARTUP_S = 30                   # model load etc.
 MIN_EPOCHS = 0.25                # never clamp below a quarter pass over the data
+MIN_SPEED_SAMPLE = 200           # learn speed only from jobs this big: smoke runs are mostly startup
 
 
 def past_runs(runs: Path):
@@ -171,7 +172,8 @@ def preflight(cfg, n_examples, data_sha, runs: Path, force: bool):
 
     # 2. how long will it take? (speed learned from earlier finished jobs)
     speeds = [max(0.0, h["runtime_s"] - STARTUP_S) / (h["n_train"] * float(h["run"]["config"]["epochs"]))
-              for h in history if h["state"] == "done" and h["n_train"] and h["runtime_s"] > STARTUP_S]
+              for h in history if h["state"] == "done" and (h["n_train"] or 0) >= MIN_SPEED_SAMPLE
+              and h["runtime_s"] > STARTUP_S and h["run"]["config"].get("model") == cfg.get("model")]
     spe = statistics.median(speeds) if speeds else DEFAULT_S_PER_EXAMPLE_EPOCH
 
     def estimate(epochs):

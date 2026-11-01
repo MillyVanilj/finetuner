@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Offline tests for Step 7 / time management. Run: python3 -B skills/finetune-data-gen/tests/test_timing.py
 Takes ~10 s because some tests sleep on purpose."""
+import os as _os; _os.environ.pop("FINETUNE_LLM_CALL_CAP_S", None)   # tests set per-call limits themselves
 import contextlib, io, json, os, re, sys, tempfile, threading, time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 os.environ.setdefault("DATAGEN_VERIFY_BACKEND", "same")   # offline: M3 uses the fake M2 client, not OpenAI Sol
+os.environ["DATAGEN_GEN_BACKEND"] = "default"              # offline: M2 uses the patched get_llm_client fake
 import gen_data
 from gen_data import call_llm, call_json_list, plan_batch, update_per_ex, est_round
 
@@ -174,7 +176,7 @@ stdout, stderr, dt = run_main(["--spec", str(spec_path), "--run-id", "hung", "--
                                "--time-budget", "4", "--max-batches", "0"], fake2)
 res = json.loads(stdout)
 check("next call verifies the pending batch first (nothing lost)",
-      "verifying 10 pending examples" in stderr and res["pending_verify"] == 0 and res["raw_kept"] >= 10
+      "verifying 10 of 10 pending examples" in stderr and res["pending_verify"] == 0 and res["raw_kept"] >= 10
       and res["unverified_total"] == 0)
 rows = [json.loads(l) for l in (tmp / "runs/hung/raw.jsonl").read_text().splitlines()]
 qs = [r["messages"][0]["content"] for r in rows]
@@ -194,6 +196,84 @@ with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
 res = json.loads(out.getvalue())
 check("already done -> saved result returned, no LLM client", res["done"] and res["train_examples"] == 5
       and res["batches_this_call"] == 0)
+
+# --- per-call cap: 18 s for a skill call (27 s budget), 120 s when the budget is long (run_pipeline.py) ---
+L = gen_data.L
+L.LLM_CALL_CAP_S, L.ENV_CALL_CAP_S = 18.0, None
+check("27 s budget (agent mode) -> 18 s per call", L.allow_long_calls(27.0) == 18.0 and L.call_timeout(None) == 18.0)
+check("580 s budget (run_pipeline.py) -> 120 s per call", L.allow_long_calls(580.0) == 120.0
+      and 119 < L.call_timeout(time.time() + 500) <= 120)
+check("...but never past the deadline", L.call_timeout(time.time() + 10) < 10)
+L.LLM_CALL_CAP_S = 18.0
+check("a budget of 0 is not 'unlimited' for DataGen (no long calls)", L.allow_long_calls(0) == 18.0)
+L.ENV_CALL_CAP_S = L.LLM_CALL_CAP_S = 45.0
+check("$FINETUNE_LLM_CALL_CAP_S pins the cap, also with a long budget", L.allow_long_calls(580.0) == 45.0)
+L.LLM_CALL_CAP_S, L.ENV_CALL_CAP_S = 18.0, None
+import subprocess
+def cap_with(value):
+    r = subprocess.run([sys.executable, "-c", "import sys; sys.path.insert(0, sys.argv[1]); from finetune_common import llm; "
+                        "print(llm.LLM_CALL_CAP_S)", str(Path(__file__).resolve().parents[1] / "scripts")],
+                       capture_output=True, text=True, env={**os.environ, "FINETUNE_LLM_CALL_CAP_S": value}, timeout=60)
+    return (r.stdout.split() or ["crash"])[-1], r.stderr
+check("FINETUNE_LLM_CALL_CAP_S=45 / 60s -> 45 / 60", cap_with("45")[0] == "45.0" and cap_with("60s")[0] == "60.0")
+for bad in ("abc", "0", "-5", "1e9"):
+    v, err = cap_with(bad)
+    check(f"FINETUNE_LLM_CALL_CAP_S={bad} -> ignored with a warning, default 18 s (no crash, no instant give-up)",
+          v == "18.0" and "ignoring FINETUNE_LLM_CALL_CAP_S" in err)
+
+# --- agent mode with a slow verifier (Sol): checks cut off at the time limit stay pending, never dropped ---
+class SlowCheck(Timed):
+    """M3 takes `per` seconds per example checked (a reasoning model); M2 is quick."""
+    def __init__(s, per): super().__init__(0.005); s.per, s.checks = per, []
+    def call(s, prompt, max_tokens, temperature):
+        if prompt.startswith("You are a strict quality reviewer"):
+            n = prompt.count("### Example "); s.checks.append(n); time.sleep(s.per * n)
+        return super().call(prompt, max_tokens, temperature)
+gen_data.MIN_FAIR_VERIFY_S = 0.5
+gen_data.T.CALL_OVERHEAD_S, gen_data.PER_EX_INIT = 0.05, 0.05     # scaled down like the tests above
+gen_data.L.MIN_CALL_S, gen_data.L.CALL_MARGIN_S = 0.2, 0.05
+def agent_calls(run_id, fake, n_calls, budget="2.5"):
+    out = []
+    for _ in range(n_calls):
+        stdout, stderr, dt = run_main(["--spec", str(spec_small), "--run-id", run_id, "--format", "json",
+                                       "--time-budget", budget, "--parallel", "1", "--batch-size", "6"], fake)
+        out.append((json.loads(stdout), stderr, dt))
+        if out[-1][0].get("done") or out[-1][0].get("error"):
+            break
+    return out
+spec_small = tmp / "spec_small6.json"; spec_small.write_text(json.dumps(dict(SPEC, n_examples=6)))
+L.LLM_CALL_CAP_S = 0.6                   # scaled-down 18 s: a check of 6 examples (1.5 s) doesn't fit
+calls = agent_calls("slowcheck", SlowCheck(0.25), 12)
+L.LLM_CALL_CAP_S = 18.0
+last = calls[-1][0]
+check(f"slow checker: cut-off checks stay pending, then fit (smaller batch, all the time left) -> done in "
+      f"{len(calls)} calls, nothing dropped", last.get("done") and last["unverified_total"] == 0
+      and any("cut off" in c[1] for c in calls) and last["train_examples"] == 6)
+check("while examples wait for a check, no new ones are generated (no generate-and-drop loop)",
+      all(c[0].get("pending_verify", 0) <= 6 for c in calls))
+
+hopeless = SlowCheck(5.0)                # can't check even one example within a call
+L.LLM_CALL_CAP_S = 0.6
+calls = agent_calls("hopeless", hopeless, 15)
+L.LLM_CALL_CAP_S = 18.0
+last = calls[-1][0]
+check(f"checker too slow even for 1 example -> clear VerifierTooSlow error after {len(calls)} calls, nothing dropped",
+      last.get("state") == "verifier_too_slow" and "run scripts/run_pipeline.py" in last["error"]
+      and len(calls) < 15 and json.loads((tmp / "runs/hopeless/state.json").read_text())["unverified"] == 0)
+n_checks = len(hopeless.checks)
+L.LLM_CALL_CAP_S = 0.6
+again = agent_calls("hopeless", hopeless, 1)[0][0]
+L.LLM_CALL_CAP_S = 18.0
+check("same settings again -> the same error at once, no paid API call", again.get("state") == "verifier_too_slow"
+      and len(hopeless.checks) == n_checks)
+L.LLM_CALL_CAP_S = 0.6
+again = agent_calls("hopeless", SlowCheck(0.01), 6, budget="3")     # a faster checker / new settings
+L.LLM_CALL_CAP_S = 18.0
+check("new settings (different budget) -> tries again and finishes", again[-1][0].get("done"))
+
+head = "Extract the key trial facts from this abstract as JSON.\n\nBackground: "
+check("dedupe compares whole prompts, not the first 60 characters",
+      len({gen_data._user_key({"messages": [{"role": "user", "content": head + f"study {i}"}]}) for i in range(5)}) == 5)
 
 print(f"\n{'ALL PASSED' if not fails else f'{fails} FAILED'}")
 sys.exit(1 if fails else 0)

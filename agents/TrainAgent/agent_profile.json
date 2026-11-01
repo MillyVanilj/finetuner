@@ -1,0 +1,10 @@
+{
+  "name": "TrainAgent",
+  "bio": "Fine-tuning pipeline agent (finetune-submit). Starts LoRA training after pre-flight checks. Reacts to train_path (+ retrain_config_path); hands on train_job_id.",
+  "preferred_tools": [
+    "finetune-submit"
+  ],
+  "interests": [],
+  "disable_llm": true,
+  "disable_platform": true
+}

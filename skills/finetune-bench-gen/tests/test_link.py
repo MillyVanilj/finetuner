@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """BenchGen -> DataGen link: the contamination check finds the benchmark by spec and drops leaked items.
 Run: python3 -B skills/finetune-bench-gen/tests/test_link.py"""
+import os as _os; _os.environ.pop("FINETUNE_LLM_CALL_CAP_S", None)   # tests set per-call limits themselves
 import contextlib, io, json, os, re, sys, tempfile, time
 from pathlib import Path
 os.environ.setdefault("DATAGEN_VERIFY_BACKEND", "same")   # offline: DataGen M3 uses the fake client, not OpenAI Sol
@@ -76,6 +77,7 @@ class DataFake:
             s.i += 1
         return json.dumps(out)
 dfake = DataFake()
+os.environ["DATAGEN_GEN_BACKEND"] = "default"   # use the patched get_llm_client fake, never a real writer API
 G.get_llm_client = lambda name: dfake
 dres = None
 for _ in range(6):
@@ -170,6 +172,28 @@ check("calling again with the same feedback returns the finished run (no new dat
 bad = tmp / "loose_feedback.json"; bad.write_text(json.dumps({"categories": ["x"]}))
 r3, code3 = run_g(["--data-feedback-path", str(bad)])
 check("feedback outside a pipeline without a spec -> clear error, exit 1", code3 == 1 and "no task spec" in r3["error"])
+
+# 7. agent mode: the start artifact hands DataGen <pipeline>/task_spec.json with no --run-id. Every pipeline's spec
+#    has that file name, so the run id must come from the pipeline (else pipeline 2 resumes pipeline 1's data).
+leaks[:] = []; dfake.i = 0
+ev_f = fbpipe / "events.jsonl"
+n_before = len(ev_f.read_text().splitlines()) if ev_f.exists() else 0
+for _ in range(8):
+    r, code = run_g(["--task-spec-path", str(fbpipe / "task_spec.json"), "--parallel", "1"])
+    if r["done"]: break
+check("spec inside a pipeline, no --run-id -> run id <pipeline_id>-l<loop>, not 'task_spec'",
+      r["done"] and code == 0 and r["run_id"] == "fbpipe-l1" and not (tmp / "runs" / "task_spec").exists())
+check("the run folder points back to its pipeline (.pipeline), so finetune-submit finds it from train_path",
+      (tmp / "runs" / "fbpipe-l1" / ".pipeline").read_text() == str(fbpipe.resolve()))
+try:
+    import ftc.pipeline  # noqa: F401  (the repo checkout or $FINETUNER_DIR; an installed copy may not have it)
+    links = json.loads((fbpipe / "pipeline.json").read_text())["links"]
+    events = [json.loads(l) for l in ev_f.read_text().splitlines()[n_before:]]
+    check("agent mode: run linked in pipeline.json and data start/done shown on the dashboard (once each)",
+          str(tmp / "runs" / "fbpipe-l1") in links.get("data_run_dir", [])
+          and [e["type"] for e in events if e["stage"] == "data" and e["type"] in ("start", "done")] == ["start", "done"])
+except ImportError:
+    print("SKIP  pipeline link check (ftc not importable)")
 
 print(f"\n{'ALL PASSED' if not fails else f'{fails} FAILED'}")
 sys.exit(1 if fails else 0)

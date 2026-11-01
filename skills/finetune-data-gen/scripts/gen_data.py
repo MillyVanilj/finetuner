@@ -24,6 +24,7 @@ from finetune_common.timing import est_round, plan_batch, update_per_ex, regen_f
 from finetune_common.spec import (REQUIRED_KEYS, load_spec, SPEC_PROMPT, GENERIC_SPEC, draft_spec,  # noqa: F401
                                   default_run_id, spec_hash)
 from finetune_common.jsonl import read_jsonl, append_jsonl
+from finetune_common.categories import focus_cycle, focus_hint
 
 RUNS_DIR = Path.home() / ".scienceclaw/finetune/runs"
 jsonparse.BAD_OUTPUT_DIR = RUNS_DIR
@@ -35,6 +36,8 @@ AVOID_LIMIT = 40        # only show the most recent N prompts to keep the prompt
 VERIFY_MAX_TOKENS = 1500  # ~10 short verdicts
 VERIFY_TEMPERATURE = 0.1  # the reviewer should be consistent, not creative
 MAX_REGEN_ROUNDS = 2      # rejected examples are regenerated at most twice
+MAX_VERIFY_CUTOFFS = 3    # a single pending example cut off this many calls in a row -> VerifierTooSlow
+MIN_FAIR_VERIFY_S = 10.0  # ...only counting checks that had at least this long
 
 # --- time management (Step 7). The skill executor kills the process at 30 s. ---
 SKILL_DEADLINE_S = 27.0   # default --time-budget: everything must finish by this, from process start
@@ -52,7 +55,7 @@ EVERY EXAMPLE MUST SATISFY:
 {criteria}
 
 THIS BATCH FOCUSES ON: {focus}
-
+{focus_hint}
 Write {k} new examples. Vary the topic, difficulty, phrasing and length of the user
 messages. Write them the way real users type, not as templates. Also vary the wording and
 sentence structure of the assistant replies: do not start every explanation the same way.
@@ -85,6 +88,31 @@ Return ONLY a JSON list with one item per example, in order:
 
 
 # ---------- Step 7: resumable state ----------
+DEFAULT_GEN_MODEL = {"openai": "gpt-6.1-sol", "anthropic": "claude-sonnet-5-5"}
+
+
+def model_name(llm):
+    """The model a client calls, for the record (state.json / result)."""
+    return next((getattr(llm, k) for k in ("anthropic_model", "openai_model", "gemini_model", "model")
+                 if isinstance(getattr(llm, k, None), str)), None)
+
+
+def gen_client(backend=None, model=None):
+    """M2 writer client -> (client, warning or None). backend None / "" / "default" = the shared finetune backend
+    ($FINETUNE_LLM_BACKEND, Gemini Flash unless set). anthropic / openai take `model`; gemini reads $GEMINI_MODEL,
+    so `model` is put there. If the backend can't start (no key, no package), fall back to the shared one."""
+    if backend in (None, "", "default"):
+        return get_llm_client("DataGen"), None
+    if backend == "gemini" and model:
+        os.environ["GEMINI_MODEL"] = model
+    try:
+        return make_client("DataGen", backend, model or DEFAULT_GEN_MODEL.get(backend)), None
+    except (ValueError, ImportError) as e:
+        return get_llm_client("DataGen"), (f"M2 writer '{backend}' unavailable ({e}); writing with the default backend "
+                                           "(Gemini Flash) instead, which makes more mistakes on hard items. "
+                                           "Fix: ANTHROPIC_API_KEY in .env")
+
+
 def load_state(run_dir: Path) -> dict:
     """Return progress from earlier calls, or a fresh state."""
     f = run_dir / "state.json"
@@ -107,20 +135,21 @@ def build_gen_prompt(spec: dict, k: int, focus: str, avoid: list[str], feedback:
     avoid_block = ""
     if recent:
         avoid_block = "\nDo NOT repeat or paraphrase these existing user messages:\n" + \
-                      "\n".join(f"- {p}" for p in recent) + "\n"
+                      "\n".join(f"- {' '.join(p.split())[:160]}" for p in recent) + "\n"
     feedback_block = ""
     if feedback:
         feedback_block = "\nEarlier examples were REJECTED by a reviewer for these reasons. Avoid these mistakes:\n" + \
                          "\n".join(f"- {r}" for r in dict.fromkeys(feedback)) + "\n"
     return GEN_PROMPT.format(task=spec["task"], io_format=spec["io_format"], criteria=criteria,
-                             focus=focus, k=k, avoid_block=avoid_block, feedback_block=feedback_block)
+                             focus=focus, focus_hint=focus_hint(focus), k=k, avoid_block=avoid_block,
+                             feedback_block=feedback_block)
 
 
 def _user_key(example: dict):
-    """First 60 chars of the first user message, or None if the example is malformed."""
+    """The first user message, or None if the example is malformed."""
     try:
         msg = next(m for m in example["messages"] if m.get("role") == "user")
-        return str(msg["content"]).strip()[:60] or None
+        return str(msg["content"]).strip() or None
     except Exception:
         return None
 
@@ -157,15 +186,17 @@ def _truthy(v) -> bool:
     return v is True or (isinstance(v, str) and v.strip().lower() in {"true", "yes", "keep", "1"})
 
 
-def verify_batch(llm, spec: dict, examples: list, deadline: float = None) -> tuple[list, list, list]:
+def verify_batch(llm, spec: dict, examples: list, deadline: float = None, cap: float = None,
+                 info: dict = None) -> tuple[list, list, list]:
     """M3: one LLM call -> (kept, rejected, unverified).
     rejected items are {"example": ..., "reason": ...}.
-    If the verifier itself fails, the whole batch is set aside as unverified (not kept)."""
+    If the verifier itself fails, the whole batch is set aside as unverified (not kept).
+    cap / info: see call_json_list (info["cut_off"] says the verifier ran out of time rather than failed)."""
     if not examples:
         return [], [], []
     verdicts = call_json_list(llm, build_verify_prompt(spec, examples),
                               VERIFY_MAX_TOKENS, VERIFY_TEMPERATURE, "M3", required_key="keep",
-                              deadline=deadline)
+                              deadline=deadline, cap=cap, info=info)
     if not verdicts:
         log("[M3] verifier failed; batch set aside as unverified")
         return [], [], list(examples)
@@ -247,16 +278,69 @@ def existing_prompts(run_dir: Path) -> list[str]:
     return [k for k in (_user_key(r) for r in rows) if k]
 
 
-def verify_pending(llm_v, spec: dict, run_dir: Path, state: dict, deadline: float) -> None:
-    """Verify examples that a previous call generated but had no time to verify.
-    Second chance only: anything still unverified goes to unverified.jsonl for good."""
+class VerifierTooSlow(ValueError):
+    """The M3 verifier can't check even one example within the time one call allows."""
+
+
+def verifier_id(llm_v, time_budget) -> str:
+    """What decides whether M3 fits in a call: backend, model, per-call cap, time budget."""
+    model = getattr(llm_v, "openai_model", None) or getattr(llm_v, "anthropic_model", None) or ""
+    return f"{getattr(llm_v, 'backend', '?')}:{model} cap={L.LLM_CALL_CAP_S:g}s budget={time_budget:g}s"
+
+
+def too_slow_message(vid) -> str:
+    return (f"the M3 verifier ({vid}) keeps running out of time on a single example, so DataGen can't check its "
+            "data within one call. Fix one of: run scripts/run_pipeline.py (long calls, up to 120 s each); give agent "
+            "mode a longer limit and set DATAGEN_TIME_BUDGET to match; or use a faster checker "
+            "(DATAGEN_VERIFY_BACKEND=same uses the M2 model). Calling again with the same settings repeats this error "
+            "without API calls.")
+
+
+def verify_pending(llm_v, spec: dict, run_dir: Path, state: dict, deadline: float, time_budget: float) -> bool:
+    """Verify examples that an earlier call generated but couldn't check in time (pending_verify.jsonl).
+    Returns True while examples are still waiting: the caller then generates nothing new this call, so a
+    verifier slower than one call can't make DataGen generate and drop examples forever.
+    - A check that was cut off at the time limit is NOT a failure: the examples stay pending, the next call
+      checks half as many (smaller prompt, faster reasoning) with all the time it has left.
+    - If even one example is cut off MAX_VERIFY_CUTOFFS times in a row with a fair amount of time, raise
+      VerifierTooSlow (no endless paid retries); the same settings then fail at once, new settings retry.
+    - A real verifier failure (empty or unusable reply, not a timeout) drops the examples to unverified.jsonl,
+      as before: they already failed once."""
     f = run_dir / "pending_verify.jsonl"
     items = read_jsonl(f)
-    if not items or call_timeout(deadline) < L.MIN_CALL_S:
-        return
-    log(f"[M3] verifying {len(items)} pending examples from the previous call")
-    ok, bad, unv = verify_batch(llm_v, spec, items, deadline)
+    vid = verifier_id(llm_v, time_budget)
+    slow = state.get("verifier_too_slow")
+    if slow and slow == vid:
+        raise VerifierTooSlow(too_slow_message(vid))
+    if slow:
+        log(f"[M3] settings changed since the verifier was too slow ({slow}); trying again with {vid}")
+        state.pop("verifier_too_slow"); state["verify_cutoffs"] = 0
+    if not items or state["kept"] >= state.get("raw_target", float("inf")):
+        state["verify_chunk"] = None
+        return False
+    if call_timeout(deadline, float("inf")) < L.MIN_CALL_S:
+        return True
+    chunk = min(len(items), state.get("verify_chunk") or len(items))
+    take, rest = items[:chunk], items[chunk:]
+    log(f"[M3] verifying {len(take)} of {len(items)} pending examples (left over from earlier calls)")
+    info = {}
+    ok, bad, unv = verify_batch(llm_v, spec, take, deadline, cap=float("inf"), info=info)   # all the time left
+    if info.get("cut_off"):
+        fair = info.get("timeout", 0) >= MIN_FAIR_VERIFY_S
+        state["verify_cutoffs"] = state.get("verify_cutoffs", 0) + (1 if fair and chunk == 1 else 0)
+        state["verify_chunk"] = max(1, chunk // 2)
+        log(f"[M3] check cut off after {info.get('timeout', 0):.1f}s; kept pending, next call checks "
+            f"{state['verify_chunk']} at a time")
+        if state["verify_cutoffs"] >= MAX_VERIFY_CUTOFFS:
+            state["verifier_too_slow"] = vid
+            save_state(run_dir, state)
+            raise VerifierTooSlow(too_slow_message(vid))
+        save_state(run_dir, state)
+        return True
+    state["verify_cutoffs"] = 0
+    state["verify_chunk"] = min(len(items), chunk * 2) if rest else None   # fits again: grow back
     f.write_text("")
+    append_jsonl(f, rest)
     ok = ok[:max(0, state.get("raw_target", 0) - state["kept"])] if state.get("raw_target") else ok
     append_jsonl(run_dir / "raw.jsonl", ok)
     append_jsonl(run_dir / "rejects.jsonl", [dict(r, round="deferred") for r in bad])
@@ -265,6 +349,7 @@ def verify_pending(llm_v, spec: dict, run_dir: Path, state: dict, deadline: floa
     state["rejected"] += len(bad)
     state["unverified"] += len(unv)
     save_state(run_dir, state)
+    return bool(rest)
 
 
 # ---------- main loop ----------
@@ -360,9 +445,15 @@ def main():
     p.add_argument("--max-batches", type=int, default=0, help=H)
     p.add_argument("--parallel", type=int, default=1, help=H)
     p.add_argument("--bench", default=None, help=H)
-    # M3 runs on OpenAI Sol by default (a different model family from the Gemini generator).
-    # "same" = verify with the M2 backend (old behaviour, no OpenAI key needed).
-    p.add_argument("--verify-backend", default=os.environ.get("DATAGEN_VERIFY_BACKEND") or "openai", help=H)
+    # M2 writer. OpenAI Sol by default: in two rounds of hard / misleading SQL items it wrote the most correct answers
+    # (38/38 vs Claude Sonnet 32/38, GPT-6.1 Terra 33/36, Gemini Flash 14/19; docs/decisions.md Decision 2b), and it
+    # is a different family from the benchmark writer (Claude Opus). "default" = the shared finetune backend
+    # ($FINETUNE_LLM_BACKEND, Gemini Flash unless set).
+    p.add_argument("--gen-backend", default=os.environ.get("DATAGEN_GEN_BACKEND") or "openai", help=H)
+    p.add_argument("--gen-model", default=os.environ.get("DATAGEN_GEN_MODEL") or None, help=H)
+    # M3 runs on Claude Sonnet by default: a different family from the Sol writer, so no model checks its own
+    # family's work. "same" = verify with the M2 backend (no second key needed, less strict).
+    p.add_argument("--verify-backend", default=os.environ.get("DATAGEN_VERIFY_BACKEND") or "anthropic", help=H)
     # Default is JSON: core/skill_executor.py json.loads() stdout, and the agent never passes --format.
     p.add_argument("--format", default="json", choices=["summary", "json"], help=H)
     a, unknown = p.parse_known_args()   # agents sometimes add flags we don't use (e.g. --max-results)
@@ -375,6 +466,8 @@ def main():
         if unknown:
             log(f"[args] ignoring unrecognized arguments: {unknown}")
         result = run(a)
+    except VerifierTooSlow as e:                 # a settings problem, not a crash: no traceback
+        result, code = {"error": f"VerifierTooSlow: {e}", "state": "verifier_too_slow", "done": False}, 1
     except Exception as e:                       # always answer with JSON, never a bare traceback
         import traceback; traceback.print_exc()
         result, code = {"error": f"{type(e).__name__}: {e}", "done": False}, 1
@@ -382,6 +475,8 @@ def main():
         sys.stdout = real_stdout
     if "error" not in result:
         save_result(result)
+        if getattr(a, "pipeline_dir", None) and result.get("run_dir"):
+            tell_pipeline(a.pipeline_dir, result, a.agent_mode)
     if "error" in result:
         print(json.dumps(result, indent=2), flush=True)
     else:
@@ -428,10 +523,57 @@ def feedback_spec(a):
         f"spec {out}")
 
 
+def pipeline_dir_of(spec_path):
+    """The pipeline folder a spec file sits in ($FINETUNER_DIR/pipelines/<id>/task_spec.json or loops/<n>/...)."""
+    if not spec_path:
+        return None
+    p = Path(spec_path).expanduser().resolve()
+    return next((d for d in [p.parent, *p.parents] if (d / "pipeline.json").exists()), None)
+
+
+def tell_pipeline(pdir, result, agent_mode):
+    """Record this run in the pipeline (dashboard): link data_run_dir, and in agent mode (no runner around to do
+    it) the data stage's start/done events. Optional: never fails the skill."""
+    try:   # the pointer lets finetune-submit, handed only train_path, find the pipeline (ftc/pipeline.py POINTER)
+        (Path(result["run_dir"]) / ".pipeline").write_text(str(pdir))
+    except OSError as e:
+        log(f"[pipeline] could not write the pipeline pointer: {e}")
+    try:
+        root = Path(os.environ.get("FINETUNER_DIR", Path.home() / "finetuner")).expanduser()
+        for d in (str(root), str(Path(__file__).resolve().parents[3])):
+            if (Path(d) / "ftc").exists() and d not in sys.path:
+                sys.path.insert(0, d)
+        from ftc.pipeline import Pipeline
+        pl, run_dir = Pipeline(pdir), Path(result["run_dir"])
+        pl.link("data_run_dir", str(run_dir), stage="data", append=True)
+        if not agent_mode:
+            return
+        for flag, ok, msg in ((".pipeline_started", True, f"DataGen started run {result.get('run_id')}"),
+                              (".pipeline_done", result.get("done"),
+                               f"{result.get('train_examples')} training examples ready: {result.get('train_path')}")):
+            if ok and not (run_dir / flag).exists():
+                pl.emit("data", "start" if flag == ".pipeline_started" else "done", msg)
+                (run_dir / flag).write_text("")
+    except Exception as e:  # noqa: BLE001
+        log(f"[pipeline] could not update {pdir}: {e}")
+
+
 def run(a) -> dict:
+    agent_mode = not a.run_id                   # scripts/run_pipeline.py always passes --run-id
     if getattr(a, "data_feedback_path", None):
         feedback_spec(a)
+    a.pipeline_dir = pipeline_dir_of(a.spec)
+    if a.pipeline_dir and not a.run_id:
+        # A spec inside a pipeline is always called task_spec.json, so the default run id (the file name) would
+        # make every pipeline resume the FIRST pipeline's data. Name it like the runner: <pipeline_id>-l<loop>.
+        try:
+            loop = int(json.loads((a.pipeline_dir / "pipeline.json").read_text()).get("loop") or 1)
+        except (OSError, ValueError):
+            loop = 1
+        a.run_id = f"{a.pipeline_dir.name}-l{loop}"
+    a.agent_mode = agent_mode
     deadline = _T_START + a.time_budget
+    L.allow_long_calls(a.time_budget)         # run_pipeline.py's long calls: 120 s per LLM call instead of 18 s
     jsonparse.BAD_OUTPUT_DIR = RUNS_DIR
     if not (a.spec or (a.query and a.query.strip())):
         raise ValueError("give --spec <file> or --query <fine-tuning request>")
@@ -468,7 +610,10 @@ def run(a) -> dict:
         save_state(run_dir, state)
         log(f"[M4] {shortfall} rows overlapped the benchmark; generating replacements")
 
-    llm = get_llm_client("DataGen")
+    llm, gen_warning = gen_client(getattr(a, "gen_backend", None), getattr(a, "gen_model", None))
+    if gen_warning:
+        log(f"[warning] {gen_warning}")
+    state["generator"] = {"backend": getattr(llm, "backend", None), "model": model_name(llm)}
     if a.spec:
         spec = load_spec(a.spec)
         if a.n_examples:
@@ -487,18 +632,27 @@ def run(a) -> dict:
             llm_v = make_client("DataGenVerify", a.verify_backend)
         except (ValueError, ImportError) as e:   # no OPENAI_API_KEY / openai package: keep going, but say so
             verify_warning = (f"M3 verifier '{a.verify_backend}' unavailable ({e}); verified with the M2 model instead "
-                              "(same family, less strict). Fix: OPENAI_API_KEY in .env + pip install openai")
+                              "(same family, less strict). Fix: the API key for that backend in .env "
+                              "(ANTHROPIC_API_KEY / OPENAI_API_KEY)")
             log(f"[warning] {verify_warning}")
+    state["verifier"] = {"backend": getattr(llm_v, "backend", None), "model": model_name(llm_v)}
+    if llm_v is not llm and state["verifier"]["backend"] == state["generator"]["backend"] and not verify_warning:
+        verify_warning = (f"M2 writer and M3 checker are both '{state['generator']['backend']}': a model family checking "
+                          "its own work is less strict. Set DATAGEN_VERIFY_BACKEND to another family")
+        log(f"[warning] {verify_warning}")
     for k in ("rejected", "unverified"):
         state.setdefault(k, 0)
     timing = state.setdefault("timing", {"per_ex": PER_EX_INIT, "rounds": 0})
-    focuses = ["typical cases"] + list(spec["edge_cases"])
+    # typical 40 %, misleading inputs 25 % (always), other edge cases the rest: finetune_common/categories.py
+    focuses = focus_cycle(spec["edge_cases"])
     raw_target = state.setdefault("raw_target", target)   # grows if M4 drops rows (top-ups)
     batches, stop_reason = 0, "target reached"
-    verify_pending(llm_v, spec, run_dir, state, deadline)
+    waiting = verify_pending(llm_v, spec, run_dir, state, deadline, a.time_budget)
+    if waiting:
+        stop_reason = "checking examples left over from earlier calls before generating more"
 
     parallel = max(1, min(a.parallel, state.get("parallel_cap", a.parallel)))
-    while state["kept"] < raw_target:
+    while state["kept"] < raw_target and not waiting:
         if a.max_batches and batches >= a.max_batches:
             stop_reason = "max batches"
             break
@@ -554,6 +708,9 @@ def run(a) -> dict:
         state["batch_idx"] += p_now
         batches += 1
         save_state(run_dir, state)
+        if unverified:   # the checker ran out of time: check those first (next call) before making more
+            stop_reason = "checker ran out of time; those examples are checked first on the next call"
+            break
         if not (kept or rejects or unverified):   # nothing came back at all
             stop_reason = ("time budget used" if call_timeout(deadline) < L.MIN_CALL_S
                            else "no output from LLM (API error / rate limit?)")
@@ -587,8 +744,7 @@ def run(a) -> dict:
             state["done"] = True
     save_state(run_dir, state)
     warnings = [NO_BENCH_WARNING] if fmt and fmt.get("bench") is None and (a.bench or "").lower() != "none" else []
-    if verify_warning:
-        warnings.append(verify_warning)
+    warnings += [w for w in (gen_warning, verify_warning) if w]
     return build_result(a.run_id, state, target, fmt, run_dir,
                         {"batches_this_call": batches, "stop_reason": stop_reason if not state["done"] else "done",
                          "sec_per_example": timing["per_ex"], "parallel": parallel, "warnings": warnings})

@@ -50,7 +50,7 @@ Stdout keys hand the work on through the ScienceClaw reactor:
 |---|---|---|
 | `retrain` | `retrain_config_path`, `train_path` (the same data), `changed` | `finetune-submit` (needs both flags) |
 | `regenerate_data` | `data_feedback_path`, `spec` | DataGen (it doesn't read `--data-feedback-path` yet; `run_pipeline.py` folds it into a spec copy) |
-| `stop` | `best_loop`, `best_adapter_path` = `final_adapter_path`, `best_job_id`, `best_tuned_score`, `stop_reason`, `next_step` (held-out eval command) | held-out eval (`run_pipeline.py` does it) / ReportAgent (not built yet) |
+| `stop` | `best_loop`, `best_adapter_path` = `final_adapter_path`, `best_job_id`, `best_tuned_score`, `stop_reason`, `next_step` (held-out eval command) | `finetune-report` (ReportAgent: held-out once, final report, model card, publish; `run_pipeline.py` does the same) |
 
 Stop never outputs `adapter_path` (that would re-trigger `finetune-eval`). Exit 1 with `{"status": "error"}` if the report is missing or in neither format.
 

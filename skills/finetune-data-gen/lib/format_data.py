@@ -5,6 +5,7 @@ Steps, in order:
   1. Validate each row: {"messages": [...]}, optional leading system, then strictly
      alternating user/assistant, starting with user and ending with assistant,
      every content a non-empty string. Whitespace is stripped; extra keys are dropped.
+     A SQL reply must also run on the CREATE TABLE schema in its prompt (finetune_common/sqlexec.py).
   2. Add the spec's system_prompt (if set) to rows that have none.
   3. Exact dedup on the normalized user text (same question twice = duplicate,
      even if the answers differ, since two answers would teach conflicting targets).
@@ -25,6 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))   # shared finetune_common
 # normalize / near-duplicate index are shared with BenchGen (re-exported here for the tests)
 from finetune_common.textsim import NEAR_DEFAULT, normalize, signature, NearIndex, is_near  # noqa: F401
+from finetune_common import sqlexec                                                       # noqa: E402
 
 RUNS_DIR = Path.home() / ".scienceclaw/finetune/runs"
 SAMPLES_PER_REASON = 3          # dropped examples kept in the report for inspection
@@ -53,6 +55,11 @@ def validate(row):
             return None, "bad_role_order"
     if body[-1]["role"] != "assistant":
         return None, "bad_role_order"
+    # Runnable answers are run: a SQL reply must execute on the schema in its own prompt
+    user, reply = body[-2]["content"], body[-1]["content"]
+    if sqlexec.is_select(sqlexec.extract_sql(reply)) and sqlexec.extract_schema(user) \
+            and not sqlexec.reference_runs(sqlexec.extract_sql(reply), user):
+        return None, "sql_does_not_run"
     return {"messages": msgs}, None
 
 

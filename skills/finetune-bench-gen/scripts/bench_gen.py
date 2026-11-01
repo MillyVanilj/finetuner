@@ -101,8 +101,9 @@ SPEC_KEYS = ["task", "io_format", "success_criteria", "edge_cases"]
 DIFFICULTIES = {"easy": (0.3, "a single step or common knowledge for this task"),
                 "medium": (0.4, "two or three steps, or less common knowledge"),
                 "hard": (0.3, "multi-step, needs careful reasoning, has a common pitfall")}
-TYPICAL = "typical cases"
-TYPICAL_SHARE = 0.4          # 40 % typical items, the rest split evenly over the edge cases
+# 40 % typical items, 25 % misleading ones (always), the rest split evenly over the other edge cases
+from finetune_common.categories import TYPICAL, plan_categories, focus_hint            # noqa: E402
+from finetune_common import sqlexec                                                    # noqa: E402
 
 GEN_MAX_TOKENS, GEN_TEMPERATURE = 4000, 0.8
 SOLVE_MAX_TOKENS, REVIEW_MAX_TOKENS = 1500, 2500
@@ -113,7 +114,6 @@ CALLS_PER_ROUND = 3          # generate, solve, review
 PER_ITEM_INIT = 2.0          # starting guess s/item for a full round (3 calls, Gemini; learned per run)
 MIN_BATCH = 2
 SKILL_DEADLINE_S = 27.0
-LONG_CALL_CAP_S = 120.0      # per-call cap when the time budget allows long calls
 FEEDBACK_LIMIT = 8
 MAX_WORKER_STARTS = 3        # background job restarts before reporting "failed"
 
@@ -125,6 +125,7 @@ SUCCESS CRITERIA for a good reply:
 {criteria}
 
 THIS BATCH: category = "{category}", difficulty = {difficulty} ({difficulty_desc}).
+{focus_hint}
 
 Write {k} benchmark items. Each item has:
 - "prompt": a realistic user message for this category and difficulty.
@@ -136,8 +137,17 @@ Write {k} benchmark items. Each item has:
     {{"type": "judge", "answer": "<the key point>", "rubric": ["<check 1>", "<check 2>", "..."]}}
     {{"type": "json"}}   (only if the required output format is a JSON object; then "reference" must be
                         exactly that JSON object, with the correct values)
-  Prefer exact / numeric / choice whenever the item has one short correct answer; use judge otherwise
-  (e.g. when the correct behaviour is to correct a premise or ask a clarifying question).
+    {{"type": "sql", "fixture": ["INSERT INTO ... VALUES (...);", "..."]}}
+                        (only if the reply is a SQL query: then "reference" is exactly the correct query,
+                        the prompt must contain the CREATE TABLE schema, and "fixture" is 5-30 INSERT
+                        statements for a small test database on which the tempting WRONG queries return a
+                        different result than the reference: include ties, NULLs, duplicates, rows just
+                        outside each filter, parents without children. Replies are graded by RUNNING them.)
+  Prefer sql whenever the reply is a SQL query, and exact / numeric / choice whenever the item has one
+  short correct answer: answers that can be checked by running or matching them are graded that way.
+  Use judge otherwise (e.g. when the correct behaviour is to correct a premise or ask a clarifying question).
+  Judge rubric checks are about the ANSWER, not about showing working: never require an explanation
+  unless the required output format asks for one.
 Rules: every item has exactly ONE defensible correct answer; the reference must contain that answer;
 no item may depend on unstated assumptions; vary topics and phrasing.
 {avoid_block}{feedback_block}
@@ -145,7 +155,8 @@ Return ONLY a JSON list:
 [{{"prompt": "...", "reference": "...", "grading": {{...}}}}]"""
 
 SOLVE_PROMPT = """Answer each question below as a careful expert. Give only a SHORT final answer for each
-(a number with unit, a word, a letter, or one sentence) - no working.
+(a number with unit, a word, a letter, one sentence, or - if the question asks for a SQL query - just the
+query) - no working.
 
 {questions}
 
@@ -187,7 +198,7 @@ Return ONLY a JSON object: {{"regex": "..."}}"""
 
 # ---------- quota plan ----------
 def categories(spec: dict) -> list:
-    return [TYPICAL] + [c for c in spec["edge_cases"] if c != TYPICAL]
+    return list(plan_categories(spec["edge_cases"]))
 
 
 def _largest_remainder(weights: dict, total: int) -> dict:
@@ -200,13 +211,10 @@ def _largest_remainder(weights: dict, total: int) -> dict:
 
 
 def build_quota(spec: dict, n_items: int) -> dict:
-    """{"category||difficulty": count}. Typical cases get TYPICAL_SHARE, edge cases share the rest."""
-    cats = categories(spec)
-    edge = cats[1:]
-    cat_w = {TYPICAL: TYPICAL_SHARE if edge else 1.0}
-    for c in edge:
-        cat_w[c] = (1 - TYPICAL_SHARE) / len(edge)
-    weights = {f"{c}||{d}": cat_w[c] * w for c in cats for d, (w, _) in DIFFICULTIES.items()}
+    """{"category||difficulty": count}. Shares from finetune_common.categories: typical 40 %, misleading
+    inputs 25 % (always present), the other edge cases share the rest."""
+    cat_w = plan_categories(spec["edge_cases"])
+    weights = {f"{c}||{d}": cat_w[c] * w for c in cat_w for d, (w, _) in DIFFICULTIES.items()}
     return _largest_remainder(weights, n_items)
 
 
@@ -218,6 +226,19 @@ def next_cell(quota: dict, have: dict) -> tuple:
         if d > deficit:
             best, deficit = cell, d
     return best, deficit
+
+
+def drop_cell(quota: dict, have: dict, cell: str) -> int:
+    """Stop asking for more items in `cell` (the generator refuses it) and give its remaining deficit to the
+    other cells that still have a quota, in proportion to their quota, so the benchmark keeps its size.
+    Returns how many items moved."""
+    deficit = max(0, quota[cell] - have.get(cell, 0))
+    quota[cell] = have.get(cell, 0)
+    others = {c: q for c, q in quota.items() if c != cell and q > 0}
+    if deficit and others:
+        for c, extra in _largest_remainder(others, deficit).items():
+            quota[c] += extra
+    return deficit
 
 
 # ---------- M5 generate ----------
@@ -237,6 +258,7 @@ def build_gen_prompt(spec, cell, k, avoid, feedback=None) -> str:
                          "\n".join(f"- {r}" for r in dict.fromkeys(feedback)) + "\n"
     return GEN_PROMPT.format(task=spec["task"], io_format=spec["io_format"], criteria=_criteria(spec),
                              category=category, difficulty=difficulty, difficulty_desc=DIFFICULTIES[difficulty][1],
+                             focus_hint=focus_hint(category),
                              k=k, avoid_block=avoid_block, feedback_block=feedback_block)
 
 
@@ -254,6 +276,8 @@ def precheck(raw_item, cell, near: NearIndex, seen_exact: set):
         return None, err
     if not reference_consistent(grading, ref):
         return None, "reference does not contain the graded answer"
+    if grading["type"] == "sql" and not sqlexec.reference_runs(ref, prompt):
+        return None, "sql item: no CREATE TABLE schema in the prompt, or the reference query does not run on it"
     key = normalize(prompt)
     if key in seen_exact or near.find(key):
         return None, "duplicate of an existing benchmark prompt"
@@ -286,6 +310,9 @@ def _render_grading(g):
         return f"numeric: {g['answer']} ± {g['tolerance']} {g['unit']}".strip()
     if g["type"] == "judge":
         return f"judge: {g['answer']} | rubric: " + "; ".join(g["rubric"])
+    if g["type"] == "sql":
+        return "sql: graded by running the reply against the reference on a test database with these rows: " + \
+            " ".join(g.get("fixture") or [])[:1500]
     return f"{g['type']}: {g['answer']}"
 
 
@@ -344,7 +371,11 @@ def verify_items(llm_v, spec, items, deadline):
     kept, rejected = [], []
     for i, it in enumerate(items):
         ind = answers.get(i)
-        agreed = check_short_answer(it["grading"], ind) if ind is not None else None
+        if it["grading"]["type"] == "sql" and ind is not None:     # run both queries: do they agree?
+            r = sqlexec.sql_score(str(ind), it["reference"], it["prompt"], it["grading"].get("fixture"))
+            agreed = None if r is None else r[0] == 1.0
+        else:
+            agreed = check_short_answer(it["grading"], ind) if ind is not None else None
         keep, reason = verdicts.get(i, (False, "no verdict from reviewer"))
         if keep:
             kept.append(dict(it, verify={"independent_answer": ind, "agreed": agreed}))
@@ -399,21 +430,32 @@ def grading_note(g: dict, io_format: str) -> str:
         key = f"the correct option is {g['answer']}."
     elif g["type"] == "exact":
         key = f'the essential answer is "{g["answer"]}" (wording may differ).'
+    elif g["type"] == "sql":
+        key = "the query must return the same rows as the reference query (it is normally graded by running it)."
     else:
         key = (f"key point: {g['answer'].rstrip('.')}. " if g.get("answer") else "") + \
               "A passing response must: " + "; ".join(r.rstrip(".") for r in g["rubric"]) + "."
-    return f"GRADING NOTE: {key} The response must also follow the required output format: {io_format}"
+    # Format is checked separately (bench_meta.json format_regex): the judge grades substance, so an answer
+    # is never failed just for adding or leaving out an explanation.
+    return f"GRADING NOTE: {key} Grade the answer's substance; the output format ({io_format}) is checked separately."
 
 
 def to_eval_item(it: dict, spec: dict, split: str = None) -> dict:
     """Internal item -> finetune-eval item. scoring:
        json  -> reference is the JSON object (field-level F1);
        exact -> only when the whole reference reply IS the answer (the Evaluator compares whole replies);
+       sql   -> the reply is run against the reference query (grading "sql", or any item whose reference
+                is a query that runs on the prompt's CREATE TABLE schema); grading note appended for the
+                judge fallback; the fixture travels with the item;
        judge -> everything else, with the key and rubric appended to the reference."""
     msgs = ([{"role": "system", "content": spec["system_prompt"]}] if spec.get("system_prompt") else []) + \
            [{"role": "user", "content": it["prompt"]}]
     g, ref = it["grading"], it["reference"]
-    if g["type"] == "json":   # spec_and_io.md: reference is a STRING (JSON text); finetune-eval parses it
+    extra = {}
+    if g["type"] == "sql" or (g["type"] == "judge" and sqlexec.is_select(ref) and sqlexec.reference_runs(ref, it["prompt"])):
+        scoring, reference = "sql", f"{ref}\n\n{grading_note(dict(g, type='sql'), spec['io_format'])}"
+        extra = {"fixture": g.get("fixture") or []}
+    elif g["type"] == "json":   # spec_and_io.md: reference is a STRING (JSON text); finetune-eval parses it
         scoring, reference = "json", json.dumps(parse_json_reference(ref), ensure_ascii=False)
     elif g["type"] in ("exact", "choice") and eval_normalize(ref) == eval_normalize(g["answer"]):
         scoring, reference = "exact", ref
@@ -422,7 +464,7 @@ def to_eval_item(it: dict, spec: dict, split: str = None) -> dict:
     return {"id": it["id"], "split": split, "question": it["prompt"], "messages": msgs,
             "reference": reference, "scoring": scoring, "category": it["category"],
             "difficulty": it["difficulty"], "source": "synthetic", "source_ref": None, "base_pass_rate": None,
-            "grading": g, "verify": it.get("verify")}
+            "grading": g, "verify": it.get("verify"), **extra}
 
 
 def seed_items(spec: dict, n: int) -> list:
@@ -430,9 +472,10 @@ def seed_items(spec: dict, n: int) -> list:
     sys_msg = [{"role": "system", "content": spec["system_prompt"]}] if spec.get("system_prompt") else []
     out = []
     for i, x in enumerate([x for x in (spec.get("seed_examples") or []) if x.get("input") and x.get("output")][:n]):
+        runs = sqlexec.is_select(x["output"]) and sqlexec.reference_runs(x["output"], x["input"])
         out.append({"id": f"u{i + 1:03d}", "split": "heldout", "question": x["input"],
                     "messages": sys_msg + [{"role": "user", "content": x["input"]}],
-                    "reference": x["output"], "scoring": "judge", "category": "typical cases",
+                    "reference": x["output"], "scoring": "sql" if runs else "judge", "category": "typical cases",
                     "difficulty": "medium", "source": x.get("source") or "user",
                     "source_ref": x.get("source_ref"), "base_pass_rate": None})
     return out
@@ -485,7 +528,7 @@ def derive_format_regex(llm_v, spec, refs, deadline):
         feedback = (f"\nYour previous regex {rx!r} did NOT match these replies; make it accept them:\n"
                     + "\n---\n".join(failing[:4]) + "\n")
         log(f"[format] regex attempt {attempt + 1} failed on {len(failing)} references")
-    log("[format] no reliable regex; the Evaluator will check format with the judge instead")
+    log("[format] no reliable regex; the Evaluator will not check format for judge-graded items")
     return None
 
 
@@ -640,8 +683,7 @@ def accept(run_dir, state, items):
 def run(a):
     budget = a.time_budget
     deadline = _T_START + (budget if budget > 0 else 10 ** 9)
-    if budget <= 0 or budget > 60:
-        L.LLM_CALL_CAP_S = LONG_CALL_CAP_S
+    L.allow_long_calls(budget if budget > 0 else float("inf"))   # BenchGen's 0 = no budget (the background worker)
     jsonparse.BAD_OUTPUT_DIR = BENCH_DIR
     if not (a.spec or (a.query and a.query.strip())):
         raise ValueError("give --spec <file> or --query <fine-tuning request>")
@@ -714,6 +756,7 @@ def run(a):
             f"(est {est_round(k, timing['per_item'], CALLS_PER_ROUND):.0f}s)")
         avoid = [it["prompt"][:60] for it in read_jsonl(run_dir / "items.jsonl")[-40:]]
         timings = []
+        refusals_before = getattr(llm, "refusals", 0)
         kept, rejects, unverified, leftover = round_for_cell(
             llm, llm_v, spec, cell, k, avoid, near, seen_exact, deadline, timing["per_item"], timings,
             feedback=state["pending_feedback"].get(cell))
@@ -730,6 +773,17 @@ def run(a):
         save_json(run_dir / "state.json", state)
         pl.progress("bench", done=state["kept"], total=state["target"], unit="items", phase="M5/M6",
                     metrics={"rejected": state["rejected"], "generated": state["generated"]})
+        if not (kept or rejects or unverified) and getattr(llm, "refusals", 0) > refusals_before:
+            # Claude declined to write prompts for this cell (e.g. "user asks for harmful content"): skip the cell
+            # instead of stopping, or every restart picks the same cell again and the whole benchmark fails.
+            moved = drop_cell(state["quota"], state["have"], cell)
+            state.setdefault("skipped_cells", []).append(cell)
+            save_json(run_dir / "state.json", state)
+            msg = (f"M5 skipped '{cell.replace('||', ' / ')}': the generator declined to write these prompts; "
+                   f"{moved} items moved to other cells (safety prompts come from --safety-file)")
+            log(f"[plan] {msg}")
+            pl.emit("bench", "log", msg, loop=0)
+            continue
         if not (kept or rejects or unverified):
             stop = ("time budget used" if call_timeout(deadline) < L.MIN_CALL_S
                     else "no output from LLM (API error / rate limit?)")

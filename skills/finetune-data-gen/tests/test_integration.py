@@ -6,6 +6,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
 sys.path.insert(0, str(HERE.parent / "scripts"))
+os.environ["DATAGEN_GEN_BACKEND"] = "default"              # offline: M2 uses the patched get_llm_client fake
 os.environ.setdefault("DATAGEN_VERIFY_BACKEND", "same")   # offline: M3 uses the fake M2 client, not OpenAI Sol
 import gen_data
 

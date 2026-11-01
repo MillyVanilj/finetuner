@@ -146,6 +146,7 @@ class TopUpFake:
         time.sleep(0.05)
         return json.dumps(out)
 fake = TopUpFake()
+os.environ["DATAGEN_GEN_BACKEND"] = "default"   # use the patched get_llm_client fake, never a real writer API
 gen_data.get_llm_client = lambda name: fake
 spec_path = tmp / "spec_topup.json"
 spec_path.write_text(json.dumps({"task": "t", "io_format": "f", "success_criteria": ["c"],

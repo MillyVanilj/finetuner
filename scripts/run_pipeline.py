@@ -45,7 +45,25 @@ POLL_EVAL_S = int(os.environ.get("FTC_POLL_EVAL_S", 30))
 POLL_BENCH_S = int(os.environ.get("FTC_POLL_BENCH_S", 20))
 PROBE_TIMEOUT_S = int(os.environ.get("FTC_PROBE_TIMEOUT_S", 3600))
 SUBMIT_WAIT_TRIES = 20          # pre-flight "wait" (GPU busy etc.) retries, POLL_TRAIN_S apart
-MAX_DATAGEN_CALLS = 400         # safety net: each call does ~one time budget of work
+# DataGen's own default budget is 27 s per call (ScienceClaw's 30 s skill limit), with each LLM call cut at 18 s.
+# The runner isn't bound by that: each call gets DATAGEN_TIME_BUDGET (from the environment or .env) or 540 s, and
+# a budget over 60 s lets single LLM calls run up to 120 s (finetune_common.llm.allow_long_calls), e.g. the Sol
+# checker, a reasoning model. The call's timeout adds DATAGEN_MARGIN_S for what the budget doesn't cover: startup
+# (imports; slow on /mnt/c) and M4 (format + contamination check), which run after the budget's deadline.
+DATAGEN_DEFAULT_BUDGET_S = 540
+DATAGEN_MARGIN_S = 120
+DATAGEN_MAX_HOURS = 4           # safety net for the whole DataGen stage (one loop's data)
+DATAGEN_NO_PROGRESS_CALLS = 5   # ...and this many calls in a row that change nothing
+
+
+def datagen_budget() -> float:
+    """Seconds per DataGen call: $DATAGEN_TIME_BUDGET (environment, then .env) if it is a positive number."""
+    raw = os.environ.get("DATAGEN_TIME_BUDGET") or dotenv_vars().get("DATAGEN_TIME_BUDGET")
+    try:
+        v = float(str(raw).strip().rstrip("sS"))
+    except (TypeError, ValueError):
+        v = 0
+    return v if v > 0 else DATAGEN_DEFAULT_BUDGET_S
 
 STOP = threading.Event()
 
@@ -190,14 +208,30 @@ def run_datagen(pl: Pipeline, spec_path: Path, run_id: str, loop: int, note: str
     """DataGen: call until done; returns train_path."""
     pl.emit("data", "start", f"DataGen: generating + verifying training examples{note}", loop=loop)
     linked = False
-    for _ in range(MAX_DATAGEN_CALLS):
-        rc, out, err = call(pl, "finetune-data-gen", ["--spec", spec_path, "--run-id", run_id], timeout=600)
+    budget = datagen_budget()
+    pl.emit("data", "log", f"DataGen calls get {budget:g} s each "
+                           f"({'up to 120 s' if budget > 60 else 'up to 18 s'} per LLM call)", loop=loop)
+    stage_end, last, same = time.time() + DATAGEN_MAX_HOURS * 3600, None, 0
+    while True:
+        if time.time() > stage_end:
+            raise RunnerError(f"DataGen did not finish within {DATAGEN_MAX_HOURS} h")
+        rc, out, err = call(pl, "finetune-data-gen", ["--spec", spec_path, "--run-id", run_id,
+                                                      "--time-budget", f"{budget:g}"],
+                            timeout=int(budget + DATAGEN_MARGIN_S))
         out = out or {}
         if out.get("run_dir") and not linked:
             pl.link("data_run_dir", str(Path(out["run_dir"]).expanduser()), stage="data", append=True)
             linked = True
         if out.get("error") or (rc != 0 and not out):
             raise RunnerError(f"DataGen failed: {out.get('error') or err}")
+        # kept/rejected only: a failing verifier still moves pending/unverified on every call
+        progress = (out.get("raw_kept"), out.get("rejected_total"))
+        waiting = out.get("state") == "waiting_for_bench"   # done generating, BenchGen still writing: not stuck
+        same = same + 1 if progress == last and not waiting else 0
+        last = progress
+        if same >= DATAGEN_NO_PROGRESS_CALLS and not out.get("done"):
+            raise RunnerError(f"DataGen made no progress in {same + 1} calls in a row "
+                              f"(last: {out.get('stop_reason') or err})")
         if out.get("done") and out.get("train_path"):
             n = out.get("train_examples")
             pl.emit("data", "done", f"{n} training examples ready ({out.get('rejected_total', 0)} rejected by M3)",
@@ -206,8 +240,7 @@ def run_datagen(pl: Pipeline, spec_path: Path, run_id: str, loop: int, note: str
                                        f"({out.get('rejected_total', 0)} rejected by the verifier).",
                                        to="TrainAgent", kind="finding", loop=loop, refs={"train_path": out["train_path"]})
             return str(Path(out["train_path"]).expanduser())
-        sleep(1)
-    raise RunnerError("DataGen did not finish after many calls")
+        sleep(5 if out.get("state") == "waiting_for_bench" else 1)
 
 
 def decontaminate(pl: Pipeline, data_run_id: str, bench_dir: str):
@@ -458,20 +491,17 @@ def run(pl: Pipeline, max_loops_cap: int, skip_general: bool):
             raise RunnerError(f"unknown Evaluator action {action!r}")
         pl.emit("bench", "done", "Benchmark unchanged (fixed across loops)", loop=nxt)
 
-    # Output: held-out once
+    # Output: held-out once, then the ReportAgent's files (ftc/report.py) and publishing (ftc/publish.py)
     best_adapter, best_job, best_loop = best
     loop = pl.current_loop()
     pl.emit("output", "start", f"Scoring the held-out split once (adapter from loop {best_loop})", loop=loop)
     write_runner_state(pl, step="held-out evaluation")
-    evaluate(pl, best_adapter, bench_dir, "heldout", loop, best_job, skip_general=True)
-    ho = json.loads((pl.loop_dir(loop) / "eval" / "heldout_report.json").read_text())
-    history = []
-    for n in range(1, loop + 1):
-        f = pl.loop_dir(n) / "eval" / "eval_report.json"
-        if f.exists():
-            history.append({"loop": n, "tuned": json.loads(f.read_text())["systems"].get("tuned", {}).get("score")})
-    probe_res = None
+    # M8 (forgetting check) on held-out only if the best loop's dev run skipped it: same adapter, same numbers
+    best_dev = pl.loop_dir(best_loop) / "eval" / "eval_report.json"
+    has_general = best_dev.exists() and bool(json.loads(best_dev.read_text()).get("general"))
+    evaluate(pl, best_adapter, bench_dir, "heldout", loop, best_job, skip_general=has_general)
     if probe_t is not None:
+        # Probe set (report only): original model vs final adapter. ftc/report.py reads probe_report.json.
         write_runner_state(pl, step="probe evaluation")
         wait_thread(probe_t)
         if probe.get("state") == "done":
@@ -480,21 +510,20 @@ def run(pl: Pipeline, max_loops_cap: int, skip_general: bool):
                 pl.emit("output", "log", f"Scoring the probe set ({probe.get('n_items')} weak-spot questions): "
                                          "original model vs final adapter", loop=loop)
                 evaluate(pl, best_adapter, bench_dir, "probe", loop, best_job, skip_general=True)
-                pr = json.loads((pl.loop_dir(loop) / "eval" / "probe_report.json").read_text())
-                probe_res = {"n_items": probe.get("n_items"), "categories": probe.get("categories"),
-                             "from_loop": probe.get("from_loop"), "systems": pr.get("systems"),
-                             "by_category": pr.get("by_category"), "gain_vs_base_few_shot": pr.get("gain_vs_base_few_shot")}
             except RunnerError as e:
                 if STOP.is_set():
                     raise
                 pl.emit("output", "log", f"Probe evaluation skipped: {e}", loop=loop)
-    final = {"pipeline_id": pl.id, "best_loop": best_loop, "train_job_id": best_job, "adapter_path": best_adapter,
-             "hub_url": None, "infinite_post_url": None,
-             "heldout": {"systems": ho.get("systems"), "by_source": ho.get("by_source")},
-             "dev_history": history, "probe": probe_res, "model_card_path": None, "created_at": now_iso()}
-    pl.write_json("final/final_report.json", final)
-    t = (ho.get("systems") or {}).get("tuned", {}).get("score")
-    pl.emit("output", "done", f"Done. Held-out score of the tuned model: {t if t is None else round(t, 3)}", loop=loop)
+    finish(pl, best_loop, best_job, best_adapter, loop)
+
+
+def finish(pl: Pipeline, best_loop, best_job, best_adapter, loop, post_infinite=None):
+    """The ReportAgent step (ftc/publish.py finalize): final report + model card, then publishing.
+    Publishing never fails the pipeline: the adapter and the report are already on disk."""
+    from ftc.publish import finalize
+    finalize(pl.dir, best_loop=best_loop, best_job=best_job, best_adapter=best_adapter, loop=loop,
+             post_infinite=post_infinite, on_step=lambda step: write_runner_state(pl, step=step),
+             log=lambda msg: log(pl, msg))
 
 
 def main():

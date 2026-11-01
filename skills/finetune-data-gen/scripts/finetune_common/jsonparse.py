@@ -102,13 +102,18 @@ def dump_bad_output(label: str, raw: str) -> None:
 
 
 def call_json_list(llm, prompt: str, max_tokens: int, temperature: float, label: str,
-                   required_key: str = None, attempts: int = 2, deadline: float = None) -> list:
+                   required_key: str = None, attempts: int = 2, deadline: float = None,
+                   cap: float = None, info: dict = None) -> list:
     """Call the LLM and return a parsed JSON list, retrying on failure.
     - Empty reply -> API error/rate limit/timeout: retry the same prompt.
     - Unparseable reply -> log it, retry with a stricter instruction and lower temperature.
-    - deadline: absolute time; an attempt only starts if at least MIN_CALL_S is left."""
+    - deadline: absolute time; an attempt only starts if at least MIN_CALL_S is left.
+    - cap: per-call limit for this call instead of LLM_CALL_CAP_S.
+    - info: if given, gets "cut_off" (we stopped waiting at the time limit) and "timeout" (seconds allowed)."""
     for attempt in range(1, attempts + 1):
-        timeout = L.call_timeout(deadline)
+        timeout = L.call_timeout(deadline, cap)
+        if info is not None:
+            info["timeout"] = timeout
         if timeout < L.MIN_CALL_S:
             L.log(f"[{label}] attempt={attempt} skipped: only {max(timeout, 0):.1f}s left before the deadline")
             break
@@ -121,6 +126,8 @@ def call_json_list(llm, prompt: str, max_tokens: int, temperature: float, label:
             return items
         if isinstance(raw, L.Abandoned):
             L.log(f"[{label}] attempt={attempt} cut off at the time limit after {dt:.1f}s")
+            if info is not None:
+                info["cut_off"] = True
             break                                # a retry would get even less time: give up now
         elif not raw.strip():
             with L._EMPTY_LOCK:                    # only real empty API replies count as a rate-limit signal

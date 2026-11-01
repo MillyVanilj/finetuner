@@ -7,12 +7,15 @@ Grading spec on every benchmark item:
   {"type": "judge",   "answer": "key point", "rubric": ["...", ...]}   needs an LLM judge
   {"type": "json"}                                                 the reference IS a JSON object;
                                                                    scored by field-level F1 (Evaluator)
+  {"type": "sql", "fixture": ["INSERT ...;", ...]}                 the reference IS a SQL query; replies are
+                                                                   run and compared (sqlexec.py)
 """
 import json
 import re
 from .textsim import normalize
 
-TYPES = ("exact", "numeric", "choice", "judge", "json")
+TYPES = ("exact", "numeric", "choice", "judge", "json", "sql")
+MAX_FIXTURE_ROWS = 60
 DEFAULT_REL_TOL = 0.01          # numeric tolerance when the generator gives none: 1 % of the answer
 
 _SCI = re.compile(r"([-+]?\d+(?:\.\d+)?)\s*(?:[x×*]|\\times)\s*10\s*\^?\s*\{?\s*([-+]?\d+)\s*\}?")
@@ -46,6 +49,12 @@ def normalize_grading(g) -> tuple:
     t = g["type"]
     if t == "json":
         return {"type": "json"}, None
+    if t == "sql":     # fixture: INSERT statements only (anything else could change the schema under test)
+        fx = g.get("fixture") or []
+        fx = [s for s in ([fx] if isinstance(fx, str) else fx) if isinstance(s, str) and s.strip()]
+        fx = [s.strip() if s.strip().endswith(";") else s.strip() + ";" for s in fx
+              if re.match(r"\s*INSERT\s+INTO\b", s, re.I)][:MAX_FIXTURE_ROWS]
+        return {"type": "sql", "fixture": fx}, None
     if t == "numeric":
         nums = parse_numbers(g.get("answer", ""))
         if not nums:
