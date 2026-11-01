@@ -181,6 +181,13 @@ Skills that take a spec should accept `--spec`, optionally with `--task-spec-pat
 `runs/<job_id>/status.json` (live), plus **new** `runs/<job_id>/train_log.jsonl`: `train_sft.py` now appends every
 Trainer log line (`{"loss", "learning_rate", "epoch", "step"}` or `{"eval_loss", ..., "step"}`), which drives the live loss curve.
 
+**Pre-flight (automatic GPU launch checks, no human OK):** `run.json` → `preflight` =
+`{decision: launch|reuse|wait|refuse, reason, checks: [{check, ok, detail, overridden}], estimate_s, s_per_example_epoch,
+speed_from_n_runs, pipeline_gpu_hours_used, pipeline_gpu_hours_budget}`, shown in the Trainer panel. A wait or refuse
+makes no job folder; it appears as a `train` event (`log` / `failed`) starting with "Pre-flight …". A reuse appears as
+"Skipped training …" plus a link to the reused job. The checks read `budget.max_gpu_hours` and `targets.max_loops` from
+the spec.
+
 ## 4. Events (`events.jsonl`): how a stage tells the UI what it's doing
 
 One JSON object per line, appended (never rewritten):
