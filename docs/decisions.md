@@ -74,7 +74,7 @@ Same-family models favour their own outputs (self-preference bias), so:
 
 A benchmark written by the same kind of model as the training data can just reward "learned the generator's style". Sources, in order (record which one was used):
 1. The user's own examples (asked for in M1).
-2. Hugging Face Hub search (`huggingface_hub.list_datasets(search=...)`) + an LLM relevance/license check.
+2. Hugging Face Hub search + an LLM relevance/license check. *Built:* `ftc/real_data.py`, run by M1 when the user gives no examples.
 3. Real *inputs* from science sources via ScienceClaw skills (PubMed, arXiv, UniProt, PubChem…), with LLM-written answers.
 4. Nothing found → synthetic only, and the report flags lower confidence.
 
