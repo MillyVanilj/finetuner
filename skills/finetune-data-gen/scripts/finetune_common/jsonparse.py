@@ -15,6 +15,15 @@ STRICT_SUFFIX = ("\n\nIMPORTANT: your previous reply could not be parsed as JSON
 
 
 
+def _bodies(text: str) -> list:
+    """Where to look for the JSON: the first ``` fenced block, then the whole reply.
+    The whole reply matters when strings inside the JSON contain their own ``` fences
+    (e.g. a reference answer with a ```latex block): the non-greedy fence regex stops at
+    that inner fence and returns only half the JSON."""
+    m = FENCE_RE.search(text)
+    return [m.group(1).strip(), text] if m else [text]
+
+
 def _as_list(obj) -> list:
     """Accept a list, a single object, or a wrapper like {"examples": [...]}."""
     if isinstance(obj, list):
@@ -50,12 +59,12 @@ def parse_json_list(raw: str, required_key: str = None) -> list:
     text = (raw or "").strip()
     if not text:
         return []
-    if m := FENCE_RE.search(text):
-        text = m.group(1).strip()
-    candidates = [text]
-    a, b = text.find("["), text.rfind("]")
-    if a != -1 and b > a:
-        candidates.append(text[a:b + 1])
+    candidates = []
+    for body in _bodies(text):
+        candidates.append(body)
+        a, b = body.find("["), body.rfind("]")
+        if a != -1 and b > a:
+            candidates.append(body[a:b + 1])
     for c in candidates:                                  # 1) clean parse, 2) trailing-comma fix
         for variant in (c, TRAILING_COMMA_RE.sub(r"\1", c)):
             try:
@@ -64,22 +73,21 @@ def parse_json_list(raw: str, required_key: str = None) -> list:
                 continue
             if items:
                 return items
-    return _filter(_salvage_objects(text), required_key)  # 3) salvage what's complete
+    return _filter(_salvage_objects(text), required_key)  # 3) salvage what's complete (whole reply)
 
 
 def parse_json_object(raw: str):
     text = (raw or "").strip()
-    if m := FENCE_RE.search(text):
-        text = m.group(1).strip()
-    a, b = text.find("{"), text.rfind("}")
-    if a == -1 or b <= a:
-        return None
-    for variant in (text[a:b + 1], TRAILING_COMMA_RE.sub(r"\1", text[a:b + 1])):
-        try:
-            obj = json.loads(variant)
-            return obj if isinstance(obj, dict) else None
-        except json.JSONDecodeError:
+    for body in _bodies(text):
+        a, b = body.find("{"), body.rfind("}")
+        if a == -1 or b <= a:
             continue
+        for variant in (body[a:b + 1], TRAILING_COMMA_RE.sub(r"\1", body[a:b + 1])):
+            try:
+                obj = json.loads(variant)
+                return obj if isinstance(obj, dict) else None
+            except json.JSONDecodeError:
+                continue
     return None
 
 
