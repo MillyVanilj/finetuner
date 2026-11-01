@@ -187,7 +187,10 @@ def main():
         if judge:
             cmd += ["--judge-model", judge]
         with open(log_f, "ab") as log:
-            proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            # cwd = the eval folder: the caller's cwd is often this skill's folder, which scripts/install.sh
+            # deletes and re-copies (a job whose cwd vanished crashes in os.getcwd(), e.g. inside lm-eval)
+            proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
+                                    cwd=str(out))
         if not status_f.exists():  # the job writes its own status; this only covers its first moments
             status_f.write_text(json.dumps({"state": "starting", "pid": proc.pid}))
         result = {"state": "started", "pid": proc.pid, "eval_dir": str(out), "log": str(log_f),
