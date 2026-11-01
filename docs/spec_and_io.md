@@ -189,7 +189,8 @@ Overwrite it every ~20 items (`Pipeline.progress("eval", ...)` does this):
 Skills that take a spec should accept `--spec`, optionally with `--task-spec-path` as an alias.
 
 ### 3.7 Final report: `final/final_report.json`
-`{pipeline_id, best_loop, train_job_id, adapter_path, hub_url, infinite_post_url, heldout: {systems, by_source}, dev_history: [{loop, tuned}], model_card_path, created_at}`.
+`{pipeline_id, best_loop, train_job_id, adapter_path, hub_url, infinite_post_url, heldout: {systems, by_source}, dev_history: [{loop, tuned}], probe, model_card_path, created_at}`.
+`probe` is `null` or `{n_items, categories, from_loop, systems, by_category, gain_vs_base_few_shot}`: the weak-spot probe set (`bench/probe.jsonl`, written after loop 1 for its failing categories; report only) scored with the original model and the final adapter.
 
 ### 3.8 Training progress (Trainer → UI): already exists
 `runs/<job_id>/status.json` (live), plus **new** `runs/<job_id>/train_log.jsonl`: `train_sft.py` now appends every

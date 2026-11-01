@@ -47,6 +47,9 @@ out({"run_id": a.run_id, "done": True, "train_examples": n, "rejected_total": k,
      "train_path": str(d / "train.jsonl")})
 """,
     "finetune-data-gen/lib/format_data.py": """
+p = argparse.ArgumentParser(); p.add_argument("--run-id"); p.add_argument("--bench"); p.add_argument("--format")
+a = p.parse_args()
+Path(os.environ["FAKE_STATE"], "bench_checked_" + a.run_id).write_text(Path(a.bench).read_text())
 out({"contaminated": 2})
 """,
     "finetune-bench-gen/scripts/bench_gen.py": """
@@ -61,6 +64,19 @@ it = lambda i, s: json.dumps({"id": f"{s}{i}", "messages": [{"role": "user", "co
 (bd / "heldout.jsonl").write_text("\\n".join(it(i, "h") for i in range(4)) + "\\n")
 (bd / "bench_report.json").write_text(json.dumps({"n_dev": 6, "n_heldout": 4}))
 out({"state": "done", "done": True, "bench_dir": str(bd), "n_dev": 6, "n_heldout": 4})
+""",
+    "finetune-bench-gen/lib/probe_gen.py": """
+p = argparse.ArgumentParser(); p.add_argument("--bench-dir"); p.add_argument("--eval-report-path")
+p.add_argument("--train-path", action="append", default=[]); p.add_argument("--format")
+a = p.parse_args()
+counter("probe")
+rep = json.loads(Path(a.eval_report_path).read_text())
+assert rep["split"] == "dev" and rep["loop"] == 1 and a.train_path, (rep.get("split"), rep.get("loop"), a.train_path)
+bd = Path(a.bench_dir)
+row = json.dumps({"id": "p0001", "split": "probe", "messages": [{"role": "user", "content": "P1"}], "reference": "A",
+                  "scoring": "judge", "category": "typical cases", "source": "probe", "difficulty": "hard"})
+(bd / "probe.jsonl").write_text(row + "\\n")
+out({"state": "done", "n_items": 1, "categories": ["typical cases"], "from_loop": 1, "probe_path": str(bd / "probe.jsonl")})
 """,
     "finetune-submit/scripts/finetune_submit.py": """
 p = argparse.ArgumentParser(); p.add_argument("--train-path"); p.add_argument("--pipeline-dir")
@@ -158,6 +174,15 @@ def test_runner_end_to_end(keep=False):
     assert json.loads((pl.dir / "loops/3/eval/heldout_report.json").read_text())["split"] == "heldout"
     assert s["final"]["dev_history"] and s["final"]["best_loop"] == 3
     assert s["runner"]["state"] == "done"
+    # probe set: built once from loop 1's dev report, scored at the end, never part of the loop
+    st = tmp / "state"
+    assert (st / "probe").read_text() == "1"
+    assert "P1" in (st / f"bench_checked_{pl.id}-l2").read_text()                      # loop 2 data checked vs probe
+    pr = json.loads((pl.dir / "loops/3/eval/probe_report.json").read_text())
+    assert pr["split"] == "probe" and pr["systems"]["base_zeroshot"]["score"] == 0.3
+    fp = s["final"]["probe"]
+    assert fp["n_items"] == 1 and fp["systems"]["tuned"]["score"] and fp["systems"]["base_fewshot"]["score"] == 0.45
+    assert not (pl.dir / "loops/3/decision_probe.json").exists()                     # the Evaluator never saw it
     if keep:
         print("pipeline kept at", pl.dir)
     return pl.dir

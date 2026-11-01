@@ -88,7 +88,8 @@ def spec_io_report(report_path, r, adapter_path):
     earlier loops): a reused training job (finetune-submit found identical data + settings, so report.json
     already exists) must count as the loop that asked for it, not the loop that first trained it. Outside a
     pipeline it is converted once. Returns its path, or None when ftc is not importable (then decide can't run)."""
-    local = report_path.parent / ("eval_report.json" if r.get("split", "dev") == "dev" else "heldout_report.json")
+    names = {"dev": "eval_report.json", "probe": "probe_report.json"}   # probe: report only, see finetune-bench-gen
+    local = report_path.parent / names.get(r.get("split", "dev"), "heldout_report.json")
     for d in (str(FINETUNER_DIR), str(Path(__file__).resolve().parents[3])):
         if (Path(d) / "ftc").exists() and d not in sys.path:
             sys.path.insert(0, d)
@@ -139,7 +140,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--adapter-path", help="adapter/ dir from train_sft.py (finetune-status' adapter_path)")
     p.add_argument("--bench-dir", help="BenchGen's bench_dir; default: the pipeline's benchmark (see SKILL.md)")
-    p.add_argument("--split", choices=["dev", "heldout"], default="dev")
+    p.add_argument("--split", choices=["dev", "heldout", "probe"], default="dev")
     p.add_argument("--skip-general", action="store_true")
     p.add_argument("--format", choices=["json", "summary"], default="json")
     a, _ = p.parse_known_args()                  # ignore extras like --query that ScienceClaw passes

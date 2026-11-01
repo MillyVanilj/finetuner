@@ -14,7 +14,7 @@ Scores a LoRA adapter from `train_sft.py` against its base model. The job takes 
 |-----------|-------------|---------|
 | `--adapter-path` | `adapter/` dir from `train_sft.py` (its `metrics.json` next to it gives the base model and training data). Called with only `--bench-dir` (no adapter yet), the skill records the benchmark and exits 0 (`"state": "noted"`) | Required for an eval |
 | `--bench-dir` | Benchmark folder from L2: `dev.jsonl`, `heldout.jsonl`, optional `safety.jsonl`. If omitted: the pipeline's benchmark (`pipeline_dir` in the adapter's `run.json` → `pipeline.json` links `bench_dir`, then `$FTC_PIPELINE_DIR`), else the last `--bench-dir` this skill was given (`$FINETUNER_RUNS/.last_bench_dir`). In agent mode the BenchGen artifact is consumed by the first eval, so later loops arrive with `adapter_path` only | see left |
-| `--split` | `dev` every loop, `heldout` once at the end | dev |
+| `--split` | `dev` every loop, `heldout` once at the end, `probe` (weak-spot set, report only; see finetune-bench-gen) | dev |
 | `--skip-general` | Skip M8 (lm-eval) for faster loops | off |
 | `--format` | `json` or `summary` | json |
 

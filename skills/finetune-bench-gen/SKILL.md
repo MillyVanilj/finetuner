@@ -112,11 +112,31 @@ means 3 failures **in a row** without progress (or the reviewer rejected too muc
 `worker.json`, call again. Spec and safety paths may be relative: they are checked at once and handed to the
 job as absolute paths.
 
+## Probe set (weak spots, report only): `lib/probe_gen.py`
+
+After the first dev eval, `scripts/run_pipeline.py` runs `lib/probe_gen.py` in the background. It takes the
+top 3 failing categories from that eval report and writes about 30 **new** medium/hard items for them, with
+the same write → independent solve → review steps (Opus). A few dev questions the tuned model failed are shown
+to the writer as hints only. Near-copies of any benchmark item or training example are dropped.
+Output: `bench_dir/probe.jsonl` (split `probe`) + `probe_meta.json`. **dev.jsonl and heldout.jsonl never change.**
+
+- Written once (a second call returns the same file), so every model is scored on the same probe items.
+- At the end, the runner runs `finetune-eval --split probe` with the final adapter. That scores the
+  original model (zero-shot and few-shot) and the final model on the same items: "weak spots before → after".
+  Shown in `final_report.json` (`probe`) and on the dashboard's Output card.
+- The Evaluator never acts on it, and later training data is checked against it for leaks. It is not the honest
+  final number (the items were chosen *because* the model failed that kind of question); held-out is.
+- Off: `FTC_PROBE=0`. Size: `FTC_PROBE_N` (default 30). It lives in `lib/` because ScienceClaw runs the first
+  `scripts/*.py` of a skill. By hand:
+  `python3 lib/probe_gen.py --bench-dir <bench_dir> --eval-report-path loops/1/eval/eval_report.json --train-path <train.jsonl>`.
+  Tests: `python3 -B tests/test_probe.py`.
+
 ## Run folder
 
 | File | Contents |
 |------|----------|
 | `dev.jsonl`, `heldout.jsonl`, `safety.jsonl` (if supplied) | The frozen benchmark (finetune-eval format) |
+| `probe.jsonl`, `probe_meta.json` | Weak-spot probe set (see above), if the runner built one |
 | `bench_meta.json` | Metadata and hashes (written when frozen) |
 | `items.jsonl` | Verified items in internal format, in acceptance order |
 | `rejects.jsonl` | Rejected items with `reason`, `stage` (precheck/review), `round`, `cell` |

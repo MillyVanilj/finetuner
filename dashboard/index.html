@@ -955,15 +955,26 @@ function pOutput() {
   const f = S.final;
   if (!f) return {html: `<p class="muted">${esc(S.stages.output.msg || "When the loop stops, the held-out set is scored once and the adapter, eval report and model card are published.")}</p>`};
   const ho = f.heldout?.systems || {};
+  const pr = f.probe, ps = pr?.systems || {};
   return {html: `<div class="tiles"><div class="tile"><div class="v">${fmtPct(ho.tuned?.score)}</div><div class="l">held-out, tuned</div></div>
       <div class="tile"><div class="v">${fmtPct(ho.base_fewshot?.score)}</div><div class="l">held-out, base few-shot</div></div>
       <div class="tile"><div class="v">${fmtPct(ho.teacher?.score)}</div><div class="l">held-out, teacher</div></div>
       <div class="tile"><div class="v">${f.best_loop}</div><div class="l">best loop</div></div></div>
     <div class="two"><div><h4>Held-out score (scored once)</h4><div id="oBars"></div></div><div><h4>By source</h4><div id="oSrc"></div></div></div>
+    ${pr ? `<h4>Weak-spot probe: original vs final model</h4>
+    <p class="muted" style="font-size:12px">${pr.n_items} new questions written after loop ${pr.from_loop ?? 1} for its weakest categories (${esc((pr.categories || []).join(", "))}). Report only: the loop never used them.</p>
+    <div class="tiles"><div class="tile"><div class="v">${fmtPct(ps.base_zeroshot?.score)}</div><div class="l">probe, original model</div></div>
+      <div class="tile"><div class="v">${fmtPct(ps.base_fewshot?.score)}</div><div class="l">probe, original few-shot</div></div>
+      <div class="tile"><div class="v">${fmtPct(ps.tuned?.score)}</div><div class="l">probe, final tuned</div></div></div>
+    <div class="two"><div><div id="pBars"></div></div><div><div id="pCat"></div></div></div>` : ""}
     <dl class="kvlist sec"><dt>Adapter</dt><dd class="mono">${esc(f.adapter_path)}</dd><dt>Hugging Face</dt><dd>${f.hub_url ? `<a href="${esc(f.hub_url)}" target="_blank" rel="noopener">${esc(f.hub_url)}</a>` : "–"}</dd>
     <dt>Model card</dt><dd class="mono">${esc(f.model_card_path)}</dd><dt>Infinite post</dt><dd>${f.infinite_post_url ? `<a href="${esc(f.infinite_post_url)}" target="_blank" rel="noopener">${esc(f.infinite_post_url)}</a>` : "–"}</dd></dl>`,
     after: () => { barCI($("oBars"), SYSTEMS.map(s => ({name: s.name, short: s.short, color: s.color, score: ho[s.key]?.score, ci: ho[s.key]?.ci95})), {target: S.spec.targets?.target_score, aria: "Held-out scores"});
-      hbars($("oSrc"), (f.heldout?.by_source || []).map(c => ({label: c.source, values: [{name: "Base few-shot", color: "--s2", v: c.base_fewshot}, {name: "Tuned", color: "--s1", v: c.tuned}]})), {pct: true, max: 1}); }};
+      hbars($("oSrc"), (f.heldout?.by_source || []).map(c => ({label: c.source, values: [{name: "Base few-shot", color: "--s2", v: c.base_fewshot}, {name: "Tuned", color: "--s1", v: c.tuned}]})), {pct: true, max: 1});
+      if (pr) {
+        barCI($("pBars"), SYSTEMS.map(s => ({name: s.name, short: s.short, color: s.color, score: ps[s.key]?.score, ci: ps[s.key]?.ci95})), {aria: "Probe scores"});
+        hbars($("pCat"), (pr.by_category || []).map(c => ({label: c.category, values: [{name: "Original few-shot", color: "--s2", v: c.base_fewshot}, {name: "Final tuned", color: "--s1", v: c.tuned}]})), {pct: true, max: 1, aria: "Probe by category"});
+      } }};
 }
 
 // ---------------- top bar actions ----------------

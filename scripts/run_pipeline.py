@@ -6,7 +6,11 @@
 
 Each loop:  BenchGen (once, background job)  ∥  DataGen  →  finetune-submit  →  finetune-status (poll)
             →  finetune-eval (dev, poll)  →  finetune-decide  →  retrain | regenerate_data | stop
-On stop:    finetune-eval on the held-out split (once)  →  final/final_report.json
+On stop:    finetune-eval on the held-out split (once)  →  probe split (if built)  →  final/final_report.json
+Probe set:  after loop 1's dev eval, BenchGen's lib/probe_gen.py writes NEW verified questions for the weak
+            categories in the background (bench/probe.jsonl). At the end the original model and the final adapter
+            are both scored on it ("weak spots before → after"). Report only: the Evaluator never sees it, and a
+            probe problem never fails the run. Off with FTC_PROBE=0; size FTC_PROBE_N (default 30).
 
 It calls each skill's script as a subprocess and reads its one-JSON-object stdout, exactly like ScienceClaw's
 skill executor, so a step that works here also works under the agents. Everything it does goes to the
@@ -39,6 +43,7 @@ SKILL_SCRIPTS = {"finetune-data-gen": "gen_data.py", "finetune-bench-gen": "benc
 POLL_TRAIN_S = int(os.environ.get("FTC_POLL_TRAIN_S", 30))
 POLL_EVAL_S = int(os.environ.get("FTC_POLL_EVAL_S", 30))
 POLL_BENCH_S = int(os.environ.get("FTC_POLL_BENCH_S", 20))
+PROBE_TIMEOUT_S = int(os.environ.get("FTC_PROBE_TIMEOUT_S", 3600))
 SUBMIT_WAIT_TRIES = 20          # pre-flight "wait" (GPU busy etc.) retries, POLL_TRAIN_S apart
 MAX_DATAGEN_CALLS = 400         # safety net: each call does ~one time budget of work
 
@@ -115,9 +120,9 @@ def last_json(text: str):
     return None
 
 
-def call(pl: Pipeline, name: str, args: list, timeout: int = 900):
-    """Run a skill script. Returns (exit_code, json_or_None, stderr_tail)."""
-    script = skill_script(name)
+def call(pl: Pipeline, name: str, args: list, timeout: int = 900, script: Path = None):
+    """Run a skill script (or another script of that skill). Returns (exit_code, json_or_None, stderr_tail)."""
+    script = script or skill_script(name)
     env = dict(os.environ, **dotenv_vars(), FTC_PIPELINE_DIR=str(pl.dir), FINETUNER_DIR=os.environ.get("FINETUNER_DIR", str(REPO)),
                PYTHONPATH=os.pathsep.join([str(REPO), os.environ.get("PYTHONPATH", "")]).rstrip(os.pathsep))
     cmd = [skill_python(), str(script), *[str(a) for a in args], "--format", "json"]
@@ -206,12 +211,12 @@ def run_datagen(pl: Pipeline, spec_path: Path, run_id: str, loop: int, note: str
 
 
 def decontaminate(pl: Pipeline, data_run_id: str, bench_dir: str):
-    """Re-run DataGen's M4 against the whole benchmark (dev + held-out), in case DataGen finished first."""
+    """Re-run DataGen's M4 against the whole benchmark (dev + held-out + probe), in case DataGen finished first."""
     try:
         fmt = skill_script("finetune-data-gen").parents[1] / "lib" / "format_data.py"
         allb = pl.dir / "bench_all.jsonl"
         with open(allb, "w") as f:
-            for split in ("dev", "heldout"):
+            for split in ("dev", "heldout", "probe"):
                 p = Path(bench_dir).expanduser() / f"{split}.jsonl"
                 if p.exists():
                     f.write(p.read_text())
@@ -222,6 +227,44 @@ def decontaminate(pl: Pipeline, data_run_id: str, bench_dir: str):
         pl.emit("data", "log", f"Contamination check vs benchmark: {c if c is not None else '?'} training examples removed")
     except Exception as e:
         pl.emit("data", "log", f"Contamination re-check skipped: {e}")
+
+
+def run_probe(pl: Pipeline, bench_dir: str, report_path: Path, train_paths: list, loop: int, result: dict):
+    """Probe set (background thread): new verified questions for the weak categories of one dev eval.
+    Never raises: a probe problem is logged and the pipeline carries on without it."""
+    try:
+        script = skill_script("finetune-bench-gen").parents[1] / "lib" / "probe_gen.py"
+        if not script.exists():
+            result["skipped"] = f"{script} not found"
+            return
+        pl.emit("bench", "log", f"Probe set: writing new questions for loop {loop}'s weak categories "
+                                "(report only; dev and held-out unchanged)", loop=loop)
+        args = ["--bench-dir", bench_dir, "--eval-report-path", report_path]
+        for t in train_paths:
+            args += ["--train-path", t]
+        rc, out, err = call(pl, "finetune-bench-gen", args, timeout=PROBE_TIMEOUT_S, script=script)
+        out = out or {}
+        if rc == 0 and out.get("state") == "done":
+            # No pl.link() here: it rewrites pipeline.json, and from this thread it could undo the main thread's
+            # set_loop() (lost update). Events and the wall only append, so they are safe; the main thread links it.
+            result.update(out)
+            cats = ", ".join(out.get("categories") or [])
+            pl.emit("bench", "log", f"Probe set ready: {out.get('n_items')} items for {cats}", loop=loop)
+            Wall.for_pipeline(pl).post("BenchAgent", f"Probe set ready: {out.get('n_items')} new questions on the weak "
+                                       f"categories ({cats}). Scored at the end, original vs final model; it never "
+                                       "changes the loop.", to="ReportAgent", kind="finding",
+                                       loop=loop, refs={"probe_path": out.get("probe_path")})
+        else:
+            result["skipped"] = out.get("reason") or out.get("error") or err or f"exit {rc}"
+            pl.emit("bench", "log", f"Probe set skipped: {result['skipped']}", loop=loop)
+    except Exception as e:
+        result["skipped"] = str(e)
+        pl.emit("bench", "log", f"Probe set skipped: {e}", loop=loop)
+
+
+def wait_thread(t):
+    while t is not None and t.is_alive():
+        sleep(2)
 
 
 def train(pl: Pipeline, train_path: str, retrain_cfg: str = None) -> dict:
@@ -270,7 +313,7 @@ def evaluate(pl: Pipeline, adapter: str, bench_dir: str, split: str, loop: int, 
             pl.progress("eval", loop=loop, split=split, phase=out.get("stage") or "starting", unit="stage")
         sleep(POLL_EVAL_S)
     conv = convert_report(json.loads(rp.read_text()), pl, loop, split, job_id, adapter)
-    name = "eval_report.json" if split == "dev" else "heldout_report.json"
+    name = {"dev": "eval_report.json", "probe": "probe_report.json"}.get(split, "heldout_report.json")
     dest = pl.write_json(f"loops/{loop}/eval/{name}", conv)
     pl.progress("eval", loop=loop, state="done", split=split)
     t = conv["systems"].get("tuned", {}).get("score")
@@ -354,6 +397,7 @@ def run(pl: Pipeline, max_loops_cap: int, skip_general: bool):
     wall.react(bp, "EvalAgent", "👍")
 
     retrain_cfg, best = None, None
+    probe, probe_t = {}, None
     while True:
         loop = pl.current_loop()
         write_runner_state(pl, step=f"loop {loop}: training", loop=loop)
@@ -366,6 +410,9 @@ def run(pl: Pipeline, max_loops_cap: int, skip_general: bool):
 
         write_runner_state(pl, step=f"loop {loop}: evaluating")
         rp = evaluate(pl, adapter, bench_dir, "dev", loop, job, skip_general=skip_general)
+        if probe_t is None and os.environ.get("FTC_PROBE", "1") != "0":
+            probe_t = threading.Thread(target=run_probe, args=(pl, bench_dir, rp, [train_path], loop, probe), daemon=True)
+            probe_t.start()
 
         write_runner_state(pl, step=f"loop {loop}: deciding")
         rc, dec, err = call(pl, "finetune-decide", ["--eval-report-path", rp, "--spec", spec_path], timeout=120)
@@ -405,6 +452,7 @@ def run(pl: Pipeline, max_loops_cap: int, skip_general: bool):
             wall.reply(req, "DataAgent", f"On it: regenerating data for loop {nxt}.", loop=nxt)
             data_run_id = f"{pl.id}-l{nxt}"
             train_path = run_datagen(pl, sp, data_run_id, nxt, note=" (more data for weak categories)")
+            wait_thread(probe_t)   # so the new training data is also checked against the probe set
             decontaminate(pl, data_run_id, bench_dir)
         else:
             raise RunnerError(f"unknown Evaluator action {action!r}")
@@ -422,10 +470,28 @@ def run(pl: Pipeline, max_loops_cap: int, skip_general: bool):
         f = pl.loop_dir(n) / "eval" / "eval_report.json"
         if f.exists():
             history.append({"loop": n, "tuned": json.loads(f.read_text())["systems"].get("tuned", {}).get("score")})
+    probe_res = None
+    if probe_t is not None:
+        write_runner_state(pl, step="probe evaluation")
+        wait_thread(probe_t)
+        if probe.get("state") == "done":
+            pl.link("probe_path", probe.get("probe_path") or str(Path(bench_dir) / "probe.jsonl"), stage="bench")
+            try:
+                pl.emit("output", "log", f"Scoring the probe set ({probe.get('n_items')} weak-spot questions): "
+                                         "original model vs final adapter", loop=loop)
+                evaluate(pl, best_adapter, bench_dir, "probe", loop, best_job, skip_general=True)
+                pr = json.loads((pl.loop_dir(loop) / "eval" / "probe_report.json").read_text())
+                probe_res = {"n_items": probe.get("n_items"), "categories": probe.get("categories"),
+                             "from_loop": probe.get("from_loop"), "systems": pr.get("systems"),
+                             "by_category": pr.get("by_category"), "gain_vs_base_few_shot": pr.get("gain_vs_base_few_shot")}
+            except RunnerError as e:
+                if STOP.is_set():
+                    raise
+                pl.emit("output", "log", f"Probe evaluation skipped: {e}", loop=loop)
     final = {"pipeline_id": pl.id, "best_loop": best_loop, "train_job_id": best_job, "adapter_path": best_adapter,
              "hub_url": None, "infinite_post_url": None,
              "heldout": {"systems": ho.get("systems"), "by_source": ho.get("by_source")},
-             "dev_history": history, "model_card_path": None, "created_at": now_iso()}
+             "dev_history": history, "probe": probe_res, "model_card_path": None, "created_at": now_iso()}
     pl.write_json("final/final_report.json", final)
     t = (ho.get("systems") or {}).get("tuned", {}).get("score")
     pl.emit("output", "done", f"Done. Held-out score of the tuned model: {t if t is None else round(t, 3)}", loop=loop)

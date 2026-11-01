@@ -57,8 +57,8 @@ Pass it if it is correct and complete per the reference or, when the reference d
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--adapter-path", required=True, help="adapter/ dir written by train_sft.py")
-    p.add_argument("--bench-dir", required=True, help="holds dev.jsonl and heldout.jsonl")
-    p.add_argument("--split", choices=["dev", "heldout"], default="dev")
+    p.add_argument("--bench-dir", required=True, help="holds dev.jsonl and heldout.jsonl (and probe.jsonl)")
+    p.add_argument("--split", choices=["dev", "heldout", "probe"], default="dev")
     p.add_argument("--out-dir", help="default: <run dir>/eval_<split>")
     p.add_argument("--model", help="base model; default: the one in the run's metrics.json")
     # Judge = OpenAI Sol: a different family from the Claude-written benchmark and the Claude teacher, so
