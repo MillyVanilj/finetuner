@@ -1,5 +1,22 @@
 # Hosting the dashboard
 
+## The website: GitHub Pages → https://millyvanilj.github.io/finetuner/
+
+GitHub Pages hosts plain files only, so the site is a snapshot of the pipelines (no live updates, no buttons).
+To update it, run this **on the Brev box** (where the pipelines are), e.g. after a run finishes:
+
+```bash
+cd ~/finetuner && git pull
+bash scripts/deploy_pages.sh                       # every pipeline
+bash scripts/deploy_pages.sh --pipeline <id> ...   # or only the good ones
+```
+
+It exports the pipelines (`scripts/export_static.py`) and commits them to the `gh-pages` branch; the site
+updates about a minute later. `main` is never touched. Do it once more before Brev is stopped Sunday night:
+the site stays up after the cloud accounts are gone. (It currently shows a simulated demo run.)
+
+The rest of this page is for sharing the *live* dashboard instead.
+
 The dashboard (`dashboard/server.py` + `dashboard/index.html`) has **no login**. Anyone who can reach it can
 press ▶ Start (GPU time), draft specs and run simulations (API money), push to Hugging Face, and post on the wall.
 So never put the normal server on a public URL. There are two safe ways to share it:

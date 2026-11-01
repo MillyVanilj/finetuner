@@ -36,7 +36,7 @@ def key(name: str, p: str = "", path: str = "") -> str:
 
 
 def write(out: Path, k: str, obj) -> None:
-    text = SECRET.sub("[redacted]", json.dumps(obj, default=str))
+    text = SECRET.sub("[redacted]", json.dumps(obj, default=str)).replace(str(Path.home()), "~")
     (out / "data" / k).write_text(text)
 
 
