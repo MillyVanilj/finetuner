@@ -113,7 +113,7 @@ def _run(name, args, env):
 
 def test_status_exits_1_until_done():
     with tempfile.TemporaryDirectory() as d:
-        runs = Path(d) / "runs"; job = runs / "j1"; job.mkdir(parents=True)
+        runs = Path(d).resolve() / "runs"; job = runs / "j1"; job.mkdir(parents=True)
         (job / "run.json").write_text(json.dumps({"config": {"model": "m"}, "dataset": {"sha256": "x"}}))
         (job / "train.pid").write_text(str(os.getpid()))          # "alive"
         (job / "status.json").write_text(json.dumps({"state": "running", "step": 3, "max_steps": 10, "updated_at": 0}))
@@ -128,7 +128,7 @@ def test_status_exits_1_until_done():
 def test_eval_finds_the_benchmark_without_bench_dir():
     sys.path.insert(0, str(SKILLS / "finetune-eval" / "scripts"))
     with tempfile.TemporaryDirectory() as d:
-        d = Path(d)
+        d = Path(d).resolve()   # macOS: /var is a symlink to /private/var
         pdir = d / "pipelines" / "p1"; (pdir / "bench").mkdir(parents=True)
         (pdir / "pipeline.json").write_text(json.dumps({"links": {"bench_dir": str(pdir / "bench")}}))
         job = d / "runs" / "j1"; (job / "adapter").mkdir(parents=True)
@@ -174,7 +174,7 @@ def test_eval_hands_decide_a_spec_io_report():
     sys.path.insert(0, str(ROOT))
     from ftc.pipeline import Pipeline
     with tempfile.TemporaryDirectory() as d:
-        d = Path(d)
+        d = Path(d).resolve()   # macOS: /var is a symlink to /private/var
         spec = json.loads((ROOT / "examples/specs/chem_qa.json").read_text())
         pl = Pipeline.create(spec, root=d / "pipelines")
         pl.link("bench_dir", str(pl.dir / "bench"))
