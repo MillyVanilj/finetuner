@@ -20,6 +20,9 @@ looks different, trust the repo and **update this file** (whoever merges or open
   writes the benchmark), #13 BenchGen JSON-fence parsing fix, #17 BenchGen says why a job stopped + dashboard
   clears a stale "Failed" after a reset.
 - **Open:**
+  - **#24** five fixes before the final runs (training-speed estimate, best adapter vs forgetting, DataGen
+    stall/dedupe, real format check). Before final runs: move smoke runs out of `runs/` on Brev, set
+    `FTC_MAX_JOB_HOURS` if jobs may exceed 1 h. Still open: the forgetting check fires on noise at small M8 sizes.
   - **#18** eval job survives `install.sh` (an eval crashed on Brev because `install.sh` re-copied the skill
     folder it was running in); `install.sh` now skips unchanged skills. Small, tested, merge it.
   - **#12 (+ #14 merged into it)** *agent mode*: the pipeline run by real ScienceClaw agents handing work
