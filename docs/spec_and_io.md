@@ -363,3 +363,11 @@ python3 -m ftc.cli agents stop
   act on this pipeline's artifacts, not on old, never-used hand-offs in the shared index (an old `train_path` would
   start a GPU job). `agents start` refuses unscoped agents; `install.sh` keeps the scope when it re-copies profiles.
   A new kickoff moves running agents to the new pipeline at their next beat.
+- Finding the pipeline without `$FTC_PIPELINE_DIR`: the daemons don't set it, and DataGen's run folder
+  (`~/.scienceclaw/finetune/runs/<run_id>/`, which holds `train_path`) is outside the pipeline. So DataGen writes a
+  `.pipeline` pointer file there, and `Pipeline.from_any()` follows it: finetune-submit, handed only `train_path`,
+  records `pipeline_dir` in `run.json`, and everything after it (eval report under `loops/<n>/`, loop count, final
+  report) stays in the pipeline. Without it the chain still ran but outside the pipeline folder.
+- DataGen names a run for a spec inside a pipeline `<pipeline_id>-l<loop>` (like `run_pipeline.py`), not after the
+  file: every pipeline's spec is `task_spec.json`, so the old default (`task_spec`) made a second pipeline reuse the
+  first one's training data. It also links `data_run_dir` and posts the data stage's start/done events.

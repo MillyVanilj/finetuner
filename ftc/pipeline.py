@@ -60,6 +60,11 @@ def _atomic_write(path: Path, data: dict):
     os.replace(tmp, path)   # readers never see a half-written file
 
 
+# A run folder outside the pipeline (DataGen's ~/.scienceclaw/finetune/runs/<run_id>/) that belongs to one holds this
+# file with the pipeline's path. Agent mode needs it: finetune-submit only gets DataGen's train_path, so without it
+# the training run (and everything after it: eval report, loop count, final report) would not know its pipeline.
+POINTER = ".pipeline"
+
 class Pipeline:
     def __init__(self, path):
         self.dir = Path(path).expanduser().resolve() if path else None
@@ -81,7 +86,8 @@ class Pipeline:
 
     @classmethod
     def from_any(cls, path=None) -> "Pipeline":
-        """Accepts a pipeline dir, a path inside it (e.g. its task_spec.json), or None.
+        """Accepts a pipeline dir, a path inside it (e.g. its task_spec.json), a path inside a run folder that
+        belongs to a pipeline (it holds a POINTER file, e.g. DataGen's run with train.jsonl), or None.
         Falls back to $FTC_PIPELINE_DIR. Returns a no-op Pipeline if nothing matches."""
         cands = [path, os.environ.get("FTC_PIPELINE_DIR")]
         for c in cands:
@@ -92,6 +98,12 @@ class Pipeline:
             for d in [p, *p.parents][:5]:
                 if (d / "pipeline.json").exists():
                     return cls(d)
+                try:
+                    q = Path((d / POINTER).read_text().strip()).expanduser()
+                except OSError:
+                    continue
+                if (q / "pipeline.json").exists():
+                    return cls(q)
         return cls(None)
 
     @property
