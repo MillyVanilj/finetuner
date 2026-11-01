@@ -20,10 +20,18 @@ looks different, trust the repo and **update this file** (whoever merges or open
   writes the benchmark), #13 BenchGen JSON-fence parsing fix, #17 BenchGen says why a job stopped + dashboard
   clears a stale "Failed" after a reset.
 - **Open:**
-  - **BenchGen skips refused categories** (branch `worktree-bench-skip-refused`): when Claude declines to write
+  - **Grading + data quality** (#26, merged), from the weak NL→SQL run (tuned 48 % vs few-shot
+    49 %): the HF importer had taken only the schema column, so all 30 "real" held-out items had no question
+    (even Claude scored 10 %), and the Evaluator then asked for more "typical cases", which made loop 2 worse.
+    Fixes: importer joins several input columns and gates rows (code checks + Claude review) before import;
+    SQL answers are graded by running them (`finetune_common/sqlexec.py`) instead of the judge; the judge grades
+    the final answer only (no penalty for missing or extra reasoning); misleading inputs are always 25 % of
+    training data and benchmark. Re-scored by execution, that run's 70 valid items give tuned 71 %, few-shot
+    70 %, zero-shot 71 %, teacher 97 %: tuning still adds nothing there, so the next lever is the data.
+  - **BenchGen skips refused categories** (#25, merged): when Claude declines to write
     prompts for a category (e.g. "user asks for harmful content that should be declined"), BenchGen now drops
     that cell and moves its items to the others, instead of failing the whole benchmark after 3 restarts.
-    API errors still stop it as before. Tested, merge it.
+    API errors still stop it as before.
   - **#18** eval job survives `install.sh` (an eval crashed on Brev because `install.sh` re-copied the skill
     folder it was running in); `install.sh` now skips unchanged skills. Small, tested, merge it.
   - **#12 (+ #14 merged into it)** *agent mode*: the pipeline run by real ScienceClaw agents handing work
