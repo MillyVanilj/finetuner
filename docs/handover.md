@@ -1,8 +1,11 @@
-# Handover for new agents (written 2026-11-01, hackathon day 2)
+# Handover: where the project stands (updated 2026-11-01, hackathon day 2, after #11 merged)
 
-Read this first, then `CLAUDE.md`, `docs/wireframe_v0.2.md`, `docs/decisions.md`, `docs/spec_and_io.md`.
+This is the **current-state** doc: what is merged, what is open, what to do next, and the pitch. The other
+docs hold the stable parts: design in `docs/wireframe_v0.2.md`, model choices and reasoning in
+`docs/decisions.md`, file formats in `docs/spec_and_io.md`, ScienceClaw internals in
+`docs/wireframe_v0.2_review.md`, working rules in `CLAUDE.md`.
 Everything below was checked against the code or GitHub when written; if a PR number or file named here
-looks different, trust the repo and update this file.
+looks different, trust the repo and **update this file** (whoever merges or opens a PR keeps section 1 current).
 
 ---
 
@@ -12,15 +15,17 @@ looks different, trust the repo and update this file.
   spec, generate + verify training data, write a frozen benchmark, LoRA-tune Qwen3-4B on a Brev GPU, evaluate
   tuned vs base, decide whether to iterate, and report. Built on ScienceClaw (MIT LAMM) skills.
 - **Works today (main):** every stage as a ScienceClaw skill, `scripts/run_pipeline.py` running them in order
-  (dashboard ▶ Start), live dashboard, poster wall, task-spec form (M1).
-- **Waiting for review (the important open work):**
-  - **#11** model split: Gemini writes data, **OpenAI Sol** verifies data and judges, Claude Opus writes the
-    benchmark. Ready apart from a real-API smoke test.
+  (dashboard ▶ Start), live dashboard, poster wall, task-spec form (M1), and the model split (section 4).
+- **Merged today:** #11 model split (Gemini writes data, **OpenAI Sol** verifies data and judges, Claude Opus
+  writes the benchmark), #13 BenchGen JSON-fence parsing fix, #17 BenchGen says why a job stopped + dashboard
+  clears a stale "Failed" after a reset.
+- **Open:**
+  - **#18** eval job survives `install.sh` (an eval crashed on Brev because `install.sh` re-copied the skill
+    folder it was running in); `install.sh` now skips unchanged skills. Small, tested, merge it.
   - **#12 (+ #14 merged into it)** *agent mode*: the pipeline run by real ScienceClaw agents handing work
     along via the ArtifactReactor. Tested with the real reactor (GPU/API skills stubbed). **The base for agent mode.**
-  - **#15** a second agent-mode implementation (written before we noticed #12). Mostly duplicates #12;
-    port its 3 unique pieces into #12 and close it (section 5).
-  - **#13** BenchGen JSON-fence parsing fix. Small, merge it.
+  - **#15** a second agent-mode implementation (written in a Claude session before we noticed #12). Mostly
+    duplicates #12; port its 3 unique pieces into #12 and close it (section 5.3).
 - **Deadline:** hackathon ends Sunday Nov 1 night; Google Cloud accounts are deleted then. Push everything.
 
 ## 2. Team, repos, machines
@@ -34,7 +39,7 @@ looks different, trust the repo and update this file.
 - GPU: NVIDIA Brev instance (shared Linux box, repo at `~/finetuner`). `bash scripts/setup_brev.sh` once,
   `bash scripts/install.sh` after every `git pull`. Stop the instance when idle.
 - Keys live in `~/finetuner/.env` (gitignored; template `.env.example`): `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`,
-  `OPENAI_API_KEY` (needed once #11 merges), HF token.
+  `OPENAI_API_KEY` (needed since #11: Sol verifies data and judges), HF token.
 
 ## 3. Pipeline and code map
 
@@ -54,7 +59,7 @@ looks different, trust the repo and update this file.
 Skill contract: one JSON object on stdout; **exit non-zero while not finished** (so the reactor retries);
 output keys must only match the intended next skill's `--flags` (`tests/test_handoffs.py` enforces this).
 
-## 4. Model split (decision, implemented in #11)
+## 4. Model split (on main since #11; reasoning in `docs/decisions.md`)
 
 | Role | Model | Override |
 |---|---|---|
@@ -66,14 +71,14 @@ output keys must only match the intended next skill's `--flags` (`tests/test_han
 | Student | `Qwen/Qwen3-4B-Instruct-2507` | spec `models.student` |
 
 Why: no model family checks its own work (self-preference bias). Gemini's data is checked by Sol; Opus's
-benchmark is graded by Sol. #11 also includes Owen's "Opus only for BenchGen" credit-saving commit.
+benchmark is graded by Sol. Full reasoning: `docs/decisions.md` ("Update Nov 1 (Sol)").
 
-**Before relying on #11:** confirm the Sol model id with one real call. `gpt-6.1-sol` came from third-party
+**Still to do:** confirm the Sol model id with one real call. `gpt-6.1-sol` came from third-party
 listings (The Rundown, AWS Bedrock); OpenRouter lists `gpt-6-sol`. If wrong, set `FINETUNE_OPENAI_MODEL` and
 `FINETUNE_JUDGE_MODEL`. Without `OPENAI_API_KEY`, DataGen falls back to Gemini verification with a warning in
 its result; the eval stops at start-up (before GPU work) with a clear message.
 
-Open question for #11: DataGen caps each LLM call at **18 s** (`finetune_common/llm.py:23`, `LLM_CALL_CAP_S`)
+Open question (still true on main): DataGen caps each LLM call at **18 s** (`finetune_common/llm.py:23`, `LLM_CALL_CAP_S`)
 because ScienceClaw's executor kills skills at 30 s (DataGen budgets 27 s). Sol is a reasoning model and may
 need longer per verification batch. `run_pipeline.py:189` gives DataGen 600 s but never sets
 `DATAGEN_TIME_BUDGET`, so the dashboard runner also works in 27 s slices. Proposed fix (not done): set
@@ -119,7 +124,7 @@ need longer per verification batch. `run_pipeline.py:189` gives DataGen 600 s bu
 - `tests/test_agent_mode.py` drives the full chain through ScienceClaw's real `ArtifactReactor`.
   Not yet run with real daemons on Brev.
 
-### 5.3 #15 (Jiachen's session): what to port into #12, then close #15
+### 5.3 #15: what to port into #12, then close #15
 
 #15 adds `agents/` (6 profiles), `scripts/run_agents.py`, a `finish()` refactor of `run_pipeline.py`
 (superseded by #12's `ftc/report.py`) and one skill fix. Unique, worth porting:
@@ -127,7 +132,8 @@ need longer per verification batch. `run_pipeline.py:189` gives DataGen 600 s bu
    `--require-done`, finetune-status exits 0 while training is still running, so the `train_job_id` artifact
    is consumed on the first poll and the chain stalls. The reactor can't add the flag. **Check whether #12
    already solves this** (its chain test runs each step once with stand-ins, which may hide it). If not, port
-   this or make submit's output carry `"require_done": true`.
+   this or make submit's output carry `"require_done": true`. (Checked after #11 merged: #12 adds a
+   `--require-done` flag but finetune-submit never outputs `require_done`, so the reactor won't pass it. Still open.)
 2. **Daemon-free runner**: `run_agents.py` runs one OS process per agent, each calling
    `ArtifactReactor(name, profile, ArtifactStore(name)).react(limit=1)` in a loop. No Infinite api_key, none of
    the heartbeat's extra work (Infinite sync, LLM calls), ~5 s cycle. Useful as a fallback if the daemons
@@ -167,21 +173,23 @@ clamped, reasons saved in `run.json`). For other GPU work check yourself: GPU id
   and run with `SCIENCECLAW_DIR=<that folder>`. Then everything passes except `test_integration.py`
   (needs `core.skill_registry`) and agent-mode tests (skipped).
 - Known failures on main: `skills/finetune-bench-gen/tests/test_link.py` has 2 failing checks
-  ("benchmark frozen -> DataGen finishes…", "feedback run id…"). Not caused by #11/#15; may be fixed by #14.
+  ("benchmark frozen -> DataGen finishes…", "feedback run id…"). Still failing after #11/#13/#17 merged;
+  probably fixed by #14 (inside #12).
 - macOS has no `timeout` command.
-- Offline DataGen tests set `DATAGEN_VERIFY_BACKEND=same` (after #11) so they don't call OpenAI.
+- Offline DataGen tests set `DATAGEN_VERIFY_BACKEND=same` so they don't call OpenAI.
 
 ## 8. Suggested next steps (in order)
 
-1. **Merge #13** (tiny, fixes a live BenchGen stall).
-2. **Merge #11** after one real call confirms the Sol model id; tell the team to add `OPENAI_API_KEY` and
-   re-run `setup_brev.sh`. Then decide on the 18 s / 27 s DataGen budget fix (section 4).
-3. **Review + merge #12.** Resolve `docs/decisions.md` overlap with #11. Run the real chain on Brev once
-   (chem_qa example, `--skip-general`, 1 loop).
-4. **Port #15's three pieces into #12** (section 5.3), then close #15.
-5. **Make the collective visible for the demo** (section 9.3): dashboard hand-off/lineage view, one Infinite
+1. ~~Merge #13~~ and ~~#11~~: done. Tell the team to add `OPENAI_API_KEY` to `.env` on Brev, `git pull`,
+   `bash scripts/install.sh`. Confirm the Sol model id with one real call (section 4).
+2. **Merge #18** (eval crash on Brev when `install.sh` ran mid-eval).
+3. Decide on the 18 s / 27 s DataGen budget fix (section 4).
+4. **Review + merge #12.** It predates #11: merge `main` into it and resolve `docs/decisions.md` overlap.
+   Run the real chain on Brev once (chem_qa example, `--skip-general`, 1 loop).
+5. **Port #15's three pieces into #12** (section 5.3), then close #15.
+6. **Make the collective visible for the demo** (section 9.3): dashboard hand-off/lineage view, one Infinite
    post with the artifact DAG, per-agent comments.
-6. Push often; save adapters to HF Hub (`--push-to-hub`) before accounts are deleted.
+7. Push often; save adapters to HF Hub (`--push-to-hub`) before accounts are deleted.
 
 ## 9. Pitch: telling the "decentralised agent collective" story (honestly)
 
