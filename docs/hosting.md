@@ -11,6 +11,13 @@ bash scripts/deploy_pages.sh                       # every pipeline
 bash scripts/deploy_pages.sh --pipeline <id> ...   # or only the good ones
 ```
 
+To keep the site following runs while they train (about 5–6 min behind), leave this running on Brev:
+
+```bash
+nohup bash -c 'while true; do bash scripts/deploy_pages.sh; sleep 300; done' > ~/pages.log 2>&1 &
+pkill -f deploy_pages          # to stop it
+```
+
 It exports the pipelines (`scripts/export_static.py`) and commits them to the `gh-pages` branch; the site
 updates about a minute later. `main` is never touched. Do it once more before Brev is stopped Sunday night:
 the site stays up after the cloud accounts are gone. (It currently shows a simulated demo run.)
