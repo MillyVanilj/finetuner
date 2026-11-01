@@ -98,7 +98,8 @@ our-project/
 ## Rules for the agent (you)
 
 - Never commit secrets. API keys go in `.env` (gitignored). Also ignore `*_config.json` and `.scienceclaw/`.
-- Ask before deleting files, force-pushing, or launching GPU jobs.
+- Ask before deleting files or force-pushing.
+- GPU jobs don't need a human OK, but start training only through `skills/finetune-submit`: its automatic pre-flight checks (GPU free, not a duplicate, job ≤ 1 h, rate limit, pipeline GPU budget, disk) decide, and the reasons are saved in `run.json`. For other GPU work (eval, ad-hoc tests), apply the same checks yourself: GPU idle, short, within budget. Stop the Brev instance when idle.
 - Don't edit the ScienceClaw source unless asked; put our code in our repo.
 - Push work to GitHub often. Cloud accounts are deleted after the event.
 - Explain changes simply and briefly. Teammates are not all experienced programmers.

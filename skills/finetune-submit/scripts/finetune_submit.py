@@ -15,6 +15,8 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
+import statistics
 import subprocess
 import sys
 import time
@@ -107,6 +109,109 @@ def running_job(runs: Path):
     return None
 
 
+# ---------- pre-flight: decide automatically whether to spend GPU time ----------
+MAX_JOB_HOURS = float(os.environ.get("FTC_MAX_JOB_HOURS", 1.0))     # one job may not run longer than this
+MAX_JOBS_PER_HOUR = int(os.environ.get("FTC_MAX_JOBS_PER_HOUR", 6))  # runaway-agent guard
+MIN_FREE_DISK_GB = 5.0
+GPU_MEM_BUSY_MIB = 2000          # more than this in use = another program (e.g. eval/vLLM) holds the GPU
+DEFAULT_S_PER_EXAMPLE_EPOCH = 0.5
+STARTUP_S = 30                   # model load etc.
+
+
+def past_runs(runs: Path):
+    """Every real (non-dry-run) job: its run.json + current state + runtime so far."""
+    out = []
+    for rj in runs.glob("*/run.json"):
+        try:
+            run = json.loads(rj.read_text())
+            if run.get("dry_run"):
+                continue
+            st_file = rj.parent / "status.json"
+            st = json.loads(st_file.read_text()) if st_file.exists() else {}
+            created = rj.stat().st_mtime
+            runtime = st.get("runtime_s") if st.get("state") == "done" else \
+                ((st_file.stat().st_mtime if st_file.exists() else time.time()) - created)
+            out.append({"run": run, "state": st.get("state", "starting"), "created": created,
+                        "runtime_s": float(runtime or 0), "n_train": st.get("n_train")})
+        except Exception:  # noqa: BLE001
+            continue
+    return out
+
+
+def gpu_memory_used_mib():
+    try:
+        r = subprocess.run(["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
+                           capture_output=True, text=True, timeout=10)
+        return max(int(x) for x in r.stdout.split()) if r.returncode == 0 and r.stdout.strip() else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def preflight(cfg, n_examples, data_sha, runs: Path, force: bool):
+    """Checks before launching. Returns (decision, reason, checks, extra).
+    decision: launch | reuse (identical job already done) | wait (retry next cycle) | refuse."""
+    checks, history = [], past_runs(runs)
+
+    def check(name, ok, detail, soft=False):
+        checks.append({"check": name, "ok": bool(ok), "detail": detail, "overridden": bool(soft and force and not ok)})
+        return ok or (soft and force)
+
+    # 1. identical job already finished -> reuse it instead of training again
+    if not force:
+        for h in history:
+            r = h["run"]
+            if h["state"] == "done" and r.get("dataset", {}).get("sha256") == data_sha and r.get("config") == cfg \
+                    and Path(r["outputs"]["adapter"]).exists():
+                check("not a duplicate", False, f"identical data + settings already trained: {r['job_id']}")
+                return "reuse", f"identical job {r['job_id']} already done", checks, {"reuse_job_id": r["job_id"]}
+    check("not a duplicate", True, "no identical finished job")
+
+    # 2. physical resources (never overridable)
+    used = gpu_memory_used_mib()
+    if used is None:
+        check("GPU memory free", True, "nvidia-smi unavailable: check skipped")
+    elif not check("GPU memory free", used < GPU_MEM_BUSY_MIB, f"{used} MiB in use (limit {GPU_MEM_BUSY_MIB})"):
+        return "wait", f"GPU memory in use by another program ({used} MiB)", checks, {}
+    free_gb = shutil.disk_usage(runs).free / 1e9
+    if not check("disk space", free_gb >= MIN_FREE_DISK_GB, f"{free_gb:.0f} GB free (need {MIN_FREE_DISK_GB:.0f})"):
+        return "refuse", f"only {free_gb:.1f} GB disk free", checks, {}
+
+    # 3. how long will it take? (learned from earlier finished jobs)
+    speeds = [h["runtime_s"] / (h["n_train"] * float(h["run"]["config"]["epochs"])) for h in history
+              if h["state"] == "done" and h["n_train"] and h["runtime_s"] > 0]
+    spe = statistics.median(speeds) if speeds else DEFAULT_S_PER_EXAMPLE_EPOCH
+    est_s = STARTUP_S + n_examples * float(cfg["epochs"]) * spe
+    extra = {"estimate_s": round(est_s), "s_per_example_epoch": round(spe, 3), "speed_from_n_runs": len(speeds)}
+    if not check("job length", est_s <= MAX_JOB_HOURS * 3600,
+                 f"estimated {est_s / 60:.0f} min (cap {MAX_JOB_HOURS:g} h, {len(speeds)} past runs used)", soft=True):
+        return "refuse", f"estimated {est_s / 3600:.1f} h > {MAX_JOB_HOURS:g} h cap", checks, extra
+
+    # 4. runaway guard: jobs started in the last hour (all pipelines)
+    recent = sum(1 for h in history if time.time() - h["created"] < 3600)
+    if not check("rate limit", recent < MAX_JOBS_PER_HOUR, f"{recent} jobs in the last hour (cap {MAX_JOBS_PER_HOUR})",
+                 soft=True):
+        return "wait", f"{recent} jobs started in the last hour", checks, extra
+
+    # 5. pipeline budget + job count (from the task spec, if this job belongs to a pipeline)
+    if PL:
+        spec = PL.spec()
+        budget_h = float((spec.get("budget") or {}).get("max_gpu_hours") or 2.0)
+        max_jobs = 2 * int((spec.get("targets") or {}).get("max_loops") or 3)
+        mine = [h for h in history if h["run"].get("pipeline_dir") == str(PL.dir)]
+        used_h = sum(h["runtime_s"] for h in mine) / 3600
+        extra.update(pipeline_gpu_hours_used=round(used_h, 3), pipeline_gpu_hours_budget=budget_h)
+        if not check("pipeline GPU budget", used_h + est_s / 3600 <= budget_h,
+                     f"{used_h:.2f} h used + {est_s / 3600:.2f} h estimated vs {budget_h:g} h budget", soft=True):
+            return "refuse", f"GPU budget: {used_h:.2f} h used, this job needs ~{est_s / 3600:.2f} h, budget {budget_h:g} h", \
+                checks, extra
+        if not check("pipeline job count", len(mine) < max_jobs, f"{len(mine)} jobs so far (cap {max_jobs} = 2 x max_loops)",
+                     soft=True):
+            return "refuse", f"pipeline already ran {len(mine)} training jobs", checks, extra
+    overridden = [c["check"] for c in checks if c["overridden"]]
+    reason = f"--force overrode: {', '.join(overridden)}" if overridden else "all checks passed"
+    return "launch", reason, checks, extra
+
+
 def git_commit(root: Path):
     try:
         return subprocess.run(["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
@@ -127,6 +232,8 @@ def main():
     p.add_argument("--epochs", type=float)
     p.add_argument("--push-to-hub", help="HF repo id, e.g. user/run-001 (needs HF_TOKEN)")
     p.add_argument("--dry-run", action="store_true", help="Validate + write run.json, don't launch")
+    p.add_argument("--force", action="store_true",
+                   help="Skip the soft pre-flight limits (duplicate, job length, rate, budget). GPU-busy and disk checks still apply")
     p.add_argument("--pipeline-dir", help="Pipeline folder for dashboard events (else $FTC_PIPELINE_DIR)")
     p.add_argument("--format", default="json")  # ScienceClaw may pass this; we always print JSON
     args, unknown = p.parse_known_args()  # ignore extras like --query that ScienceClaw passes
@@ -163,6 +270,27 @@ def main():
         if busy:
             fail(f"GPU busy: job {busy} is still training; will retry next cycle", busy_job_id=busy)
 
+    runs.mkdir(parents=True, exist_ok=True)
+    decision, reason, checks, pf_extra = preflight(cfg, n_examples, data_sha, runs, args.force)
+    preflight_record = {"decision": decision, "reason": reason, "checks": checks, **pf_extra}
+    log(f"pre-flight: {decision} ({reason})")
+    if decision == "reuse":
+        reused = pf_extra["reuse_job_id"]
+        if PL:
+            PL.link("train_job_id", reused, stage="train", append=True)
+            PL.emit("train", "log", f"Skipped training: identical job {reused} already done (reused)", train_job_id=reused)
+        print(json.dumps({"status": "reused", "train_job_id": reused, "train_run_dir": str(runs / reused),
+                          "preflight": preflight_record,
+                          "summary": f"Identical data + settings were already trained in job {reused}; reusing it."}))
+        return
+    if decision in ("wait", "refuse") and not args.dry_run:
+        if PL:
+            PL.emit("train", "log" if decision == "wait" else "failed", f"Pre-flight {decision}: {reason}")
+        print(json.dumps({"status": "error", "error": f"pre-flight {decision}: {reason}", "retry": decision == "wait",
+                          "preflight": preflight_record,
+                          "summary": f"Not training ({decision}): {reason}"}))
+        sys.exit(1)
+
     job_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
     run_dir = runs / job_id
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -187,6 +315,7 @@ def main():
                     "hub_repo": args.push_to_hub},
         "dry_run": args.dry_run,
         "pipeline_dir": str(PL.dir) if PL else None,
+        "preflight": preflight_record,
     }
     (run_dir / "run.json").write_text(json.dumps(run_record, indent=2))
 
@@ -209,8 +338,10 @@ def main():
         "config": cfg,
         "dataset_sha256": data_sha,
         "n_examples": n_examples,
+        "preflight": preflight_record,
         "summary": f"{'Validated' if args.dry_run else 'Submitted'} LoRA job {job_id}: {cfg['model']} on "
-                   f"{n_examples} examples (r={cfg['rank']}, lr={cfg['lr']}, epochs={cfg['epochs']}).",
+                   f"{n_examples} examples (r={cfg['rank']}, lr={cfg['lr']}, epochs={cfg['epochs']}); "
+                   f"pre-flight: {decision}, est. {pf_extra.get('estimate_s', '?')} s.",
     }))
 
 
