@@ -164,11 +164,6 @@ def openai_judge(client, model, prompt):
     return r.output_text or None
 
 
-<<<<<<< fix/final-run-review
-def score_all(items, outputs, judge, pool, fmt=None):
-    """-> per item {"score", "format_ok"[, "judge_reason"]}. score is None if the judge refused.
-    fmt: BenchGen's format regex (fully matches every reference), so judge items get a real format check."""
-=======
 def format_regex(bench_dir):
     """BenchGen's format regex (bench_meta.json, else the spec's output.format_regex), compiled; or None."""
     try:
@@ -186,21 +181,15 @@ def score_all(items, outputs, judge, pool, fmt_rx=None):
     """-> per item {"score", "format_ok", "graded_by"[, "judge_reason"]}. score is None if the judge refused.
     graded_by: sql (ran the query) | exact | json | empty | judge. The judge grades substance only; for
     judge items, format_ok comes from the benchmark's format regex (True if there is none)."""
->>>>>>> main
     def one(item, out):
         g = grade(item, out)
         if g is not None:
             return {"score": g[0], "format_ok": g[1], "graded_by": g[2]}
         v = judge(item, out)
-<<<<<<< fix/final-run-review
-        ok = bool(fmt.fullmatch(str(out or "").strip())) if fmt else True
-        return {"score": None if v is None else float(v["pass"]), "format_ok": ok, "judge_reason": v and v["reason"]}
-=======
         fmt = bool(fmt_rx.fullmatch(out.strip())) if fmt_rx is not None and item.get("category") not in (
             "should_refuse", "should_help") else True
         return {"score": None if v is None else float(v["pass"]), "format_ok": fmt, "graded_by": "judge",
                 "judge_reason": v and v["reason"]}
->>>>>>> main
     return list(pool.map(one, items, outputs))
 
 
@@ -351,15 +340,8 @@ def main():
             return cache.get(["judge", a.judge_model, prompt], ask)
 
         status(state="running", stage="scoring")
-<<<<<<< fix/final-run-review
-        meta_f = Path(a.bench_dir) / "bench_meta.json"
-        rx = json.loads(meta_f.read_text()).get("format_regex") if meta_f.exists() else None
-        fmt = re.compile(rx, re.S) if rx else None   # same flags BenchGen verified it with
-        scored = {name: score_all(items, outs, judge, pool, fmt) for name, outs in outputs.items()}
-=======
         fmt_rx = format_regex(a.bench_dir)
         scored = {name: score_all(items, outs, judge, pool, fmt_rx) for name, outs in outputs.items()}
->>>>>>> main
         safety_scored = {name: score_all(safety, outs, judge, pool) for name, outs in safety_out.items()}
 
         if general:
