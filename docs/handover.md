@@ -1,4 +1,4 @@
-# Handover: where the project stands (updated 2026-11-01, hackathon day 2, after #20 / #27 / #28 / #29 merged)
+# Handover: where the project stands (updated 2026-11-01, hackathon day 2, after #20 / #27 / #28 / #29 / #31 merged)
 
 This is the **current-state** doc: what is merged, what is open, what to do next, and the pitch. The other
 docs hold the stable parts: design in `docs/wireframe_v0.2.md`, model choices and reasoning in
@@ -21,6 +21,11 @@ looks different, trust the repo and **update this file** (whoever merges or open
   clears a stale "Failed" after a reset.
 - **Open PRs:** none. #15 (second agent-mode version) was closed unmerged; #18 was superseded by #19.
 - **Also merged today** (notes still useful):
+  - **#31** smaller M8 (general skills): MMLU 1/subject (57) + GSM8K 60 + IFEval 60 ≈ 177 questions per model
+    instead of 785, so eval is ~15–20 min faster per loop. Forgetting now needs a drop past `max_general_drop`
+    **and** at least 4 answers' worth on that test (≈7 points at 60 questions), so 2 lucky flips no longer
+    trigger a retrain. Same rule in finetune-decide, the dashboard verdict and the final report. On Brev:
+    `git pull && bash scripts/install.sh` (base scores are recomputed once at the new size).
   - **#28** DataGen: OpenAI Sol writes the training data, Claude Sonnet checks it. **#29** the final judge (M7)
     is Claude Sonnet, not Sol (so the judge is not the family that wrote the training data).
   - **#20** probe set: after loop 1, ~30 new questions on the weakest categories; at the end the original
@@ -31,7 +36,7 @@ looks different, trust the repo and **update this file** (whoever merges or open
     Brev. The normal server has no login: never expose it. Export the real run before stopping Brev.
   - **#24** (merged) five fixes before the final runs (training-speed estimate, best adapter vs forgetting, DataGen
     stall/dedupe, real format check). Before final runs: move smoke runs out of `runs/` on Brev, set
-    `FTC_MAX_JOB_HOURS` if jobs may exceed 1 h. Still open: the forgetting check fires on noise at small M8 sizes.
+    `FTC_MAX_JOB_HOURS` if jobs may exceed 1 h. The forgetting check firing on noise at small M8 sizes is fixed by #31.
   - **Grading + data quality** (#26, merged), from the weak NL→SQL run (tuned 48 % vs few-shot
     49 %): the HF importer had taken only the schema column, so all 30 "real" held-out items had no question
     (even Claude scored 10 %), and the Evaluator then asked for more "typical cases", which made loop 2 worse.
