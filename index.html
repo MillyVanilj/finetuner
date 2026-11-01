@@ -1189,12 +1189,23 @@ function pOutput() {
   const f = S.final;
   if (!f) return {html: `<p class="muted">${esc(S.stages.output.msg || "When the loop stops, the held-out set is scored once, the Result card appears at the top, and the adapter and model card are published.")}</p>`};
   const v = f.verdict || {}, ho = f.heldout?.systems || {};
+  const pr = f.probe, ps = pr?.systems || {};
   return {html: `<div class="callout ${v.status === "improved" ? "stop" : "warn"}" style="margin-bottom:12px"><b>${esc(v.headline || "")}</b>
       <div class="muted" style="font-size:12px;margin-top:4px">The full report is the <a href="#" id="toResult">Result card</a> at the top of the page.</div></div>
     <div class="tiles"><div class="tile"><div class="v">${fmtPct(ho.tuned?.score)}</div><div class="l">held-out, tuned</div></div>
       <div class="tile"><div class="v">${fmtPct(ho[v.baseline || "base_fewshot"]?.score)}</div><div class="l">held-out, ${v.baseline === "base_zeroshot" ? "zero-shot" : "few-shot"}</div></div>
       <div class="tile"><div class="v">${fmtPct(ho.teacher?.score)}</div><div class="l">held-out, teacher</div></div></div>
-    ${publishBlock(f)}`, after: () => { $("toResult")?.addEventListener("click", e => { e.preventDefault(); $("resultCard").scrollIntoView({behavior: "smooth"}); }); bindPublish(); }};
+    ${pr ? `<h4>Weak-spot probe: original vs final model</h4>
+    <p class="muted" style="font-size:12px">${pr.n_items} new questions written after loop ${pr.from_loop ?? 1} for its weakest categories (${esc((pr.categories || []).join(", "))}). Report only: the loop never used them.</p>
+    <div class="tiles"><div class="tile"><div class="v">${fmtPct(ps.base_zeroshot?.score)}</div><div class="l">probe, original model</div></div>
+      <div class="tile"><div class="v">${fmtPct(ps.base_fewshot?.score)}</div><div class="l">probe, original few-shot</div></div>
+      <div class="tile"><div class="v">${fmtPct(ps.tuned?.score)}</div><div class="l">probe, final tuned</div></div></div>
+    <div class="two"><div><div id="pBars"></div></div><div><div id="pCat"></div></div></div>` : ""}
+    ${publishBlock(f)}`, after: () => { $("toResult")?.addEventListener("click", e => { e.preventDefault(); $("resultCard").scrollIntoView({behavior: "smooth"}); }); bindPublish();
+      if (pr) {
+        barCI($("pBars"), SYSTEMS.map(s => ({name: s.name, short: s.short, color: s.color, score: ps[s.key]?.score, ci: ps[s.key]?.ci95})), {aria: "Probe scores"});
+        hbars($("pCat"), (pr.by_category || []).map(c => ({label: c.category, values: [{name: "Original few-shot", color: "--s2", v: c.base_fewshot}, {name: "Final tuned", color: "--s1", v: c.tuned}]})), {pct: true, max: 1, aria: "Probe by category"});
+      } }};
 }
 
 // ---------------- top bar actions ----------------
