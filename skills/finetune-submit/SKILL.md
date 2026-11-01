@@ -11,7 +11,7 @@ ScienceClaw agent despite the 30–45 s skill time limit.
 
 What it does, in order:
 1. **Checks the data.** Every line must be `{"messages": [...]}` with a user message and a final assistant message, and there must be ≥10 examples. Bad data → error, no GPU time used.
-2. **Picks the settings.** Defaults (Qwen3-4B-Instruct-2507, LoRA r=16, α=32, lr 2e-4, 2 epochs), then overrides from the Evaluator's `--retrain-config-path`, then explicit flags.
+2. **Picks the settings.** Defaults (Qwen3-4B-Instruct-2507, LoRA r=16, α=32, lr 2e-4, 2 epochs), then the task spec's choices (`models.student` on every run; `training` on the first run only), then overrides from the Evaluator's `--retrain-config-path`, then explicit flags.
 3. **Pre-flight checks decide automatically (no human needed)** whether and how to spend GPU time:
    - **clamp**: if the estimated length is over the time allowed (1 h per job, or what's left of the pipeline's `budget.max_gpu_hours`), it lowers `epochs` (even below 1) so the job fits, then launches. The original request is kept as `requested_config`.
    - **wait** (exit 1, retried next cycle): another training job is alive, another program holds > 2 GB of GPU memory, or ≥ 6 jobs started in the last hour.

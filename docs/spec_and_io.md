@@ -49,6 +49,9 @@ python3 -m ftc.spec path/to/spec.json             # {"ok", "errors", "warnings"}
 python3 -m ftc.spec path/to/spec_v1.json --upgrade
 ```
 From Python (stdlib only): `from ftc.spec import load_spec` (returns the upgraded spec, raises on errors).
+For input from people or an LLM, use `check_spec(raw)` → `(spec, errors, warnings)`: it never raises, so a
+malformed spec comes back as errors. Fields marked **not read yet** below are kept in the spec, and
+validation warns when one is changed from its default, so nobody expects it to take effect.
 
 | Field | Req. | Default | Read by | Meaning |
 |---|---|---|---|---|
@@ -65,24 +68,24 @@ From Python (stdlib only): `from ftc.spec import load_spec` (returns the upgrade
 | `output.json_schema` | if json | `null` | format check, field F1 | JSON Schema of the reply |
 | `output.labels` | if label | `null` | scorer | Allowed answers |
 | `output.format_regex` | | `null` | format check | e.g. `^ANSWER: .+\nWHY: .+$` |
-| `coverage.topics`, `coverage.difficulty` | | `[]`, easy/medium/hard | M2, M5 | Diversity grid |
+| `coverage.topics`, `coverage.difficulty` | | `[]`, easy/medium/hard | **not read yet** (planned: M2, M5) | Diversity grid |
 | `seed_examples` | | `[]` | BenchGen (held-out), M2 (few-shot) | `[{"input", "output", "source": "user"\|"real", "source_ref"}]`, the user's real examples |
 | `scoring.method` | | from output.type | Eval | `exact_match` · `label_accuracy` · `numeric` · `json_field_f1` · `regex` · `judge` |
 | `scoring.format_check` | | from output.type | Eval | `none` · `regex` · `json_schema` |
 | `scoring.json_fields` | | schema properties | Eval | Fields scored by `json_field_f1` |
-| `scoring.numeric_tolerance` | | `0.01` | Eval | Relative tolerance for `numeric` |
-| `scoring.judge_rubric` | if judge | `null` | judge | Grade against the reference with this rubric |
-| `scoring.pass_threshold` | | `0.5` | Eval | Item counts as passed if its score ≥ this |
+| `scoring.numeric_tolerance` | | `0.01` | **not read yet** (planned: Eval) | Relative tolerance for `numeric` |
+| `scoring.judge_rubric` | if judge | `null` | **not read yet** (planned: judge) | Grade against the reference with this rubric |
+| `scoring.pass_threshold` | | `0.5` | **not read yet** (planned: Eval) | Item counts as passed if its score ≥ this |
 | `benchmark.n_dev` / `n_heldout` | | 200 / 100 | BenchGen | Dev = scored every loop. Held-out = scored once, at the end |
 | `benchmark.seed_examples_to_heldout` | | `true` | BenchGen | Put the user's real examples in held-out |
-| `benchmark.real_sources` | | `[]` | BenchGen | e.g. `["pubmed", "huggingface:<id>"]` |
+| `benchmark.real_sources` | | `[]` | **not read yet** (planned: BenchGen) | e.g. `["pubmed", "huggingface:<id>"]` |
 | `targets.target_score` | | `null` | Evaluator | Stop when tuned dev score ≥ this |
 | `targets.min_gain` | | `0.02` | Evaluator | Stop when gain over the last loop is smaller |
 | `targets.max_loops` | | `3` | Evaluator | |
 | `targets.max_general_drop` | | `0.03` | Evaluator | M8 drop above this = forgetting |
-| `budget.max_api_usd` / `max_gpu_hours` | | 20 / 2 | all | Hard stop |
-| `models.student/generator/verifier/bench_writer/judge` | | see `ftc/spec.py` | all | Different families per role (decisions.md, Decision 3). Validation warns if generator = judge |
-| `training` | | `{}` | Trainer (loop 1) | LoRA overrides: rank, alpha, lr, epochs… |
+| `budget.max_api_usd` / `max_gpu_hours` | | 20 / 2 | `max_gpu_hours`: Trainer pre-flight, Evaluator. `max_api_usd`: **not read yet** | Hard stop |
+| `models.student/generator/verifier/bench_writer/judge` | | see `ftc/spec.py` | `student`: Trainer (every run). `judge`: Eval, if it is a `claude-…` model and `$FINETUNE_JUDGE_MODEL` isn't set (that machine-wide override wins). The other three: **not read yet** (DataGen and BenchGen pick their model from env/flags) | Different families per role (decisions.md, Decision 3). Validation warns if generator = judge |
+| `training` | | `{}` | Trainer (first run; later runs take the Evaluator's retrain config) | LoRA overrides: model, rank, alpha, lr, epochs, batch_size, grad_accum, max_length, seed (other keys are an error) |
 | `m1` | | | UI | `{goal, answers, source}`: how M1 produced the spec |
 
 Examples: `examples/specs/chem_qa.json` (Owen's chemistry task, upgraded) and `examples/specs/pubmed_extract.json`

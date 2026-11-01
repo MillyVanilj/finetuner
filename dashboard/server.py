@@ -37,7 +37,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from ftc import m1                                          # noqa: E402
 from ftc.pipeline import Pipeline, list_pipelines, pipelines_root   # noqa: E402
-from ftc.spec import upgrade, validate_spec                 # noqa: E402
+from ftc.spec import check_spec                             # noqa: E402
 from ftc.state import snapshot                              # noqa: E402
 from ftc.wall import Wall, summary as wall_summary          # noqa: E402
 
@@ -130,6 +130,15 @@ class Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         return json.loads(self.rfile.read(n) or b"{}") if n else {}
 
+    def _same_origin(self) -> bool:
+        """Refuse cross-site POSTs: otherwise any web page open in the browser could post to this port and
+        start paid M1 calls or GPU runs. Browsers send Origin on cross-site POSTs, and a JSON Content-Type
+        needs a CORS preflight, which this server never grants. Scripts (curl) send no Origin."""
+        origin = self.headers.get("Origin")
+        if origin and urlparse(origin).netloc != self.headers.get("Host"):
+            return False
+        return (self.headers.get("Content-Type") or "").split(";")[0].strip().lower() == "application/json"
+
     def _static(self, name, ctype):
         p = STATIC / name
         if not p.exists():
@@ -215,6 +224,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         u = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
+        if not self._same_origin():
+            return self._json({"error": "refused: cross-site request, or not Content-Type: application/json"}, 403)
         try:
             body = self._body()
             if u.path == "/api/wall":
@@ -228,19 +239,20 @@ class Handler(BaseHTTPRequestHandler):
                 pid = self._wall(q).react(body.get("post", ""), (body.get("author") or "Human")[:40], body.get("emoji") or "👍")
                 return self._json({"ok": bool(pid), "id": pid})
             if u.path == "/api/spec/validate":
-                spec = upgrade(body.get("spec") or {})
-                errors, warnings = validate_spec(spec)
+                spec, errors, warnings = check_spec(body.get("spec") or {})
                 return self._json({"spec": spec, "errors": errors, "warnings": warnings})
             if u.path == "/api/spec/draft":
                 if not (body.get("goal") or "").strip():
                     return self._json({"error": "goal is required"}, 400)
                 return self._json(m1.draft(body["goal"], body.get("spec"), body.get("answers")))
             if u.path == "/api/pipelines":
-                spec = upgrade(body.get("spec") or {})
-                errors, warnings = validate_spec(spec)
+                spec, errors, warnings = check_spec(body.get("spec") or {})
                 if errors:
                     return self._json({"errors": errors, "warnings": warnings}, 400)
-                pl = Pipeline.create(spec)
+                try:
+                    pl = Pipeline.create(spec)
+                except FileExistsError:
+                    return self._json({"errors": ["a pipeline for this spec was created this second; try again"]}, 409)
                 return self._json({"pipeline_id": pl.id, "dir": str(pl.dir), "warnings": warnings,
                                    "commands": next_commands(pl.dir, spec)})
             if u.path.startswith("/api/pipelines/") and u.path.endswith("/bench/retry"):
@@ -259,11 +271,16 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/simulate":
                 args = [sys.executable, str(ROOT / "scripts" / "simulate_pipeline.py"),
                         "--speed", str(float(body.get("speed") or 1))]
+                if float(body.get("speed") or 1) <= 0:
+                    return self._json({"errors": ["speed must be > 0"]}, 400)
                 if body.get("spec"):
+                    spec, errors, _ = check_spec(body["spec"])
+                    if errors:
+                        return self._json({"errors": errors}, 400)
                     tmp = pipelines_root() / ".sim_specs"
                     tmp.mkdir(parents=True, exist_ok=True)
                     sp = tmp / f"spec-{int(time.time())}.json"
-                    sp.write_text(json.dumps(body["spec"]))
+                    sp.write_text(json.dumps(spec))
                     args += ["--spec", str(sp)]
                 before = {p["pipeline_id"] for p in list_pipelines()}
                 proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -278,10 +295,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "not found"}, 404)
         except FileNotFoundError as e:
             return self._json({"error": f"no such pipeline: {e}"}, 404)
-        except ValueError as e:
-            return self._json({"error": str(e)}, 400)
+        except ValueError as e:   # includes a body that isn't JSON
+            return self._json({"error": str(e), "errors": [str(e)]}, 400)
         except Exception as e:
-            return self._json({"error": repr(e)}, 500)
+            return self._json({"error": repr(e), "errors": [repr(e)]}, 500)
 
 
 def main():

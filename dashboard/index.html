@@ -621,7 +621,7 @@ async function startRun() {
 }
 async function stopRun() {
   if (!confirm("Stop the runner? It stops after its current step. Jobs it already launched (training, eval) keep running on the GPU.")) return;
-  const r = await fetch(`/api/pipelines/${encodeURIComponent(PID)}/stop`, {method: "POST"}).then(r => r.json());
+  const r = await fetch(`/api/pipelines/${encodeURIComponent(PID)}/stop`, {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"}).then(r => r.json());
   if (!r.ok) alert(r.error || "Could not stop");
 }
 function lastDoneStage() { let last = "spec"; STAGES.forEach(s => { if (S.stages[s.key].status === "done") last = s.key; }); return last; }
@@ -838,7 +838,7 @@ function pBench() {
     <div class="sec"><h4>Sample dev items</h4><div id="bSample" class="muted">${sp.dev ? "Loading…" : "Available when the benchmark is ready."}</div></div>`;
   return {html, after: () => {
     $("benchRetry")?.addEventListener("click", async () => {
-      const r = await fetch(`/api/pipelines/${encodeURIComponent(PID)}/bench/retry`, {method: "POST"}).then(r => r.json());
+      const r = await fetch(`/api/pipelines/${encodeURIComponent(PID)}/bench/retry`, {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"}).then(r => r.json());
       alert(r.ok ? "BenchGen reset. Fix the cause in the log first, then press ▶ Restart pipeline." : r.error); });
     hbars($("bCat"), Object.entries(sp.dev?.by_category || {}).map(([k, v]) => ({label: k, values: [{name: "items", color: "--s1", v}]})), {aria: "Dev items per category", empty: "–"});
     hbars($("bSrc"), Object.entries(sp.heldout?.by_source || {}).map(([k, v]) => ({label: k, values: [{name: "items", color: "--s1", v}]})), {aria: "Held-out items by source", empty: "–"});
@@ -973,7 +973,7 @@ async function simulate(spec) {
   $("simBtn").disabled = true;
   const r = await fetch("/api/simulate", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({spec, speed: 1.5})}).then(r => r.json());
   $("simBtn").disabled = false;
-  if (r.pipeline_id) { closeOv(); loadPipelines(r.pipeline_id); } else alert(r.error || "Could not start the simulator");
+  if (r.pipeline_id) { closeOv(); loadPipelines(r.pipeline_id); } else alert((r.errors || []).join("\n") || r.error || "Could not start the simulator");
 }
 setInterval(async () => { // pick up pipelines created elsewhere
   const r = await fetch("/api/pipelines").then(r => r.json()).catch(() => null); if (!r) return;
@@ -998,7 +998,8 @@ $("draftBtn").addEventListener("click", async () => {
   const r = await fetch("/api/spec/draft", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({goal})}).then(r => r.json()).catch(e => ({error: String(e)}));
   $("draftBtn").disabled = false;
   if (r.error) { $("draftMsg").textContent = r.error; return; }
-  $("draftMsg").textContent = r.source === "llm" ? "Drafted by Claude. Answer the questions or edit the spec below." : "No LLM available on the server: template spec. Fill it in below.";
+  $("draftMsg").textContent = r.source === "llm" ? "Drafted by Claude. Answer the questions or edit the spec below."
+    : r.llm_error ? r.llm_error + ". Fill it in below." : "No LLM available on the server: template spec. Fill it in below.";
   SPEC = r.spec; QUESTIONS = r.questions || []; fillForm(SPEC); renderQuestions(); showMsgs(r); step(QUESTIONS.length ? 2 : 3);
 });
 function renderQuestions() {
@@ -1009,7 +1010,9 @@ function renderQuestions() {
   $("answerBtn").addEventListener("click", async () => {
     const answers = {}; document.querySelectorAll("[data-q]").forEach(t => { const q = QUESTIONS.find(x => x.id === t.dataset.q); answers[t.dataset.q] = `${q.question} -> ${t.value.trim() || q.default || ""}`; });
     $("answerBtn").disabled = true; $("answerBtn").textContent = "Updating spec…";
-    const r = await fetch("/api/spec/draft", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({goal: $("goal").value, spec: readForm(), answers})}).then(r => r.json());
+    const r = await fetch("/api/spec/draft", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({goal: $("goal").value, spec: readForm(), answers})}).then(r => r.json()).catch(e => ({error: String(e)}));
+    if (r.error || !r.spec) { $("answerBtn").disabled = false; $("answerBtn").textContent = "Apply answers"; showMsgs({errors: [r.error || "M1 returned no spec"]}); return; }
+    if (r.llm_error) $("draftMsg").textContent = r.llm_error + "; your answers were applied where possible.";
     SPEC = r.spec; QUESTIONS = r.questions || []; fillForm(SPEC); renderQuestions(); showMsgs(r); step(3);
   });
 }
@@ -1024,7 +1027,8 @@ function fillForm(sp) {
   set("f_crit", (sp.success_criteria || []).join("\n")); set("f_edge", (sp.edge_cases || []).join("\n")); set("f_topics", (sp.coverage?.topics || []).join(", "));
   set("f_method", sp.scoring?.method || "judge"); set("f_target", sp.targets?.target_score); set("f_rubric", sp.scoring?.judge_rubric); set("f_loops", sp.targets?.max_loops ?? 3);
   set("f_n", sp.n_examples); set("f_ndev", sp.benchmark?.n_dev ?? 200); set("f_nho", sp.benchmark?.n_heldout ?? 100); set("f_usd", sp.budget?.max_api_usd ?? 20); set("f_gpu", sp.budget?.max_gpu_hours ?? 2);
-  set("f_seeds", (sp.seed_examples || []).map(e => `${e.input.replace(/\n/g, "\\n")} => ${e.output.replace(/\n/g, "\\n")}`).join("\n"));
+  const txt = v => (typeof v === "string" ? v : JSON.stringify(v ?? "")).replace(/\n/g, "\\n");   // a JSON task's output may be an object
+  set("f_seeds", (Array.isArray(sp.seed_examples) ? sp.seed_examples : []).map(e => `${txt(e?.input)} => ${txt(e?.output)}`).join("\n"));
   const m = sp.models || {}; set("f_m_student", m.student); set("f_m_generator", m.generator); set("f_m_verifier", m.verifier); set("f_m_bench", m.bench_writer); set("f_m_judge", m.judge);
   toggleFields();
 }
@@ -1032,7 +1036,7 @@ function readForm() {
   const sp = JSON.parse(JSON.stringify(SPEC || {})), num = id => $(id).value === "" ? null : Number($(id).value);
   sp.title = $("f_title").value.trim(); sp.domain = $("f_domain").value.trim(); sp.task = $("f_task").value.trim(); sp.io_format = $("f_io").value.trim();
   sp.input = Object.assign({}, sp.input, {description: $("f_in_desc").value.trim()});
-  let schema = null; const raw = $("f_schema").value.trim(); if (raw) { try { schema = JSON.parse(raw); } catch { schema = sp.output?.json_schema ?? null; } }
+  let schema = null; const raw = $("f_schema").value.trim(); if (raw) { try { schema = JSON.parse(raw); } catch { schema = raw; } }   // invalid JSON stays as text: validation reports it
   sp.output = Object.assign({}, sp.output, {type: $("f_out_type").value, format_regex: $("f_regex").value.trim() || null, json_schema: $("f_out_type").value === "json" ? schema : null,
     labels: $("f_out_type").value === "label" ? csv($("f_labels").value) : null});
   sp.success_criteria = lines($("f_crit").value); sp.edge_cases = lines($("f_edge").value);
@@ -1052,14 +1056,16 @@ let vT = null;
 $("specForm").addEventListener("input", () => { toggleFields(); clearTimeout(vT); vT = setTimeout(validate, 350); });
 $("specForm").addEventListener("change", () => { toggleFields(); validate(); });
 async function validate() {
-  const r = await fetch("/api/spec/validate", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({spec: readForm()})}).then(r => r.json());
-  showMsgs(r); $("specPreview").textContent = JSON.stringify(r.spec, null, 2); $("createBtn").disabled = !!(r.errors && r.errors.length); return r;
+  const r = await fetch("/api/spec/validate", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({spec: readForm()})}).then(r => r.json()).catch(e => ({error: String(e)}));
+  if (r.error && !r.errors) r.errors = [r.error];   // a server error is never "valid"
+  showMsgs(r); $("specPreview").textContent = JSON.stringify(r.spec ?? {}, null, 2); $("createBtn").disabled = !!(r.errors && r.errors.length); return r;
 }
 function showMsgs(r) { $("valMsgs").innerHTML = (r.errors || []).map(e => `<div class="err">${esc(e)}</div>`).join("") + (r.warnings || []).map(w => `<div class="wrn">${esc(w)}</div>`).join("") || `<div style="color:var(--good-text)">✓ Spec is valid.</div>`; }
 $("createBtn").addEventListener("click", async () => {
+  $("createBtn").disabled = true;   // one click = one pipeline
   const v = await validate(); if (v.errors?.length) return;
-  const r = await fetch("/api/pipelines", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({spec: v.spec})}).then(r => r.json());
-  if (r.errors) { showMsgs(r); return; }
+  const r = await fetch("/api/pipelines", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({spec: v.spec})}).then(r => r.json()).catch(e => ({errors: [String(e)]}));
+  if (r.errors || r.error || !r.commands) { showMsgs({errors: r.errors || [r.error || "could not create the pipeline"]}); $("createBtn").disabled = false; return; }
   step(4);
   $("createOut").innerHTML = `<div class="callout stop"><b>Pipeline created:</b> <span class="mono">${esc(r.dir)}</span></div><h4>Next</h4>` +
     r.commands.map(c => `<div style="margin-bottom:8px"><div class="muted" style="font-size:12px">${esc(c.label)}</div><pre class="cmd">${esc(c.cmd)}</pre></div>`).join("") +
