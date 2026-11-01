@@ -410,25 +410,45 @@ def run(pl: Pipeline, max_loops_cap: int, skip_general: bool):
             raise RunnerError(f"unknown Evaluator action {action!r}")
         pl.emit("bench", "done", "Benchmark unchanged (fixed across loops)", loop=nxt)
 
-    # Output: held-out once
+    # Output: held-out once, then the ReportAgent's files (ftc/report.py) and publishing (ftc/publish.py)
     best_adapter, best_job, best_loop = best
     loop = pl.current_loop()
     pl.emit("output", "start", f"Scoring the held-out split once (adapter from loop {best_loop})", loop=loop)
     write_runner_state(pl, step="held-out evaluation")
-    evaluate(pl, best_adapter, bench_dir, "heldout", loop, best_job, skip_general=True)
-    ho = json.loads((pl.loop_dir(loop) / "eval" / "heldout_report.json").read_text())
-    history = []
-    for n in range(1, loop + 1):
-        f = pl.loop_dir(n) / "eval" / "eval_report.json"
-        if f.exists():
-            history.append({"loop": n, "tuned": json.loads(f.read_text())["systems"].get("tuned", {}).get("score")})
-    final = {"pipeline_id": pl.id, "best_loop": best_loop, "train_job_id": best_job, "adapter_path": best_adapter,
-             "hub_url": None, "infinite_post_url": None,
-             "heldout": {"systems": ho.get("systems"), "by_source": ho.get("by_source")},
-             "dev_history": history, "model_card_path": None, "created_at": now_iso()}
-    pl.write_json("final/final_report.json", final)
-    t = (ho.get("systems") or {}).get("tuned", {}).get("score")
-    pl.emit("output", "done", f"Done. Held-out score of the tuned model: {t if t is None else round(t, 3)}", loop=loop)
+    # M8 (forgetting check) on held-out only if the best loop's dev run skipped it: same adapter, same numbers
+    best_dev = pl.loop_dir(best_loop) / "eval" / "eval_report.json"
+    has_general = best_dev.exists() and bool(json.loads(best_dev.read_text()).get("general"))
+    evaluate(pl, best_adapter, bench_dir, "heldout", loop, best_job, skip_general=has_general)
+    finish(pl, best_loop, best_job, best_adapter, loop)
+
+
+def finish(pl: Pipeline, best_loop, best_job, best_adapter, loop, post_infinite=None):
+    """Write final_report.json + model card (ftc/report.py), then publish (ftc/publish.py). Publishing never
+    fails the pipeline: the adapter and the report are already on disk."""
+    from ftc.publish import env_with_dotenv, post_infinite as do_post, push_hub
+    from ftc.report import build_final
+    write_runner_state(pl, step="writing the final report")
+    final = build_final(pl.dir, best_loop=best_loop, best_job=best_job, best_adapter=best_adapter)
+    v = final["verdict"]
+    wall = Wall.for_pipeline(pl)
+    wall.post("ReportAgent", v["headline"] + (" " + " ".join(v["details"][:2]) if v["details"] else "")
+              + (f" Caveats: {len(v['warnings'])}, see the Result card." if v["warnings"] else ""),
+              kind="praise" if v["status"] == "improved" else "finding", loop=loop,
+              refs={"final_report": str(pl.dir / "final" / "final_report.json")})
+    env = env_with_dotenv()
+    if env.get("FTC_HF_PUSH", "1") != "0" and (env.get("HF_TOKEN") or env.get("HUGGING_FACE_HUB_TOKEN")):
+        write_runner_state(pl, step="uploading to Hugging Face")
+        r = push_hub(pl.dir)
+        log(pl, f"HF push: {json.dumps(r)[:300]}")
+    else:
+        pl.emit("output", "log", "Hugging Face push skipped (no HF_TOKEN, or FTC_HF_PUSH=0). Push later from the "
+                "Result card or: python3 -m ftc.publish <pipeline> --hub", loop=loop)
+    if post_infinite if post_infinite is not None else env.get("FTC_POST_INFINITE") == "1":
+        write_runner_state(pl, step="posting to Infinite")
+        r = do_post(pl.dir)
+        log(pl, f"Infinite post: {json.dumps(r)[:300]}")
+    t = (final["heldout"]["systems"].get("tuned") or {}).get("score")
+    pl.emit("output", "done", f"Done. {v['headline']}", loop=loop, held_out_tuned=t, verdict=v["status"])
 
 
 def main():

@@ -19,6 +19,7 @@ import json
 import math
 import os
 import random
+import re
 import sys
 import threading
 import time
@@ -26,6 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ftc.pipeline import Pipeline, now_iso      # noqa: E402
+from ftc.report import build_final              # noqa: E402
 from ftc.spec import load_spec                  # noqa: E402
 from ftc.wall import Wall                       # noqa: E402
 
@@ -58,8 +60,9 @@ def fake_pair(spec, focus, i):
         a = json.dumps({"drug": f"drug-{i}", "condition": "condition", "phase": "2",
                         "n_participants": R.randint(40, 900), "outcome": "Reduced symptoms vs placebo."})
     else:
-        u = f"[{focus}] Question #{i}: what is the pH of a {R.choice([0.1, 0.01, 0.001])} M HCl solution?"
-        a = f"ANSWER: {R.randint(1, 3)}.0\nWHY: HCl dissociates fully, so pH = -log[H+]."
+        c = R.choice([0.1, 0.01, 0.001])
+        u = f"[{focus}] Question #{i}: what is the pH of a {c} M HCl solution?"
+        a = f"ANSWER: {round(-math.log10(c)):.1f}\nWHY: HCl is a strong acid and dissociates fully, so pH = -log10({c}) = {round(-math.log10(c))}."
     return {"messages": [{"role": "user", "content": u}, {"role": "assistant", "content": a}]}
 
 
@@ -228,6 +231,46 @@ def ci(score, n):
     return [round(max(0, score - half), 3), round(min(1, score + half), 3)]
 
 
+def wrong_answer(spec, ref, system, i):
+    """A plausible wrong answer: the base model mostly breaks the format, the tuned one gets a value wrong."""
+    if spec["output"]["type"] == "json":
+        try:
+            d = json.loads(ref)
+        except Exception:
+            d = {}
+        if system.startswith("base") and i % 2 == 0:
+            return ("Sure! Here is the information from the abstract:\n- Drug: " + str(d.get("drug", "?"))
+                    + "\n- The trial included many participants and showed promising results.", "Not JSON: answered in prose.")
+        k = next(iter(d), "value")
+        d[k] = "not stated" if isinstance(d.get(k), str) else 0
+        return json.dumps(d), f"Wrong value for '{k}'."
+    if system.startswith("base") and i % 2 == 0:
+        return ("The pH of the solution would be approximately 1, since hydrochloric acid is a strong acid "
+                "that dissociates completely in water, releasing H+ ions.", "Does not follow the ANSWER/WHY format.")
+    m = re.search(r"ANSWER: ([0-9.]+)", ref)
+    v = float(m.group(1)) + 1 if m else 3.0
+    return (f"ANSWER: {v:.1f}\nWHY: HCl is a weak acid, so only part of it dissociates.",
+            f"Wrong value ({v:.1f}): HCl is a strong acid and dissociates fully.")
+
+
+def fake_answers(spec, items, true_scores):
+    """Per-item answers for every system (finetune-eval's outputs.jsonl rows). Items have a hidden difficulty,
+    so systems agree more often than chance, plus some noise, so a few items are 'broken' by tuning too."""
+    rows = []
+    sysmap = {"base_zeroshot": "base_zero_shot", "base_fewshot": "base_few_shot", "tuned": "tuned", "teacher": "teacher"}
+    diff = [R.random() for _ in items]
+    for s, score in true_scores.items():
+        for i, it in enumerate(items):
+            ok = diff[i] + R.uniform(-0.3, 0.3) < score
+            if ok:
+                out, why = it["reference"], "Matches the reference answer and the required format."
+            else:
+                out, why = wrong_answer(spec, it["reference"], s, i)
+            rows.append({"id": it["id"], "system": sysmap[s], "output": out, "score": float(ok), "format_ok": True,
+                         "judge_reason": why})
+    return rows
+
+
 def run_eval(pl: Pipeline, spec, loop, job_id, adapter, tuned_score, cat_scores, split="dev", general_drop=0.0):
     n = spec["benchmark"]["n_dev" if split == "dev" else "n_heldout"]
     ed = pl.loop_dir(loop) / "eval"
@@ -275,11 +318,43 @@ def run_eval(pl: Pipeline, spec, loop, job_id, adapter, tuned_score, cat_scores,
     tot = sum(f["n_fail"] for f in fails) or 1
     for f in fails:
         f["share"] = round(f["n_fail"] / tot, 3)
+    gain = None
+    if split == "heldout":
+        # Held-out: per-item answers like finetune-eval's outputs.jsonl (next to the adapter), and every number
+        # recomputed from them so the scores, the outcome counts and the side-by-side examples agree.
+        items = [json.loads(x) for x in (pl.dir / "bench" / "heldout.jsonl").read_text().splitlines() if x.strip()]
+        rows = fake_answers(spec, items, true_scores)
+        ed_raw = Path(adapter).parent / "eval_heldout"
+        append(ed_raw / "outputs.jsonl", rows)
+        sc = {s: [r["score"] for r in rows if r["system"] == m] for s, m in
+              {"base_zeroshot": "base_zero_shot", "base_fewshot": "base_few_shot", "tuned": "tuned", "teacher": "teacher"}.items()}
+        for s, v in sc.items():
+            m = sum(v) / len(v)
+            systems[s].update(score=round(m, 4), ci95=ci(m, len(v)), n=len(v))
+        d = [t - b for t, b in zip(sc["tuned"], sc["base_fewshot"])]
+        mean = sum(d) / len(d)
+        sd = math.sqrt(sum((x - mean) ** 2 for x in d) / max(1, len(d) - 1))
+        gain = {"mean": round(mean, 4), "ci95": [round(mean - 1.96 * sd / math.sqrt(len(d)), 4),
+                                                round(mean + 1.96 * sd / math.sqrt(len(d)), 4)], "n": len(d)}
+        idx = {it["id"]: it for it in items}
+
+        def group(field):
+            g = {}
+            for r in rows:
+                if r["system"] in ("tuned", "base_few_shot"):
+                    g.setdefault(idx[r["id"]].get(field) or "?", {}).setdefault(r["system"], []).append(r["score"])
+            return [{field: k, "n": len(v["tuned"]), "base_fewshot": round(sum(v["base_few_shot"]) / len(v["base_few_shot"]), 3),
+                     "tuned": round(sum(v["tuned"]) / len(v["tuned"]), 3)} for k, v in g.items()]
+        by_cat, by_src = group("category"), group("source")
+        wjson(ed_raw / "report.json", {"split": "heldout", "judge_model": spec["models"]["judge"],
+                                       "teacher_model": "claude-sonnet-5-5", "few_shot_k": 3, "n_items": len(items),
+                                       "bench_sha256": "sim" + "0" * 61, "runtime_s": round(240 + len(items) * 2.5)})
     target = spec["targets"]["target_score"]
     report = {"pipeline_id": pl.id, "loop": loop, "split": split, "n_items": n, "train_job_id": job_id,
               "adapter_path": adapter, "scoring": spec["scoring"]["method"], "systems": systems,
               "by_category": by_cat, "by_source": by_src, "general": general,
               "failure_categories": fails[:5],
+              "gain_vs_base_few_shot": gain,
               "verdict": {"beats_fewshot": systems["tuned"]["ci95"][0] > systems["base_fewshot"]["score"],
                           "meets_target": target is not None and systems["tuned"]["score"] >= target,
                           "forgetting": any(g["delta"] < -spec["targets"]["max_general_drop"] for g in general)},
@@ -388,26 +463,16 @@ def main():
     for who, e in (("DataAgent", "🎉"), ("TrainAgent", "🎉"), ("BenchAgent", "🙌")):
         w.react(st, who, e)
 
-    # output: held-out once, model card, final report
+    # output: held-out once, then the real ReportAgent code (ftc/report.py): verdict, examples, model card
     pl.emit("output", "start", "Scoring held-out set once, writing model card", loop=3)
     ho = run_eval(pl, spec, 3, job, res["adapter_path"], target + 0.02, {}, split="heldout")
-    pl.emit("output", "start", "Pushing adapter to Hugging Face Hub, posting to Infinite", loop=3)
-    nap(3)
-    final = {"pipeline_id": pl.id, "best_loop": 3, "train_job_id": job, "adapter_path": res["adapter_path"],
-             "hub_url": f"https://huggingface.co/example/{spec['id']}-lora", "infinite_post_url": None,
-             "heldout": {"systems": ho["systems"], "by_source": ho["by_source"]},
-             "dev_history": [{"loop": n, "tuned": json.loads((pl.loop_dir(n) / 'eval/eval_report.json').read_text())["systems"]["tuned"]["score"]}
-                             for n in (1, 2, 3)],
-             "model_card_path": str(pl.dir / "final" / "model_card.md"), "created_at": now_iso()}
-    (pl.dir / "final").mkdir(exist_ok=True)
-    (pl.dir / "final" / "model_card.md").write_text(
-        f"# {spec['title']} (LoRA on {spec['models']['student']})\n\nSIMULATED RUN: no real model was trained.\n")
-    wjson(pl.dir / "final" / "final_report.json", final)
-    w.post("ReportAgent", f"Published! Held-out (scored once): tuned {ho['systems']['tuned']['score']:.2f} vs base few-shot "
-           f"{ho['systems']['base_fewshot']['score']:.2f}. Adapter: {final['hub_url']}", kind="finding", loop=3,
+    nap(2)
+    final = build_final(pl.dir, best_loop=3, best_job=job, best_adapter=res["adapter_path"], extra={"simulated": True})
+    v = final["verdict"]
+    w.post("ReportAgent", v["headline"] + " (Simulated run: nothing was pushed to Hugging Face or posted to Infinite.)",
+           kind="praise" if v["status"] == "improved" else "finding", loop=3,
            refs={"final_report": str(pl.dir / 'final' / 'final_report.json')})
-    pl.emit("output", "done", f"Done. Held-out: tuned {ho['systems']['tuned']['score']:.2f} vs base few-shot "
-            f"{ho['systems']['base_fewshot']['score']:.2f}", loop=3)
+    pl.emit("output", "done", f"Done. {v['headline']}", loop=3)
     print(json.dumps({"pipeline_dir": str(pl.dir)}))
 
 
