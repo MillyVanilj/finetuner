@@ -188,6 +188,9 @@ def find_pipeline(*paths):
     except Exception:
         return None
     for p in [*paths, None]:
+        if p:  # walk all the way up ourselves: from_any on main only checks 2 levels (loops/<n>/eval/ is 3)
+            p = next((d for d in [Path(p).expanduser(), *Path(p).expanduser().parents]
+                      if (d / "pipeline.json").exists()), p)
         pl = Pipeline.from_any(p)
         if pl.active:
             return pl
