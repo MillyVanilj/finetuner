@@ -33,7 +33,9 @@ def parse_args():
     p.add_argument("--data", required=True, help="Training JSONL (messages format)")
     p.add_argument("--output-dir", required=True)
     p.add_argument("--model", default="Qwen/Qwen3-4B-Instruct-2507")
-    p.add_argument("--eval-frac", type=float, default=0.05, help="Held-out split for eval loss (NOT the benchmark)")
+    p.add_argument("--eval-frac", type=float, default=0.10, help="Held-out split for eval loss (NOT the benchmark)")
+    p.add_argument("--eval-min", type=int, default=20, help="Hold back at least this many (if the data allows)")
+    p.add_argument("--eval-max", type=int, default=200, help="Hold back at most this many")
     # LoRA
     p.add_argument("--rank", type=int, default=16)
     p.add_argument("--alpha", type=int, default=32)
@@ -56,6 +58,14 @@ def parse_args():
 def write_status(out: Path, **kw):
     kw["updated_at"] = time.time()
     (out / "status.json").write_text(json.dumps(kw, indent=2))
+
+
+def eval_count(n, frac, lo, hi):
+    """How many examples to hold back for eval loss: frac of the data, clamped to [lo, hi],
+    but never more than a quarter of a small dataset (so training keeps most of it)."""
+    if n < 8:
+        return 0
+    return max(1, min(round(n * frac) if n * frac >= lo else lo, hi, n // 4))
 
 
 def load_examples(path, no_thinking):
@@ -93,7 +103,7 @@ def main():
         random.seed(args.seed)
         rows = load_examples(args.data, args.no_thinking)
         random.shuffle(rows)
-        n_eval = max(1, int(len(rows) * args.eval_frac)) if len(rows) >= 20 else 0
+        n_eval = eval_count(len(rows), args.eval_frac, args.eval_min, args.eval_max)
         train_ds = Dataset.from_list(rows[n_eval:])
         eval_ds = Dataset.from_list(rows[:n_eval]) if n_eval else None
 
