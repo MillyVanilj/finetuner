@@ -79,7 +79,7 @@ Same-family models favour their own outputs (self-preference bias), so:
 
 A benchmark written by the same kind of model as the training data can just reward "learned the generator's style". Sources, in order (record which one was used):
 1. The user's own examples (asked for in M1).
-2. Hugging Face Hub search (`huggingface_hub.list_datasets(search=...)`) + an LLM relevance/license check.
+2. Hugging Face Hub search + an LLM relevance/license check. *Built:* `ftc/real_data.py`, run by M1 when the user gives no examples.
 3. Real *inputs* from science sources via ScienceClaw skills (PubMed, arXiv, UniProt, PubChem…), with LLM-written answers.
 4. Nothing found → synthetic only, and the report flags lower confidence.
 
@@ -100,7 +100,7 @@ Brev machine
 
 - **Decided: "side by side", with ScienceClaw unedited.** ScienceClaw is cloned separately (`~/scienceclaw`), not copied into this repo. Setup: `bash scripts/setup_brev.sh` (once per machine). After every `git pull`: `bash scripts/install.sh` (copies `skills/*` into ScienceClaw and `agents/<Name>/agent_profile.json` into `~/.scienceclaw/profiles/`). Agents hand work along by matching output keys to input flags, so no ScienceClaw code edits are needed.
 - ScienceClaw does **not** read `.env` itself. Load keys into the shell first: `set -a; source ~/finetuner/.env; set +a`.
-- An **agent** = a profile JSON + a ScienceClaw heartbeat process started with it (`--profile <Name> --interval 60`). There are 5 agents = 5 processes; they hand work along through the shared artifact file.
+- An **agent** = a profile JSON + a ScienceClaw heartbeat process started with it (`--profile <Name> --interval 60`). There are 7 agents = 7 processes (`agents/`, started with `python3 -m ftc.cli agents start`, see `docs/spec_and_io.md` §8); they hand work along through the shared artifact file.
 - Laptops are only for editing code and git. Stop the Brev machine when idle (billed hourly).
 - **Build `scripts/run_pipeline.py` first:** it runs the same skills in order without agents. It's easier to debug, and works as a demo fallback.
 - ScienceClaw limits to design around (details in the review doc): 45 s per skill run → slow steps start background jobs and later steps poll; no asking the user mid-run → M1 is a CLI pre-step; no built-in loops → iterate through output keys like `retrain_config_path`.

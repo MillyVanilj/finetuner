@@ -244,6 +244,9 @@ legend { font-size: 12px; font-weight: 650; color: var(--ink-2); padding: 0 6px;
 .msgs .wrn { color: var(--ink-2); }
 .msgs .err::before { content: "✗ "; font-weight: 700; }
 .msgs .wrn::before { content: "! "; font-weight: 700; color: var(--serious); }
+.assumed { border-color: var(--warning) !important; border-style: dashed !important; }
+#assumeBox { font-size: 12.5px; margin-bottom: 8px; }
+#assumeBox li { margin: 2px 0; }
 pre.cmd { background: var(--surface-2); padding: 8px 10px; border-radius: 8px; overflow: auto; font-size: 12px; }
 .empty { text-align: center; padding: 70px 20px; color: var(--ink-2); }
 .empty h2 { color: var(--ink); }
@@ -430,6 +433,7 @@ pre.cmd { background: var(--surface-2); padding: 8px 10px; border-radius: 8px; o
         </div>
       </fieldset>
       <div class="full card" style="background:var(--surface-2)">
+        <div id="assumeBox"></div>
         <div class="msgs" id="valMsgs"></div>
         <details style="margin-top:8px"><summary class="muted">task_spec.json preview</summary><pre class="cmd" id="specPreview"></pre></details>
       </div>
@@ -1212,15 +1216,20 @@ function renderQuestions() {
   if (!QUESTIONS.length) { $("qBox").innerHTML = ""; return; }
   $("qBox").innerHTML = `<h3 style="margin:0 0 8px">M1 questions <span class="muted" style="font-weight:400;font-size:12px">skip any: the default is used</span></h3>` +
     QUESTIONS.map(q => `<div class="q"><b>${esc(q.question)}</b><div class="why">${esc(q.why || "")}</div><textarea data-q="${esc(q.id)}" placeholder="Default: ${esc(q.default || "")}" style="width:100%;min-height:44px;border:1px solid var(--border);border-radius:8px;padding:6px 8px;background:var(--page)"></textarea></div>`).join("") +
-    `<button class="btn primary" id="answerBtn" style="margin-bottom:16px">Apply answers</button>`;
-  $("answerBtn").addEventListener("click", async () => {
-    const answers = {}; document.querySelectorAll("[data-q]").forEach(t => { const q = QUESTIONS.find(x => x.id === t.dataset.q); answers[t.dataset.q] = `${q.question} -> ${t.value.trim() || q.default || ""}`; });
-    $("answerBtn").disabled = true; $("answerBtn").textContent = "Updating spec…";
+    `<div style="display:flex;gap:8px;margin-bottom:16px"><button class="btn primary" id="answerBtn">Apply answers</button>` +
+    `<button class="btn" id="skipBtn">Use all defaults</button></div>`;
+  // A skipped question is sent as answer: null, so M1 records it as skipped (spec.m1.answers) instead of as typed text.
+  const send = async (useTyped) => {
+    const answers = {}; QUESTIONS.forEach(q => { const t = document.querySelector(`[data-q="${CSS.escape(String(q.id))}"]`);
+      answers[q.id] = {question: q.question, answer: (useTyped && t && t.value.trim()) || null, default: q.default ?? null}; });
+    $("answerBtn").disabled = $("skipBtn").disabled = true; $("answerBtn").textContent = "Updating spec (and looking for real examples)…";
     const r = await fetch("/api/spec/draft", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({goal: $("goal").value, spec: readForm(), answers})}).then(r => r.json()).catch(e => ({error: String(e)}));
-    if (r.error || !r.spec) { $("answerBtn").disabled = false; $("answerBtn").textContent = "Apply answers"; showMsgs({errors: [r.error || "M1 returned no spec"]}); return; }
+    if (r.error || !r.spec) { $("answerBtn").disabled = $("skipBtn").disabled = false; $("answerBtn").textContent = "Apply answers"; showMsgs({errors: [r.error || "M1 returned no spec"]}); return; }
     if (r.llm_error) $("draftMsg").textContent = r.llm_error + "; your answers were applied where possible.";
     SPEC = r.spec; QUESTIONS = r.questions || []; fillForm(SPEC); renderQuestions(); showMsgs(r); step(3);
-  });
+  };
+  $("answerBtn").addEventListener("click", () => send(true));
+  $("skipBtn").addEventListener("click", () => send(false));
 }
 const lines = (s) => s.split("\n").map(x => x.trim()).filter(Boolean);
 const csv = (s) => s.split(",").map(x => x.trim()).filter(Boolean);
@@ -1252,8 +1261,11 @@ function readForm() {
   sp.targets = Object.assign({}, sp.targets, {target_score: num("f_target"), max_loops: num("f_loops")});
   sp.n_examples = num("f_n"); sp.benchmark = Object.assign({}, sp.benchmark, {n_dev: num("f_ndev"), n_heldout: num("f_nho")});
   sp.budget = Object.assign({}, sp.budget, {max_api_usd: num("f_usd"), max_gpu_hours: num("f_gpu")});
+  const known = new Map((Array.isArray(SPEC?.seed_examples) ? SPEC.seed_examples : []).filter(e => e && typeof e.input === "string" && typeof e.output === "string")
+    .map(e => [e.input + "\u0000" + e.output, e]));   // rows M1 found on Hugging Face keep source "real" and their source_ref
   sp.seed_examples = lines($("f_seeds").value).filter(l => l.includes("=>")).map(l => { const i = l.indexOf("=>");
-    return {input: l.slice(0, i).trim().replace(/\\n/g, "\n"), output: l.slice(i + 2).trim().replace(/\\n/g, "\n"), source: "user"}; });
+    const ex = {input: l.slice(0, i).trim().replace(/\\n/g, "\n"), output: l.slice(i + 2).trim().replace(/\\n/g, "\n"), source: "user"};
+    const k = known.get(ex.input + "\u0000" + ex.output); return k ? {...ex, source: k.source || "user", ...(k.source_ref ? {source_ref: k.source_ref} : {})} : ex; });
   sp.models = {student: $("f_m_student").value.trim(), generator: $("f_m_generator").value.trim(), verifier: $("f_m_verifier").value.trim(), bench_writer: $("f_m_bench").value.trim(), judge: $("f_m_judge").value.trim()};
   return sp;
 }
@@ -1266,7 +1278,24 @@ async function validate() {
   if (r.error && !r.errors) r.errors = [r.error];   // a server error is never "valid"
   showMsgs(r); $("specPreview").textContent = JSON.stringify(r.spec ?? {}, null, 2); $("createBtn").disabled = !!(r.errors && r.errors.length); return r;
 }
-function showMsgs(r) { $("valMsgs").innerHTML = (r.errors || []).map(e => `<div class="err">${esc(e)}</div>`).join("") + (r.warnings || []).map(w => `<div class="wrn">${esc(w)}</div>`).join("") || `<div style="color:var(--good-text)">✓ Spec is valid.</div>`; }
+// Spec field -> form input, to mark values the user never gave (spec.m1.assumptions; ftc/spec.py drops an entry once the field changes).
+const FIELD_INPUT = {"title": "f_title", "domain": "f_domain", "input.description": "f_in_desc", "output.type": "f_out_type", "output.format_regex": "f_regex",
+  "output.json_schema": "f_schema", "output.labels": "f_labels", "io_format": "f_io", "success_criteria": "f_crit", "edge_cases": "f_edge",
+  "coverage.topics": "f_topics", "scoring.method": "f_method", "scoring.judge_rubric": "f_rubric", "targets.target_score": "f_target",
+  "targets.max_loops": "f_loops", "n_examples": "f_n", "benchmark.n_dev": "f_ndev", "benchmark.n_heldout": "f_nho", "budget.max_api_usd": "f_usd",
+  "budget.max_gpu_hours": "f_gpu", "seed_examples": "f_seeds", "benchmark.real_sources": "f_seeds", "models.student": "f_m_student"};
+const BY = {m1: "guessed by M1", rule: "guessed from the goal's words", template: "template", default: "default", search: "found by search"};
+function showAssumptions(sp) {
+  const all = Array.isArray(sp?.m1?.assumptions) ? sp.m1.assumptions : [];
+  document.querySelectorAll(".assumed").forEach(el => { el.classList.remove("assumed"); el.removeAttribute("title"); });
+  all.forEach(a => { const el = $(FIELD_INPUT[a.field] || ""); if (el) { el.classList.add("assumed"); el.title = `Assumed (${BY[a.by] || a.by}): ${a.why || ""}`; } });
+  const val = v => esc(typeof v === "string" ? v : JSON.stringify(v)).slice(0, 120);
+  const main = all.filter(a => a.by !== "default" || a.field === "seed_examples"), defs = all.filter(a => a.by === "default" && a.field !== "seed_examples");
+  $("assumeBox").innerHTML = !all.length ? "" : `<b>Assumed, not given by you</b> <span class="muted">(dashed fields; edit one to make it yours)</span><ul style="margin:4px 0 0;padding-left:18px">` +
+    main.map(a => `<li><span class="mono">${esc(a.field)}</span> = ${val(a.value)} <span class="muted">· ${esc(BY[a.by] || a.by)}${a.why ? ": " + esc(a.why) : ""}</span></li>`).join("") +
+    (defs.length ? `<li class="muted">Defaults: ${defs.map(a => `${esc(a.field)} = ${val(a.value)}`).join(", ")}</li>` : "") + "</ul>";
+}
+function showMsgs(r) { if (r.spec) showAssumptions(r.spec); $("valMsgs").innerHTML = (r.errors || []).map(e => `<div class="err">${esc(e)}</div>`).join("") + (r.warnings || []).map(w => `<div class="wrn">${esc(w)}</div>`).join("") || `<div style="color:var(--good-text)">✓ Spec is valid.</div>`; }
 $("createBtn").addEventListener("click", async () => {
   $("createBtn").disabled = true;   // one click = one pipeline
   const v = await validate(); if (v.errors?.length) return;

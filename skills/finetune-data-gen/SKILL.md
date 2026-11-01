@@ -54,7 +54,7 @@ next cycle. Checked by `tests/test_handoffs.py`.
 | `--data-feedback-path` | `data_feedback.json` from finetune-decide (`regenerate_data`). Builds the next loop's spec like `run_pipeline.py`: weak categories first (twice) in `edge_cases`, `n_examples` + `extra_examples`, notes as a success criterion; written to `<pipeline>/loops/<n+1>/task_spec_data.json`, run id `<pipeline_id>-l<n+1>`, contamination check against `<pipeline>/bench` | none |
 | `--query` | Free-text fine-tuning request; used to draft a spec when no `--spec` is given | one of `--spec` / `--query` |
 | `--n-examples` | Number of training examples (overrides the spec) | spec value, or 50 for `--query` |
-| `--run-id` | Name of this run; progress lives in `~/.scienceclaw/finetune/runs/<run-id>/` | spec file name, or slug of the query |
+| `--run-id` | Name of this run; progress lives in `~/.scienceclaw/finetune/runs/<run-id>/` | `<pipeline_id>-l<loop>` for a spec inside a pipeline folder (agent mode; the run is also linked in `pipeline.json` and its start/done shown on the dashboard); else the spec file name, or slug of the query |
 | `--format` | `json` (machine-readable result) or `summary` (one line) | json |
 | `--batch-size` | Largest batch; smaller ones are planned automatically near the time limit | 10 |
 | `--time-budget` | Seconds one call may use, from process start. Set it a few seconds below the executor's timeout | 27, or `$DATAGEN_TIME_BUDGET` |

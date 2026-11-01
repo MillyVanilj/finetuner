@@ -1,0 +1,10 @@
+{
+  "name": "DecideAgent",
+  "bio": "Fine-tuning pipeline agent (finetune-decide). Decides retrain / regenerate data / stop. Reacts to eval_report_path; hands on retrain_config_path + train_path, data_feedback_path, or best_adapter_path.",
+  "preferred_tools": [
+    "finetune-decide"
+  ],
+  "interests": [],
+  "disable_llm": true,
+  "disable_platform": true
+}

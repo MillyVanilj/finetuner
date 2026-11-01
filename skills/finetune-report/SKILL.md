@@ -19,15 +19,17 @@ The dashboard shows the result as the **Result** card, with buttons to push / po
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `--best-adapter-path` | The adapter `finetune-decide` picked (its stop result's `best_adapter_path`) | Required |
+| `--best-loop` | finetune-decide's `best_loop` (shown in the report) | from the stop decision |
+| `--best-job-id` | finetune-decide's `best_job_id` | the adapter's run folder name |
 
-The pipeline folder is found from `run.json` next to the adapter (or `$FTC_PIPELINE_DIR`). Unknown flags are ignored.
+The pipeline folder is found from `run.json` next to the adapter (or `$FTC_PIPELINE_DIR`). **Outside a pipeline folder** it still scores held-out once, then writes a shorter report (no examples or outcome counts: there are no benchmark files to read) to `<run dir>/final/` and doesn't publish. Called again for the same adapter, it answers at once from the existing report. Unknown flags are ignored. Needs `$FINETUNER_DIR` (default `~/finetuner`) for the `ftc` package, and everything `finetune-eval` needs for the held-out run (training venv, judge/teacher API keys: see its SKILL.md).
 
 ## Output
 
 | State | Exit | Keys |
 |---|---|---|
 | held-out eval running | 1 | `state: running`, `stage` |
-| done | 0 | `final_report_path`, `model_card_path`, `hub_url`, `infinite_post_url`, `verdict` (improved · no_clear_gain · worse · unknown), `summary` (the verdict sentence) |
+| done | 0 | `final_report_path`, `model_card_path`, `heldout_tuned_score`, `hub_url`, `infinite_post_url`, `verdict` (improved · no_clear_gain · worse · unknown), `summary` (the verdict sentence) |
 | failed | 1 | `state: failed`, `error` |
 
 None of these keys is another skill's flag, so the chain ends here.

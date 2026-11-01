@@ -7,6 +7,11 @@ dashboard's "New task" page, or on the command line:
 
 Round 1: draft(goal)                  -> {"spec": {...v2...}, "questions": [{"id","question","why","default"}]}
 Round 2: draft(goal, spec, answers)   -> {"spec": {...updated...}, "questions": []}  (usually none left)
+answers: {"q1": {"question": "...", "answer": "..." or None if skipped, "default": "..."}}
+
+Users often skip everything, so M1 fills the gaps and records it: spec.m1.answers marks skipped questions, and
+spec.m1.assumptions lists every value the user never gave (who chose it and why). After round 2, if there are
+still no real examples, it searches Hugging Face for some (ftc/real_data.py).
 
 Uses Claude via the anthropic SDK when ANTHROPIC_API_KEY (or an `ant auth` profile) is available;
 otherwise returns a template spec and generic questions so the UI still works offline.
@@ -17,17 +22,20 @@ import os
 import re
 import sys
 
-from .spec import DEFAULTS, OUTPUT_TYPES, SCORING_METHODS, check_spec
+from . import real_data
+from .spec import DEFAULTS, OUTPUT_TYPES, SCORING_METHODS, _get, check_spec, slugify
 
 MODEL = os.environ.get("FTC_M1_MODEL", "claude-sonnet-5-5")
-MAX_QUESTIONS = 5
+MAX_QUESTIONS = 3
+# Filled from DEFAULTS when nobody sets them; recorded as assumptions so the report can say so.
+DEFAULTED = ["benchmark.n_dev", "benchmark.n_heldout", "targets.max_loops", "budget.max_gpu_hours", "models.student"]
 
 SYSTEM = f"""You are M1, the prompt-verification step of an automated LLM fine-tuning pipeline.
 A user describes what they want a small open model (Qwen3-4B) to get better at. You turn that into a
 precise TASK SPEC that downstream steps use to generate training data, write a benchmark, and score
 the fine-tuned model automatically. Ambiguity here wastes GPU hours later, so be concrete.
 
-Return ONLY one JSON object (no prose, no code fences) with two keys:
+Return ONLY one JSON object (no prose, no code fences) with three keys:
   "spec": a task spec with these fields
      title (short), domain, task (1-2 sentences), io_format (exact shape of the assistant reply, one
      paragraph), input {{description, example}}, output {{type: one of {OUTPUT_TYPES}, description,
@@ -42,13 +50,17 @@ Return ONLY one JSON object (no prose, no code fences) with two keys:
      targets {{target_score (0-1), max_loops: 3}}
   "questions": at most {MAX_QUESTIONS} clarifying questions, ONLY about things that change the spec and that
      you cannot reasonably default. Each: {{"id": "q1", "question": "...", "why": "what it changes",
-     "default": "the answer you will assume if the user skips it"}}. If seed_examples is empty, always ask
-     for real example inputs with their ideal outputs (ideally 10-30, one per line as 'input => output');
-     they go into the held-out benchmark.
+     "default": "the answer you will assume if the user skips it"}}. Most users skip them, so make every
+     default sensible. Ask about the exact reply format unless the goal states it, and if seed_examples is
+     empty, ask for real example inputs with their ideal outputs (ideally 10-30, one per line as
+     'input => output'; they go into the held-out benchmark). Never ask about sizes, budget, models or loops.
+  "assumptions": every spec field you filled by guessing rather than from the goal or the user's answers
+     (including the defaults of skipped questions): [{{"field": "dotted.path like targets.target_score",
+     "why": "one short sentence"}}]
 
 Prefer automatic scoring (exact_match, label_accuracy, numeric, json_field_f1, regex) over judge.
-If the user already answered questions, apply the answers, keep everything else stable, and return
-an empty questions list unless something critical is still unclear. Fields you leave out keep the
+If the user already answered questions, apply the answers (a SKIPPED one means: apply your default),
+keep everything else stable, and return an empty questions list unless something critical is still unclear. Fields you leave out keep the
 user's current values."""
 
 TEMPLATE_QUESTIONS = [
@@ -56,8 +68,6 @@ TEMPLATE_QUESTIONS = [
      "why": "becomes io_format, the reply format the training data and benchmark follow", "default": "free text, scored by an LLM judge"},
     {"id": "q2", "question": "Paste real example inputs with the ideal output, ideally 10-30, one per line: 'input => output'.",
      "why": "real examples go into the held-out set so we don't only test on generated data", "default": "no real examples"},
-    {"id": "q3", "question": "Which tricky cases matter most? (one per line)", "why": "becomes edge_cases (data generation rotates over them)",
-     "default": "ambiguous and false-premise inputs"},
     {"id": "q4", "question": "What score would make this a success (0-100%)?", "why": "targets.target_score, when the loop stops",
      "default": "80%"},
 ]
@@ -74,9 +84,9 @@ def _client():
         return None
 
 
-def _call_claude(client, user_text: str) -> str:
+def _call_claude(client, user_text: str, system: str = SYSTEM) -> str:
     resp = client.beta.messages.create(
-        model=MODEL, max_tokens=16000, system=SYSTEM,
+        model=MODEL, max_tokens=16000, system=system,
         output_config={"effort": "low"},
         betas=["server-side-fallback-2026-07-01"], fallbacks="default",
         messages=[{"role": "user", "content": user_text}],
@@ -104,9 +114,23 @@ def _merge(base, over):
     return out
 
 
-def _answer(v) -> str:
-    """The dashboard and CLI send 'question -> answer'; keep the answer."""
-    return str(v).split(" -> ", 1)[-1].strip()
+def _answers(answers) -> dict:
+    """Each answer -> {"question", "answer" (None = skipped), "default"}. Also reads the older
+    'question -> answer' strings (counted as answered)."""
+    out = {}
+    for k, v in (answers or {}).items():
+        if isinstance(v, dict):
+            a = str(v.get("answer") or "").strip()
+            out[str(k)] = {"question": str(v.get("question") or ""), "answer": a or None, "default": v.get("default")}
+        else:
+            q, sep, a = str(v).partition(" -> ")
+            out[str(k)] = {"question": q if sep else "", "answer": (a if sep else q).strip() or None, "default": None}
+    return out
+
+
+def _answer_lines(answers: dict) -> str:
+    return "\n".join(f"- {k} ({v['question']}): " + (v["answer"] if v["answer"] else f"SKIPPED, use your default: {v['default']}")
+                     for k, v in answers.items())
 
 
 def _seed_lines(text: str) -> list:
@@ -122,10 +146,9 @@ def _seed_lines(text: str) -> list:
 
 def _apply_template_answers(s: dict, answers: dict) -> dict:
     """No LLM: apply what the template questions ask for without one. Defaults and blanks change nothing;
-    every raw answer is also kept in m1_answers."""
+    every answer is also kept in spec.m1.answers."""
     defaults = {q["id"]: q["default"] for q in TEMPLATE_QUESTIONS}
-    a = {k: _answer(v) for k, v in answers.items()}
-    a = {k: v for k, v in a.items() if v and v != defaults.get(k)}
+    a = {k: v["answer"] for k, v in answers.items() if v["answer"] and v["answer"] != defaults.get(k)}
     if a.get("q1"):
         s["io_format"] = a["q1"]
     have = list(s.get("seed_examples") or [])
@@ -133,9 +156,6 @@ def _apply_template_answers(s: dict, answers: dict) -> dict:
     new = [e for e in _seed_lines(a.get("q2", "")) if (e["input"], e["output"]) not in seen]   # Apply twice = once
     if new:
         s["seed_examples"] = have + new
-    cases = [c.strip() for c in re.split(r"[\n;]", a.get("q3", "")) if c.strip()]
-    if cases:
-        s["edge_cases"] = cases
     m = re.search(r"\d+(?:\.\d+)?", a.get("q4", ""))
     if m:   # the question asks for 0-100%: "1" is 1%; only a decimal like "0.8" is already a fraction
         x = float(m.group())
@@ -144,32 +164,67 @@ def _apply_template_answers(s: dict, answers: dict) -> dict:
     return s
 
 
+def _guess_output(goal: str):
+    """No LLM: guess the reply type from words in the goal. Returns (output, why), or (None, None) for free text."""
+    g = goal.lower()
+    if "json" in g:
+        m = re.search(r"(?:extract|return|give|output|list|pull out)\s+(?:the\s+)?(.+?)\s+(?:as|in|into)\s+(?:a\s+)?json", g)
+        keys = [slugify(k).replace("-", "_") for k in re.split(r",\s*(?:and\s+)?|\s+and\s+", m.group(1))] if m else []
+        keys = [k for k in keys if k != "task" and k.count("_") < 4]
+        schema = {"type": "object", "properties": {k: {} for k in keys}, "required": keys} if keys else None
+        return {"type": "json", "json_schema": schema}, "the goal mentions JSON" + (f" with {', '.join(keys)}" if keys else "")
+    if re.search(r"\b(classif\w*|categori[sz]\w*|label\w*|sentiment)\b", g):
+        m = re.search(r"\b(?:as|into)\s+((?:[\w-]+,\s*)*[\w-]+,?\s+or\s+[\w-]+)", g)
+        labels = [x for x in re.split(r",\s*(?:or\s+)?|\s+or\s+", m.group(1)) if x] if m else \
+            ["positive", "negative", "neutral"] if "sentiment" in g else None
+        if labels:
+            return {"type": "label", "labels": labels}, "the goal asks to classify into " + ", ".join(labels)
+    if re.search(r"\b(how many|how much|calculate|compute|estimate the|predict the value)\b", g):
+        return {"type": "number"}, "the goal asks for a number"
+    return None, None
+
+
 def _fallback(goal: str, spec=None, answers=None) -> dict:
-    """No LLM available: template spec + generic questions; answers are applied where possible."""
-    s = dict(spec or {})
+    """No LLM available: template spec + generic questions; answers are applied where possible.
+    Values it fills itself are returned as assumptions."""
+    s, assumed = dict(spec or {}), []
+
+    def fill(field, value, why, by="template"):
+        if field not in s:
+            s[field] = value
+            assumed.append({"field": field, "by": by, "why": why})
+
     s.setdefault("task", goal.strip())
-    s.setdefault("io_format", "A concise, correct answer.")
-    s.setdefault("success_criteria", ["The answer is correct", "The answer follows io_format exactly"])
-    s.setdefault("edge_cases", ["Ambiguous requests", "Questions with a false premise", "Very long inputs"])
-    s.setdefault("n_examples", 300)
+    out, why = _guess_output(goal) if "output" not in s else (None, None)
+    if out:   # io_format is then written from the output type (spec.build_io_format)
+        fill("output", out, why, by="rule")
+        assumed[-1]["field"] = "output.type"
+    else:
+        fill("io_format", "A concise, correct answer.", "no LLM: generic reply format, scored by the judge")
+    fill("success_criteria", ["The answer is correct", "The answer follows io_format exactly"], "no LLM: generic criteria")
+    fill("edge_cases", ["Ambiguous requests", "Questions with a false premise", "Very long inputs"], "no LLM: generic edge cases")
+    fill("n_examples", 300, "no LLM: template size")
+    fill("targets", {"target_score": 0.8}, "no target given: 80%, the target question's default")
+    if assumed and assumed[-1]["field"] == "targets":
+        assumed[-1]["field"] = "targets.target_score"
     if answers:
-        s.setdefault("m1_answers", {}).update(answers)
-        return {"spec": _apply_template_answers(s, answers), "questions": [], "source": "template"}
-    return {"spec": s, "questions": [dict(q) for q in TEMPLATE_QUESTIONS], "source": "template"}
+        return {"spec": _apply_template_answers(s, answers), "questions": [], "source": "template", "assumptions": assumed}
+    return {"spec": s, "questions": [dict(q) for q in TEMPLATE_QUESTIONS], "source": "template", "assumptions": assumed}
 
 
 def draft(goal: str, spec: dict = None, answers: dict = None) -> dict:
     """Return {"spec": v2 spec, "questions": [...], "errors": [...], "warnings": [...], "source": "llm"|"template",
     "llm_error": why Claude's reply wasn't used (only when a client exists but the reply failed)}."""
     client = _client()
+    answers = _answers(answers)
     out, llm_error = None, None
     if client is not None:
         try:
             msg = f"User goal:\n{goal.strip()}\n"
             if spec:
-                msg += f"\nCurrent draft spec:\n{json.dumps(spec, indent=1)}\n"
+                msg += f"\nCurrent draft spec:\n{json.dumps({k: v for k, v in spec.items() if k != 'm1'}, indent=1)}\n"
             if answers:
-                msg += "\nUser answers to your questions:\n" + "\n".join(f"- {k}: {v}" for k, v in answers.items()) + "\n"
+                msg += "\nUser answers to your questions:\n" + _answer_lines(answers) + "\n"
             out = _parse(_call_claude(client, msg))
             if not isinstance(out, dict) or not isinstance(out.get("spec"), dict) \
                     or not isinstance(out.get("questions") or [], list):
@@ -178,16 +233,41 @@ def draft(goal: str, spec: dict = None, answers: dict = None) -> dict:
                                 if isinstance(q, dict) and _text_id(q.get("id")) and isinstance(q.get("question"), str)]
             out["spec"] = _merge(spec, {k: v for k, v in out["spec"].items() if k in DEFAULTS or k in
                                         ("task", "io_format", "success_criteria", "edge_cases", "n_examples")})
+            out["assumptions"] = [{"field": a["field"], "by": "m1", "why": str(a.get("why") or "")}
+                                  for a in out.get("assumptions") or [] if isinstance(a, dict) and isinstance(a.get("field"), str)]
             out["source"] = "llm"
         except Exception as e:
             print(f"[M1] LLM draft failed, using template: {e!r}", file=sys.stderr)
             out, llm_error = None, f"Claude's reply could not be used ({e}); showing the template instead"
     if out is None:
         out = _fallback(goal, spec, answers)
-    full, errors, warnings = check_spec(out.get("spec") or {})
-    full["m1"] = {"goal": goal, "answers": answers or {}, "source": out.get("source")}
-    r = {"spec": full, "questions": (out.get("questions") or [])[:MAX_QUESTIONS],
-         "errors": errors, "warnings": warnings, "source": out.get("source")}
+    raw = out.get("spec") or {}
+    new = out.get("assumptions") or []
+    new += [{"field": f, "by": "default", "why": "not given: the pipeline default"} for f in DEFAULTED if _get(raw, f) is None]
+    questions = (out.get("questions") or [])[:MAX_QUESTIONS]
+    search = None
+    if out.get("source") == "llm" and (answers or not questions) and not raw.get("seed_examples") \
+            and os.environ.get("FTC_HF_SEARCH", "1") != "0":
+        search = real_data.find(client, _call_claude, check_spec(raw)[0])
+        if search["seed_examples"]:
+            raw = {**raw, "seed_examples": search["seed_examples"],
+                   "benchmark": {**(raw.get("benchmark") or {}), "real_sources": [f"huggingface:{search['dataset']}"]}}
+            new.append({"field": "benchmark.real_sources", "by": "search",
+                        "why": f"no examples given: {len(search['seed_examples'])} real rows taken from {search['dataset']} "
+                               f"(licence: {search.get('license')}). {search.get('why', '')}".strip()})
+    full, errors, warnings = check_spec(raw)
+    if not full.get("seed_examples"):
+        new.append({"field": "seed_examples", "by": "default", "why": "no real examples given" + (
+            f" or found on Hugging Face ({search['why']})" if search else "") + ": the held-out set is all generated"})
+    for a in new:
+        a["value"] = _get(full, a["field"])
+    prev = [a for a in ((spec or {}).get("m1") or {}).get("assumptions") or [] if isinstance(a, dict) and a.get("field")]
+    full["m1"] = {"goal": goal, "answers": answers, "source": out.get("source"),
+                  "assumptions": list({a["field"]: a for a in prev + new}.values())}   # newest entry per field wins
+    if search:
+        full["m1"]["real_search"] = {k: search.get(k) for k in ("queries", "dataset", "license", "why")}
+    full, errors, warnings = check_spec(full)   # drops earlier assumptions whose field the answers changed
+    r = {"spec": full, "questions": questions, "errors": errors, "warnings": warnings, "source": out.get("source")}
     if llm_error:
         r["llm_error"] = llm_error
     return r
@@ -212,10 +292,10 @@ def main(argv=None):
         if a.no_questions:
             break
         print(f"\n{q['question']}\n  (why: {q.get('why', '')})  [default: {q.get('default', '')}]")
-        ans = input("> ").strip()
-        answers[q["id"]] = f"{q['question']} -> {ans or q.get('default', '')}"
-    if answers:
-        r = draft(a.goal, r["spec"], answers)
+        answers[q["id"]] = {"question": q["question"], "answer": input("> ").strip() or None, "default": q.get("default")}
+    if r["questions"]:   # skipped (or --no-questions) answers are sent too, so M1 applies and records the defaults
+        r = draft(a.goal, r["spec"], answers or {q["id"]: {"question": q["question"], "answer": None, "default": q.get("default")}
+                                                 for q in r["questions"]})
     Path(a.out).write_text(json.dumps(r["spec"], indent=2))
     print(json.dumps({"spec_path": a.out, "errors": r["errors"], "warnings": r["warnings"]}, indent=2))
     return 1 if r["errors"] else 0

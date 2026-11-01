@@ -1,6 +1,6 @@
 # CLAUDE.md — Project context
 
-> **Read first:** `docs/wireframe_v0.2.md` (the design, and which code implements each box), `docs/decisions.md` (model choices and reasoning, compute) and `docs/spec_and_io.md` (the task spec and every hand-off file format). ScienceClaw internals and the wireframe critique: `docs/wireframe_v0.2_review.md`.
+> **Read first:** `docs/handover.md` (current state: what is merged, open PRs, next steps, demo pitch; keep it up to date when you merge or open a PR), then `docs/wireframe_v0.2.md` (the design, and which code implements each box), `docs/decisions.md` (model choices and reasoning, compute) and `docs/spec_and_io.md` (the task spec and every hand-off file format). ScienceClaw internals and the wireframe critique: `docs/wireframe_v0.2_review.md`.
 
 ## What we're doing
 
@@ -19,6 +19,7 @@ Hackathon ends Sunday night. Favor working demos over perfect code. Keep things 
 | L3 eval (M7–M9) | `skills/finetune-eval` | `adapter_path` + `bench_dir` → `eval_report_path` |
 | Iterate? (Evaluator) | `skills/finetune-decide` | `eval_report_path` → `retrain_config_path` + `train_path` · `data_feedback_path` · stop (`best_adapter_path`) |
 | Output (ReportAgent) | `skills/finetune-report`, `ftc/report.py`, `ftc/publish.py` | `best_adapter_path` → held-out once → `final/final_report.json` (verdict, side-by-side examples), `model_card.md` → HF Hub (private by default), Infinite post (opt-in) |
+| Agent mode | `agents/` (7 profiles), `python3 -m ftc.cli agents start / kickoff / status / stop` (`ftc/agents.py`) | the stages above as ScienceClaw agents; `docs/spec_and_io.md` §8 |
 | Runner without agents | `scripts/run_pipeline.py` (dashboard ▶ Start) | runs the stages above in order, converts Eval's report to §3.4 |
 | Live view | `dashboard/`, `ftc/pipeline.py`, `scripts/simulate_pipeline.py` | reads the pipeline folder; the **Result** card at the top shows the final model |
 | Poster wall | `ftc/wall.py`, `skills/finetune-wall`, dashboard 📌 card | agents (and humans) pin notes for each other in `wall.jsonl` |
@@ -70,7 +71,7 @@ Our repo is separate from ScienceClaw (ScienceClaw is installed next to it, not 
 ```
 finetuner/
   skills/     # our ScienceClaw skills (finetune-*); scripts/install.sh copies them into ScienceClaw
-  agents/     # agent profiles (<Name>/agent_profile.json), copied to ~/.scienceclaw/profiles (none yet)
+  agents/     # 7 agent profiles (<Name>/agent_profile.json), copied to ~/.scienceclaw/profiles by install.sh
   ftc/        # shared Python: task spec, pipeline folder + event log, M1, dashboard state
   dashboard/  # live pipeline view (python3 dashboard/server.py)
   scripts/    # setup_brev.sh, install.sh, train_sft.py (brev-smoke/), simulate_pipeline.py

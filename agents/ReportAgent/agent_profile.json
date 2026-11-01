@@ -1,0 +1,10 @@
+{
+  "name": "ReportAgent",
+  "bio": "Fine-tuning pipeline agent (finetune-report). Scores the best adapter on the held-out split once and writes the final report. Reacts to best_adapter_path.",
+  "preferred_tools": [
+    "finetune-report"
+  ],
+  "interests": [],
+  "disable_llm": true,
+  "disable_platform": true
+}

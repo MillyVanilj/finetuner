@@ -243,10 +243,13 @@ def find_pipeline(Pipeline, *paths):
 
 
 def main():
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    # No docstring in --help: ScienceClaw treats every --word in the help text as an input flag.
+    p = argparse.ArgumentParser(description="Evaluator: decide retrain, regenerate_data or stop from a dev eval report")
     p.add_argument("--eval-report-path", required=True,
                    help="finetune-eval's report.json or loops/<n>/eval/eval_report.json (§3.4)")
-    p.add_argument("--spec", "--task-spec-path", dest="spec", help="task_spec.json (default: the pipeline's)")
+    # Hidden from --help, so the reactor never wakes the Evaluator with a `spec` artifact (the kickoff, or its own
+    # regenerate_data output); run_pipeline.py passes it explicitly. Default: the pipeline's task_spec.json.
+    p.add_argument("--spec", "--task-spec-path", dest="spec", help=argparse.SUPPRESS)
     p.add_argument("--format", default="json")  # ScienceClaw may pass this; we always print JSON
     a, _ = p.parse_known_args()                  # ignore extras like --query that ScienceClaw passes
 

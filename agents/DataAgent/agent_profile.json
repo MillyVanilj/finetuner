@@ -1,0 +1,10 @@
+{
+  "name": "DataAgent",
+  "bio": "Fine-tuning pipeline agent (finetune-data-gen). Generates and verifies training data. Reacts to spec (kickoff) and data_feedback_path (Evaluator); hands on train_path.",
+  "preferred_tools": [
+    "finetune-data-gen"
+  ],
+  "interests": [],
+  "disable_llm": true,
+  "disable_platform": true
+}

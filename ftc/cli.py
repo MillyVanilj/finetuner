@@ -9,6 +9,7 @@
     python3 -m ftc.cli list
     python3 -m ftc.cli wall -p <pipeline_dir> post EvalAgent "weak on stoichiometry" --to DataAgent --kind request
     python3 -m ftc.cli wall -p <pipeline_dir> inbox DataAgent      # see ftc/wall.py for all wall commands
+    python3 -m ftc.cli agents start | kickoff <pipeline_dir> | status | stop   # agent mode, see ftc/agents.py
 """
 import json
 import sys
@@ -23,6 +24,9 @@ def main(argv=None):
     if argv and argv[0] == "wall":            # the poster wall has its own sub-commands
         from .wall import main as wall_main
         return wall_main(argv[1:])
+    if argv and argv[0] == "agents":          # agent mode: ScienceClaw daemons + the kickoff artifact
+        from .agents import main as agents_main
+        return agents_main(argv[1:])
     ap = argparse.ArgumentParser(prog="ftc")
     sub = ap.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("new"); s.add_argument("spec")
@@ -38,7 +42,8 @@ def main(argv=None):
     if a.cmd == "new":
         pl = Pipeline.create(load_spec(a.spec))
         pl.set_loop(1)
-        print(json.dumps({"pipeline_dir": str(pl.dir), "pipeline_id": pl.id, "task_spec_path": str(pl.dir / "task_spec.json")}))
+        sp = str(pl.dir / "task_spec.json")   # `spec` is the hand-off key the skills take (--spec)
+        print(json.dumps({"pipeline_dir": str(pl.dir), "pipeline_id": pl.id, "spec": sp, "task_spec_path": sp}))
         return 0
     if a.cmd == "list":
         for m in list_pipelines():

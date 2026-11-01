@@ -12,6 +12,9 @@ After the Evaluator stops and the held-out split has been scored once, this writ
 Nothing here calls an LLM or the network: every sentence is a template filled from the files on disk, so the
 report can't claim more than the numbers say. Publishing (HF push, Infinite post) is in ftc/publish.py.
 
+Inside a pipeline folder: build_final() (or ftc.publish.finalize, which also publishes). Outside one (an agent-mode
+run with no pipeline folder): write_final(), the same file format with fewer sections.
+
 CLI:
   python3 -m ftc.report <pipeline_dir>            # (re)build the files above from what's on disk
   python3 -m ftc.report <pipeline_dir> --print    # also print the verdict
@@ -21,7 +24,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from .pipeline import Pipeline, now_iso
+from .pipeline import Pipeline, _atomic_write, now_iso
+from .spec import assumptions
 from .state import _read_json, _read_jsonl, read_data, runs_dir
 
 # finetune-eval's outputs.jsonl system names -> the §3.4 names used everywhere else
@@ -403,7 +407,9 @@ def build_final(pipeline_dir, best_loop=None, best_job=None, best_adapter=None, 
         "made_with": made_with(pdir, spec, best_job, raw, len(history), meta),
         "cost": cost(pdir, meta),
         # publishing results survive a rebuild (ftc/publish.py fills them)
-        "hub_url": old.get("hub_url"), "hub_repo": old.get("hub_repo"), "hub_private": old.get("hub_private"),
+        "hub_url": old.get("hub_url") or _job_files(best_job, _job_links(meta))[2].get("hub_url") if best_job else old.get("hub_url"),
+        "hub_repo": old.get("hub_repo"), "hub_private": old.get("hub_private"),
+        "assumptions": assumptions(spec),       # spec values the user skipped and the pipeline chose (M1)
         "infinite_post_url": old.get("infinite_post_url"), "publish_log": old.get("publish_log") or [],
         "simulated": bool(old.get("simulated")),     # a rebuild must not turn a fake run into a publishable one
         "model_card_path": str(pdir / "final" / "model_card.md"),
@@ -419,8 +425,56 @@ def write_outputs(pl, final, spec=None):
     spec = spec or pl.spec()
     final["usage_snippet"] = usage_snippet(final, spec)    # follows hub_repo once the adapter is pushed
     pl.write_json("final/final_report.json", final)
-    (pl.dir / "final" / "model_card.md").write_text(model_card(final, spec))
+    (pl.dir / "final" / "model_card.md").write_text(render_model_card(final, spec))
     pl.write_json("final/infinite_post.json", infinite_post(final, spec))
+
+
+def dev_history(pl, upto: int) -> list:
+    """Tuned dev score per loop, from loops/<n>/eval/eval_report.json."""
+    hist = []
+    for n in range(1, upto + 1):
+        r = _read_json(pl.loop_dir(n) / "eval" / "eval_report.json", {}) or {}
+        if r.get("systems"):
+            hist.append({"loop": n, "tuned": (r["systems"].get("tuned") or {}).get("score")})
+    return hist
+
+
+def write_final(out_dir, *, pipeline_id, best_adapter, best_job, best_loop, heldout: dict, history: list,
+                spec: dict) -> dict:
+    """final_report.json + model_card.md into out_dir, for a run with no pipeline folder (no benchmark files or
+    loop folders to read, so no examples or outcome counts). Same format as build_final; returns the report."""
+    out_dir, spec, heldout = Path(out_dir), spec or {}, heldout or {}
+    run_dir = Path(best_adapter).parent if best_adapter else None
+    run = {**(_read_json(run_dir / "metrics.json", {}) or {}), **(_read_json(run_dir / "run.json", {}) or {})} if run_dir else {}
+    old = _read_json(out_dir / "final_report.json", {}) or {}
+    systems = heldout.get("systems") or {}
+    base = baseline_key(systems)
+    general = heldout.get("general") or []
+    v = verdict(systems, heldout.get("gain_vs_base_few_shot"), general, spec, heldout.get("n_items"), {}, base, None,
+                best_loop, len(history), heldout.get("by_source"))
+    cfg = run.get("config") or {}
+    final = {
+        "pipeline_id": pipeline_id, "title": spec.get("title"), "task": spec.get("task"), "io_format": spec.get("io_format"),
+        "best_loop": best_loop, "train_job_id": best_job, "adapter_path": best_adapter, "verdict": v,
+        "heldout": {"n_items": heldout.get("n_items"), "systems": systems, "by_source": heldout.get("by_source") or [],
+                    "by_category": heldout.get("by_category") or [], "gain_vs_base_few_shot": heldout.get("gain_vs_base_few_shot"),
+                    "source_counts": {}, "pass_threshold": (spec.get("scoring") or {}).get("pass_threshold") or 0.5,
+                    "outcomes": None},
+        "general": general, "general_from": "held-out run" if general else None, "examples": [], "dev_history": history,
+        "made_with": {"student": run.get("base_model") or cfg.get("model") or (spec.get("models") or {}).get("student"),
+                      "training_config": {k: cfg[k] for k in ("rank", "alpha", "lr", "epochs") if k in cfg},
+                      "models": dict(spec.get("models") or {})},
+        "cost": {}, "assumptions": assumptions(spec),
+        "hub_url": old.get("hub_url") or run.get("hub_url"), "hub_repo": old.get("hub_repo"),
+        "hub_private": old.get("hub_private"), "infinite_post_url": old.get("infinite_post_url"),
+        "publish_log": old.get("publish_log") or [], "model_card_path": str(out_dir / "model_card.md"),
+        "created_at": old.get("created_at") or now_iso(), "updated_at": now_iso(),
+    }
+    final["usage_snippet"] = usage_snippet(final, spec)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "model_card.md").write_text(render_model_card(final, spec))
+    _atomic_write(out_dir / "final_report.json", final)
+    return final
 
 
 # ---------------- model card (Hugging Face README) ----------------
@@ -455,7 +509,12 @@ def _fence(s):
     return "```\n" + str(s).replace("```", "ˋˋˋ") + "\n```"
 
 
-def model_card(final, spec) -> str:
+def model_card(spec, final, run=None) -> str:
+    """The model card from (spec, final report): the argument order of the first ftc/report.py on main."""
+    return render_model_card(final or {}, spec or {})
+
+
+def render_model_card(final, spec) -> str:
     v = final.get("verdict") or {}
     ho = final.get("heldout") or {}
     sy = ho.get("systems") or {}
@@ -469,7 +528,7 @@ def model_card(final, spec) -> str:
          f"# {title}", "", f"LoRA adapter for [{base_id}](https://huggingface.co/{base_id}), made automatically by the "
          "ScienceClaw fine-tuning collective (agents wrote the task spec, generated and verified the training data, "
          "built a benchmark, trained, evaluated and decided when to stop).", "",
-         f"> **{v.get('headline', '')}**", ""]
+         *([f"> **{v['headline']}**", ""] if v.get("headline") else [])]
     if final.get("simulated"):
         L += ["> ⚠️ **SIMULATED RUN** (scripts/simulate_pipeline.py): no model was trained; every number and answer is fake.", ""]
     for d in v.get("details") or []:
@@ -541,12 +600,22 @@ def model_card(final, spec) -> str:
         L += [f"| {h['loop']}{' ★' if h['loop'] == final.get('best_loop') else ''} | {pct(h.get('tuned'), 1)} | {pct(h.get('base_fewshot'), 1)} | "
               f"{_md((h.get('action') or '').replace('_', ' '))}{': ' + _md(h['reason']) if h.get('reason') else ''} |" for h in hist]
     c = final.get("cost") or {}
-    L += ["", f"**Compute:** {c.get('train_jobs')} training run(s), {c.get('gpu_hours')} GPU hours (training + evaluation)."]
+    if c.get("train_jobs") is not None:
+        L += ["", f"**Compute:** {c.get('train_jobs')} training run(s), {c.get('gpu_hours')} GPU hours (training + evaluation)."]
+    assumed = final.get("assumptions") or []
+    if assumed:
+        L += ["", "## Assumptions (not given by the user)", "",
+              "The user skipped these, so the pipeline chose them. Results depend on them.", "",
+              "| Field | Value | Chosen by | Why |", "|---|---|---|---|"]
+        L += [f"| `{a.get('field')}` | {_md(json.dumps(a.get('value'))[:80])} | {_md(a.get('by'))} | {_md(a.get('why') or '')} |"
+              for a in assumed]
 
     L += ["", "## Limitations", "",
           "- The training data is synthetic (LLM-generated). It can contain errors the verifier missed, and the model may copy the generator's style.",
           f"- The benchmark was written by an LLM ({models.get('bench_writer')}) and partly graded by an LLM judge ({models.get('judge')}). "
           "The key comparison (tuned vs base few-shot) uses the same items and the same judge for both, so the *difference* is fairer than either absolute score.",
+          *([f"- The real examples come from a public dataset ({', '.join((spec.get('benchmark') or {}).get('real_sources') or [])}), "
+             "which the base model may have seen during pretraining."] if (spec.get("benchmark") or {}).get("real_sources") else []),
           f"- Only tested on this task. Inherits the limitations and license of {base_id}.",
           "", "## How to use", "", "```python", usage_snippet(final, spec).rstrip(), "```", "",
           "## Reproducibility", "",

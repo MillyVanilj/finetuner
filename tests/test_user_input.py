@@ -26,7 +26,7 @@ def with_reply(reply, fn):
     """Run fn with M1's Claude call returning `reply` (a string, or an exception to raise)."""
     orig = m1._client, m1._call_claude
 
-    def call(client, text):
+    def call(client, text, system=None):
         if isinstance(reply, Exception):
             raise reply
         return reply
@@ -76,12 +76,11 @@ def test_no_api_key_applies_template_answers():
         qs = {q["id"]: q for q in r1["questions"]}
         answers = {"q1": f"{qs['q1']['question']} -> one label: positive or negative",
                    "q2": f"{qs['q2']['question']} -> great film => positive\nawful => negative\nno arrow here",
-                   "q3": f"{qs['q3']['question']} -> sarcasm\nmixed reviews",
                    "q4": f"{qs['q4']['question']} -> 90%"}
         s = m1.draft("classify sentiment", r1["spec"], answers)["spec"]
         assert s["io_format"] == "one label: positive or negative"
         assert [e["input"] for e in s["seed_examples"]] == ["great film", "awful"]
-        assert s["edge_cases"] == ["sarcasm", "mixed reviews"] and s["targets"]["target_score"] == 0.9
+        assert s["targets"]["target_score"] == 0.9
         # skipped questions (defaults) leave the template alone
         d = m1.draft("x", r1["spec"], {q: f"{qs[q]['question']} -> {qs[q]['default']}" for q in qs})["spec"]
         assert d["io_format"] == r1["spec"]["io_format"] and not d["seed_examples"]

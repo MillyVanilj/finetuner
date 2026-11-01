@@ -382,6 +382,8 @@ def main():
         sys.stdout = real_stdout
     if "error" not in result:
         save_result(result)
+        if getattr(a, "pipeline_dir", None) and result.get("run_dir"):
+            tell_pipeline(a.pipeline_dir, result, a.agent_mode)
     if "error" in result:
         print(json.dumps(result, indent=2), flush=True)
     else:
@@ -428,9 +430,55 @@ def feedback_spec(a):
         f"spec {out}")
 
 
+def pipeline_dir_of(spec_path):
+    """The pipeline folder a spec file sits in ($FINETUNER_DIR/pipelines/<id>/task_spec.json or loops/<n>/...)."""
+    if not spec_path:
+        return None
+    p = Path(spec_path).expanduser().resolve()
+    return next((d for d in [p.parent, *p.parents] if (d / "pipeline.json").exists()), None)
+
+
+def tell_pipeline(pdir, result, agent_mode):
+    """Record this run in the pipeline (dashboard): link data_run_dir, and in agent mode (no runner around to do
+    it) the data stage's start/done events. Optional: never fails the skill."""
+    try:   # the pointer lets finetune-submit, handed only train_path, find the pipeline (ftc/pipeline.py POINTER)
+        (Path(result["run_dir"]) / ".pipeline").write_text(str(pdir))
+    except OSError as e:
+        log(f"[pipeline] could not write the pipeline pointer: {e}")
+    try:
+        root = Path(os.environ.get("FINETUNER_DIR", Path.home() / "finetuner")).expanduser()
+        for d in (str(root), str(Path(__file__).resolve().parents[3])):
+            if (Path(d) / "ftc").exists() and d not in sys.path:
+                sys.path.insert(0, d)
+        from ftc.pipeline import Pipeline
+        pl, run_dir = Pipeline(pdir), Path(result["run_dir"])
+        pl.link("data_run_dir", str(run_dir), stage="data", append=True)
+        if not agent_mode:
+            return
+        for flag, ok, msg in ((".pipeline_started", True, f"DataGen started run {result.get('run_id')}"),
+                              (".pipeline_done", result.get("done"),
+                               f"{result.get('train_examples')} training examples ready: {result.get('train_path')}")):
+            if ok and not (run_dir / flag).exists():
+                pl.emit("data", "start" if flag == ".pipeline_started" else "done", msg)
+                (run_dir / flag).write_text("")
+    except Exception as e:  # noqa: BLE001
+        log(f"[pipeline] could not update {pdir}: {e}")
+
+
 def run(a) -> dict:
+    agent_mode = not a.run_id                   # scripts/run_pipeline.py always passes --run-id
     if getattr(a, "data_feedback_path", None):
         feedback_spec(a)
+    a.pipeline_dir = pipeline_dir_of(a.spec)
+    if a.pipeline_dir and not a.run_id:
+        # A spec inside a pipeline is always called task_spec.json, so the default run id (the file name) would
+        # make every pipeline resume the FIRST pipeline's data. Name it like the runner: <pipeline_id>-l<loop>.
+        try:
+            loop = int(json.loads((a.pipeline_dir / "pipeline.json").read_text()).get("loop") or 1)
+        except (OSError, ValueError):
+            loop = 1
+        a.run_id = f"{a.pipeline_dir.name}-l{loop}"
+    a.agent_mode = agent_mode
     deadline = _T_START + a.time_budget
     jsonparse.BAD_OUTPUT_DIR = RUNS_DIR
     if not (a.spec or (a.query and a.query.strip())):

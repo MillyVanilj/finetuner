@@ -20,5 +20,6 @@ Status of every wireframe box: `docs/wireframe_v0.2.md`.
 - [ ] Eval writes the §3.4 report itself (today only `run_pipeline.py` converts it), so the Evaluator works under the reactor too
 - [ ] DataGen reads `--data-feedback-path` (the runner works around it with a spec copy)
 - [x] Output / ReportAgent: held-out once, verdict + side-by-side examples (dashboard Result card), model card, HF push, Infinite post (`skills/finetune-report`, `ftc/report.py`, `ftc/publish.py`)
-- [ ] Agent profiles in `agents/` and a first `scienceclaw-post --dry-run` through the chain
+- [x] Agent profiles in `agents/` + kickoff (`python3 -m ftc.cli agents start`, `agents kickoff`)
+- [ ] First agent-mode run on the Brev machine
 - [x] `scripts/run_pipeline.py`: the same steps in order without agents (demo fallback)
