@@ -247,6 +247,47 @@ def test_run_pipeline_layout():
         assert json.loads((pdir / "loops/2/decision.json").read_text())["vs_last_loop"]["ci95"]
 
 
+def test_reused_job_without_pipeline_is_a_new_loop():
+    """No pipeline folder: finetune-submit reuses a job (identical data + settings), so finetune-eval hands the
+    Evaluator the same job's report again. That is loop 2, not loop 1 again (else max_loops never fires), it
+    changed nothing (stop), and its GPU hours are counted once."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        rep = make_run(root, "j1", losses=FLAT, tuned=0.52)
+        o1 = decide_cli(rep)
+        assert o1["loop"] == 1 and o1["action"] != "stop", o1
+        o2 = decide_cli(rep)
+        assert o2["loop"] == 2 and o2["action"] == "stop" and o2["rule"] == "gain below min_gain", o2
+        d1, d2 = (json.loads(Path(o["decision_path"]).read_text()) for o in (o1, o2))
+        assert d2["gpu_hours_used"] == d1["gpu_hours_used"], (d1["gpu_hours_used"], d2["gpu_hours_used"])
+
+
+def test_empty_targets_use_defaults():
+    """The dashboard sends null for an empty number field and validate_spec accepts it. A null max_loops or
+    min_gain must mean "use the default", not crash after a full GPU loop."""
+    sys.path.insert(0, str(ROOT))
+    from ftc.report_convert import to_spec_io
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        pdir = root / "pipelines" / "demo"
+        pdir.mkdir(parents=True)
+        (pdir / "pipeline.json").write_text(json.dumps({"pipeline_id": "demo", "loop": 1, "links": {}}))
+        (pdir / "task_spec.json").write_text(json.dumps({
+            "targets": {"target_score": 0.95, "max_loops": None, "min_gain": None, "max_general_drop": None},
+            "budget": {"max_api_usd": None, "max_gpu_hours": None}}))
+        outs = []
+        for n, (job, kw) in enumerate([("j1", dict(losses=FLAT, tuned=0.52)),
+                                       ("j2", dict(losses=FLAT, tuned=0.5, cfg={"rank": 64}, parent="j1"))], 1):
+            conv = to_spec_io(json.loads(make_run(root, job, **kw).read_text()), pipeline_id="demo", loop=n,
+                              split="dev", job_id=job)
+            dest = pdir / "loops" / str(n) / "eval" / "eval_report.json"
+            dest.parent.mkdir(parents=True)
+            dest.write_text(json.dumps(conv))
+            outs.append(decide_cli(dest))
+        assert outs[0]["action"] == "retrain", outs[0]
+        assert outs[1]["rule"] == "gain below min_gain", outs[1]   # the default min_gain (0.02) applied
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
