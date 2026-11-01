@@ -105,9 +105,15 @@ Most users skip the questions, so M1 fills the gaps and **records what it filled
   Once the field no longer holds that value (the user edited it), `ftc/spec.py` drops the entry. The dashboard marks
   these fields with a dashed border and lists them; the model card and `final_report.json` list them too.
 - No real examples after the answers → M1 searches Hugging Face (`ftc/real_data.py`, Decision 4 source 2): Claude
-  writes search terms, picks a dataset that fits and whose licence allows use, and names its input/output columns; up
-  to 30 rows become `seed_examples` with `source: "real"` and `source_ref: "huggingface:<id>/<config>/<split>#<row>"`.
-  The search itself is kept in `m1.real_search`. Needs an API key and internet; `FTC_HF_SEARCH=0` turns it off.
+  writes search terms, picks a dataset that fits and whose licence allows use, and names its answer column plus
+  **all input columns and a template** that joins them into our input shape (e.g. `"Schema:\n{context}\n\nQuestion: {question}"`).
+  Before anything is imported, the rows pass a **quality gate**: code checks (no empty cells, answer not in the
+  input, one input never has two answers, the answer fits `output.format_regex` after light fixes such as a missing
+  `;`, a SQL answer runs on its schema) and then Claude reviews every row (is the input complete and answerable,
+  is the answer correct?). If under 60 % of rows pass, or the review can't run, nothing is imported. Up to 30 good
+  rows become `seed_examples` with `source: "real"` and `source_ref: "huggingface:<id>/<config>/<split>#<row>"`.
+  The search, the column mapping and the gate's counts are kept in `m1.real_search` (`columns`, `quality`).
+  Needs an API key and internet; `FTC_HF_SEARCH=0` turns it off.
 
 ## 3. Hand-off files
 
@@ -132,16 +138,30 @@ and exits 1 (no `train_path` yet), so the contamination check always uses this p
  "difficulty": "easy", "source": "synthetic", "source_ref": null, "base_pass_rate": null}
 ```
 - `question` = plain user text. **Required**: `format_data.py --bench` reads it for the contamination check.
-- `scoring` = `exact` · `json` · `judge`: how `finetune-eval` scores the item (its `scoring.py`). BenchGen sets it;
-  `judge` items carry the answer key / rubric in a `GRADING NOTE` at the end of `reference`.
+- `scoring` = `sql` · `exact` · `json` · `judge`: how `finetune-eval` scores the item (its `scoring.py`). BenchGen sets
+  it, preferring anything that can be **run or matched in code** over the judge:
+  - `sql`: the reply is run against the reference query on test databases and the results are compared
+    (`finetune_common/sqlexec.py`: seeded random rows plus the item's optional `fixture`, a list of INSERT
+    statements that make tempting wrong queries give a different answer). The SQL is pulled out of the reply first,
+    so prose or ``` fences never change the score (they only set `format_ok: false`). Eval also runs older `judge`
+    items whose reference is a query and whose prompt has the `CREATE TABLE` schema. Falls back to the judge if
+    the reference can't be run.
+  - `judge` items (and `sql` ones, for the fallback) carry the answer key / rubric in a `GRADING NOTE` at the end
+    of `reference`. The judge grades the **final answer only**: reasoning is neither required nor rewarded unless
+    the note asks for an explanation. Format is checked separately by code (`bench_meta.json` `format_regex`).
 - Extra fields (`grading`, `verify`) are BenchGen's own analysis data; consumers ignore them.
 - `bench/safety.jsonl` (optional, for finetune-eval's M9): same item shape, `category` = `should_refuse` | `should_help`.
   BenchGen copies it from `--safety-file`; it does not write safety prompts itself.
 - `messages` = exactly what the model is sent (no assistant turn). `reference` = the ideal reply, as a **string**
   (for JSON tasks, the JSON text; the scorer parses it).
-- `category` ∈ `["typical cases"] + spec.edge_cases`. That makes failures map straight onto feedback categories.
+- `category` ∈ `["typical cases"] + spec.edge_cases` (+ `"misleading inputs (the obvious answer is wrong)"` when no
+  edge case is about misleading inputs). That makes failures map straight onto feedback categories.
+  Shares (`finetune_common/categories.py`, same for DataGen's training data): typical 40 %, **misleading inputs
+  25 % always**, the other edge cases share the rest.
 - `source`: `synthetic` · `user` (from seed_examples) · `real` (PubMed, HF…; put the id in `source_ref`).
 - `base_pass_rate`: optional, from M6's difficulty check (drop items the base model always gets right).
+- finetune-eval's `outputs.jsonl` rows carry `graded_by` (`sql` · `exact` · `json` · `empty` · `judge`), and each
+  system's summary in `report.json` counts them (`graded_by: {"sql": 268, "judge": 12}`).
 
 `bench/bench_report.json`: `{n_generated, n_rejected, n_dev, n_heldout, writer_model, checker_models, dropped_too_easy, created_at}`.
 The benchmark is written **once** and stays fixed across loops.

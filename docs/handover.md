@@ -23,10 +23,21 @@ looks different, trust the repo and **update this file** (whoever merges or open
   - **#27** hosting the dashboard (`docs/hosting.md`): `server.py --read-only` behind a Cloudflare tunnel for a
     live public link, and `scripts/export_static.py` for a frozen copy (Netlify / GitHub Pages) that outlives
     Brev. The normal server has no login: never expose it. Export the real run before stopping Brev.
-  - **BenchGen skips refused categories** (branch `worktree-bench-skip-refused`): when Claude declines to write
+  - **#24** five fixes before the final runs (training-speed estimate, best adapter vs forgetting, DataGen
+    stall/dedupe, real format check). Before final runs: move smoke runs out of `runs/` on Brev, set
+    `FTC_MAX_JOB_HOURS` if jobs may exceed 1 h. Still open: the forgetting check fires on noise at small M8 sizes.
+  - **Grading + data quality** (#26, merged), from the weak NL→SQL run (tuned 48 % vs few-shot
+    49 %): the HF importer had taken only the schema column, so all 30 "real" held-out items had no question
+    (even Claude scored 10 %), and the Evaluator then asked for more "typical cases", which made loop 2 worse.
+    Fixes: importer joins several input columns and gates rows (code checks + Claude review) before import;
+    SQL answers are graded by running them (`finetune_common/sqlexec.py`) instead of the judge; the judge grades
+    the final answer only (no penalty for missing or extra reasoning); misleading inputs are always 25 % of
+    training data and benchmark. Re-scored by execution, that run's 70 valid items give tuned 71 %, few-shot
+    70 %, zero-shot 71 %, teacher 97 %: tuning still adds nothing there, so the next lever is the data.
+  - **BenchGen skips refused categories** (#25, merged): when Claude declines to write
     prompts for a category (e.g. "user asks for harmful content that should be declined"), BenchGen now drops
     that cell and moves its items to the others, instead of failing the whole benchmark after 3 restarts.
-    API errors still stop it as before. Tested, merge it.
+    API errors still stop it as before.
   - **#18** eval job survives `install.sh` (an eval crashed on Brev because `install.sh` re-copied the skill
     folder it was running in); `install.sh` now skips unchanged skills. Small, tested, merge it.
   - **#12 (+ #14 merged into it)** *agent mode*: the pipeline run by real ScienceClaw agents handing work
@@ -46,7 +57,7 @@ looks different, trust the repo and **update this file** (whoever merges or open
 - GPU: NVIDIA Brev instance (shared Linux box, repo at `~/finetuner`). `bash scripts/setup_brev.sh` once,
   `bash scripts/install.sh` after every `git pull`. Stop the instance when idle.
 - Keys live in `~/finetuner/.env` (gitignored; template `.env.example`): `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`,
-  `OPENAI_API_KEY` (needed since #11: Sol verifies data and judges), HF token.
+  `OPENAI_API_KEY` (needed: Sol writes the training data), HF token.
 
 ## 3. Pipeline and code map
 
@@ -70,10 +81,10 @@ output keys must only match the intended next skill's `--flags` (`tests/test_han
 
 | Role | Model | Override |
 |---|---|---|
-| M2 generate training data | Gemini Flash (`gemini-3.6-flash`) | `FINETUNE_LLM_BACKEND`, `GEMINI_MODEL` |
-| M3 verify training data | **OpenAI Sol** (`gpt-6.1-sol`) | `DATAGEN_VERIFY_BACKEND` (`same` = Gemini), `FINETUNE_OPENAI_MODEL` |
+| M2 generate training data | **OpenAI Sol** (`gpt-6.1-sol`) since Nov 1, was Gemini Flash (decisions.md 2b) | `DATAGEN_GEN_BACKEND`, `DATAGEN_GEN_MODEL` |
+| M3 verify training data | **Claude Sonnet** (`claude-sonnet-5-5`) since Nov 1, was Sol | `DATAGEN_VERIFY_BACKEND` (`same` = the writer), `FINETUNE_ANTHROPIC_MODEL` |
 | M5/M6 write + check benchmark | Claude Opus (`claude-opus-5-5`) | `BENCHGEN_MODEL` |
-| M7 judge | **OpenAI Sol** | `FINETUNE_JUDGE_MODEL`, spec `models.judge` (`gpt-*` or `claude-*`) |
+| M7 judge | **Claude Sonnet** (`claude-sonnet-5-5`) since Nov 1, was Sol (decisions.md 2b) | `FINETUNE_JUDGE_MODEL`, spec `models.judge` (`gpt-*` or `claude-*`) |
 | M7 teacher (ceiling), M1 spec | Claude Sonnet (`claude-sonnet-5-5`) | `FINETUNE_TEACHER_MODEL`, `FTC_M1_MODEL` |
 | Student | `Qwen/Qwen3-4B-Instruct-2507` | spec `models.student` |
 
@@ -213,8 +224,9 @@ clamped, reasons saved in `run.json`). For other GPU work check yourself: GPU id
   like ants with pheromone trails).
 - **Closed feedback loop between agents.** The Evaluator posts either a retrain config (TrainAgent picks it
   up) or "more data on weak categories" (DataAgent picks it up). The system improves itself loop by loop.
-- **Checks and balances between model families.** Gemini writes data, Sol audits it; Opus writes the exam,
-  Sol grades it; BenchAgent never sees the training data. No agent grades its own work. The decision rule
+- **Checks and balances between model families.** Sol writes data, Claude Sonnet audits it; Opus writes the exam,
+  Claude Sonnet grades answers (runnable ones are executed instead); BenchAgent never sees the training data.
+  The judge is never the data writer's family. The decision rule
   ("tuned must beat base few-shot") compares two non-Claude systems.
 - **Parallel work.** DataAgent and BenchAgent work on the same spec at the same time.
 - **Full provenance.** Every artifact carries its parents and a content hash: the final adapter traces back

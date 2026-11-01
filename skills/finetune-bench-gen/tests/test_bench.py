@@ -30,8 +30,13 @@ per_cat = {}
 for cell, n in q.items():
     per_cat[cell.split("||")[0]] = per_cat.get(cell.split("||")[0], 0) + n
 check("quota sums to n_items", sum(q.values()) == 200)
-check(f"typical cases get 40% ({per_cat['typical cases']}), edge cases 30 each",
-      per_cat["typical cases"] == 80 and all(per_cat[c] == 30 for c in SPEC["edge_cases"]))
+others = [c for c in SPEC["edge_cases"] if c != "Trick questions"]
+check(f"typical 40% ({per_cat['typical cases']}), misleading ('Trick questions') 25%, the other edge cases share 35%",
+      per_cat["typical cases"] == 80 and per_cat["Trick questions"] == 50
+      and all(per_cat[c] in (23, 24) for c in others) and sum(per_cat[c] for c in others) == 70)
+q2 = B.build_quota({**SPEC, "edge_cases": ["Word problems"]}, 100)
+check("no misleading category in the spec: the generic one is added at 25%",
+      abs(sum(n for cell, n in q2.items() if cell.startswith("misleading inputs")) - 25) <= 1)   # rounding per cell
 check("difficulty spread 30/40/30 within typical",
       [q[f"typical cases||{d}"] for d in ("easy", "medium", "hard")] == [24, 32, 24])
 check("odd sizes still sum exactly", all(sum(B.build_quota(SPEC, n).values()) == n for n in (7, 33, 61, 199)))

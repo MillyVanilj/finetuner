@@ -25,11 +25,15 @@ def _judge_warnings(spec):
     return [w for w in check_spec(spec)[2] if "models.judge" in w]
 
 
-def test_defaults_and_examples_use_sol():
-    assert DEFAULTS["models"]["verifier"] == DEFAULTS["models"]["judge"] == "gpt-6.1-sol"
+def test_defaults_keep_families_apart():
+    """Sol writes the training data; Claude Sonnet checks it and judges (decisions.md 2b): no family grades its own data."""
+    m = DEFAULTS["models"]
+    assert m["generator"] == "gpt-6.1-sol" and m["verifier"] == m["judge"] == "claude-sonnet-5-5"
     for f in ("chem_qa.json", "pubmed_extract.json"):
-        m = load_spec(ROOT / "examples/specs" / f)["models"]
-        assert m["verifier"] == m["judge"] == "gpt-6.1-sol", f
+        e = load_spec(ROOT / "examples/specs" / f)["models"]
+        assert e["generator"] == "gpt-6.1-sol" and e["verifier"] == e["judge"] == "claude-sonnet-5-5", f
+    src = (ROOT / "skills/finetune-eval/scripts/eval/run_eval.py").read_text()
+    assert 'FINETUNE_JUDGE_MODEL") or "claude-sonnet-5-5"' in src
 
 
 def test_no_false_judge_warning_for_sol_or_claude():
@@ -37,10 +41,10 @@ def test_no_false_judge_warning_for_sol_or_claude():
     for judge in ("gpt-6.1-sol", "claude-sonnet-5-5"):
         assert _judge_warnings({**base, "models": {**base["models"], "judge": judge}}) == [], judge
     w = _judge_warnings({**base, "models": {**base["models"], "judge": "gemini-3.6-flash"}})
-    assert len(w) == 1 and "gpt-6.1-sol" in w[0]
+    assert len(w) == 1 and "claude-sonnet-5-5" in w[0]
 
 
-def test_eval_skill_passes_a_sol_judge_from_the_spec():
+def test_eval_skill_passes_the_spec_judge():
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp).resolve()
         pl = Pipeline.create(load_spec(ROOT / "examples/specs/chem_qa.json"), root=tmp / "pipelines")
@@ -49,7 +53,7 @@ def test_eval_skill_passes_a_sol_judge_from_the_spec():
         (job / "run.json").write_text(json.dumps({"pipeline_dir": str(pl.dir)}))
         os.environ.pop("FINETUNE_JUDGE_MODEL", None)
         fe = _load("fe_sol", "skills/finetune-eval/scripts/finetune_eval.py")
-        assert fe._spec_judge(str(job / "adapter")) == "gpt-6.1-sol"
+        assert fe._spec_judge(str(job / "adapter")) == "claude-sonnet-5-5"
 
 
 def test_run_eval_checks_keys_before_gpu_work(monkeypatch):

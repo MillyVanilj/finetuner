@@ -77,6 +77,7 @@ class DataFake:
             s.i += 1
         return json.dumps(out)
 dfake = DataFake()
+os.environ["DATAGEN_GEN_BACKEND"] = "default"   # use the patched get_llm_client fake, never a real writer API
 G.get_llm_client = lambda name: dfake
 dres = None
 for _ in range(6):

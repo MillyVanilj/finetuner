@@ -83,6 +83,88 @@ def test_llm_assumptions_get_their_values_and_search_runs_when_no_examples():
     assert not any("real_sources" in w for w in check_spec(s)[2])   # the report reads it now
 
 
+def keep_all(text):
+    """Stubbed quality review: keep every row."""
+    return json.dumps({"rows": [{"i": r["i"], "keep": True, "reason": "ok"} for r in json.loads(text)["rows"]]})
+
+
+def stub(pick, review=keep_all):
+    """Stubbed Claude for real_data.find: search terms, then `pick`, then the row review."""
+    def call(client, text, system=None):
+        if system == real_data.QUERY_SYSTEM:
+            return '{"queries": ["x"]}'
+        if system == real_data.CHECK_SYSTEM:
+            return review(text)
+        return pick
+    return call
+
+
+SQL_ROWS = [  # shaped like b-mc2/sql-create-context: the question and the schema are separate columns
+    {"question": "How many heads are older than 56?", "context": "CREATE TABLE head (age INTEGER)",
+     "answer": "SELECT COUNT(*) FROM head WHERE age > 56"},
+    {"question": "List all ages, youngest first.", "context": "CREATE TABLE head (age INTEGER)",
+     "answer": "SELECT age FROM head ORDER BY age"},
+    {"question": "Name of the department with the largest budget?", "context": "CREATE TABLE department (name VARCHAR, budget INTEGER)",
+     "answer": "SELECT name FROM department ORDER BY budget DESC LIMIT 1"},
+    {"question": "How many departments are there?", "context": "CREATE TABLE department (name VARCHAR, budget INTEGER)",
+     "answer": "SELECT COUNT(*) FROM department"},
+    {"question": "Ages of heads?", "context": "CREATE TABLE head (age INTEGER)", "answer": "SELECT nope FROM head"},
+]
+SQL_SPEC = {"task": "write SQLite for a question about a schema", "io_format": "one SQL query ending in ;",
+            "input": {"example": "Schema:\nCREATE TABLE t (x INT);\n\nQuestion: how many rows?"},
+            "output": {"format_regex": r"^\s*(?i:select|with)[\s\S]*;\s*$"}}
+
+
+def sql_pages():
+    feats = [{"name": k, "type": {"dtype": "string"}} for k in ("question", "context", "answer")]
+    pages = {"huggingface.co/api/datasets": [{"id": "b-mc2/sql-create-context", "tags": ["license:cc-by-4.0"]}],
+             "/splits": {"splits": [{"config": "default", "split": "train"}]},
+             "/first-rows": {"features": feats, "rows": [{"row_idx": 0, "row": SQL_ROWS[0]}]},
+             "/rows": {"rows": [{"row_idx": i, "row": r} for i, r in enumerate(SQL_ROWS)]}}
+    return lambda url, timeout=10: next(v for k, v in pages.items() if k in url.split("?")[0])
+
+
+def run_find(get, call, spec):
+    orig = real_data._get
+    real_data._get = get
+    try:
+        return real_data.find(None, call, spec)
+    finally:
+        real_data._get = orig
+
+
+def test_real_data_rejects_a_mapping_that_drops_the_question():
+    # The bug from the NL-to-SQL run: only the schema column was taken, so the question was lost.
+    r = run_find(sql_pages(), stub('{"dataset": "b-mc2/sql-create-context", "input": "context", "output": "answer"}'), SQL_SPEC)
+    assert r["seed_examples"] == [] and "failed the quality check" in r["why"]
+    assert any("same input has different answers" in k for k in r["quality"]["dropped"])
+
+
+def test_real_data_joins_input_columns_and_fits_the_output():
+    pick = json.dumps({"dataset": "b-mc2/sql-create-context", "input_columns": ["context", "question"],
+                       "input_template": "Schema:\n{context}\n\nQuestion: {question}", "output": "answer"})
+    r = run_find(sql_pages(), stub(pick), SQL_SPEC)
+    seeds = r["seed_examples"]
+    assert len(seeds) == 4 and r["dataset"] == "b-mc2/sql-create-context"      # the broken query is dropped
+    assert seeds[0]["input"] == "Schema:\nCREATE TABLE head (age INTEGER)\n\nQuestion: How many heads are older than 56?"
+    assert seeds[0]["output"] == "SELECT COUNT(*) FROM head WHERE age > 56;"   # fitted to the format regex
+    assert r["quality"]["dropped"] == {"the SQL answer does not run on the schema in the input": 1}
+    assert r["columns"]["input"] == ["context", "question"]
+
+
+def test_real_data_review_rejects_rows_and_must_run():
+    pick = json.dumps({"dataset": "b-mc2/sql-create-context", "input_columns": ["context", "question"],
+                       "input_template": "{context}\n{question}", "output": "answer"})
+    drop_all = lambda text: json.dumps({"rows": [{"i": r["i"], "keep": False, "reason": "no question"} for r in json.loads(text)["rows"]]})
+    r = run_find(sql_pages(), stub(pick, drop_all), SQL_SPEC)
+    assert r["seed_examples"] == [] and "4x review: no question" in r["why"]
+    broken = run_find(sql_pages(), stub(pick, lambda text: "not json"), SQL_SPEC)   # review can't run: import nothing
+    assert broken["seed_examples"] == [] and "quality check could not run" in broken["why"]
+    leak = json.dumps({"dataset": "b-mc2/sql-create-context", "input_columns": ["context"],
+                       "input_template": "{context} {answer}", "output": "answer"})
+    assert "template" in run_find(sql_pages(), stub(leak), SQL_SPEC)["why"]       # the answer may not be in the input
+
+
 def test_real_data_find_maps_columns_and_class_labels():
     pages = {
         "huggingface.co/api/datasets": [{"id": "org/reviews", "tags": ["license:mit"], "downloads": 9}, {"id": "org/gated", "gated": "auto"}],
@@ -102,22 +184,24 @@ def test_real_data_find_maps_columns_and_class_labels():
     def call(client, text, system=None):
         if system == real_data.QUERY_SYSTEM:
             return '{"queries": ["movie reviews"]}'
+        if system == real_data.CHECK_SYSTEM:
+            return keep_all(text)
         assert [c["id"] for c in json.loads(text)["candidates"]] == ["org/reviews"]   # the gated one is skipped
         return '{"dataset": "org/reviews", "input": "text", "output": "label", "license": "mit", "why": "fits"}'
     orig = real_data._get
     real_data._get = get
     try:
         r = real_data.find(None, call, {"task": "classify sentiment"})
-        coded = real_data.find(None, lambda c, t, system=None: '{"queries": ["x"]}' if system == real_data.QUERY_SYSTEM
-                               else '{"dataset": "org/reviews", "input": "text", "output": "text", "output_map": {"awful": "bad"}}', {})
-        bad = real_data.find(None, lambda c, t, system=None: '{"queries": ["x"]}' if system == real_data.QUERY_SYSTEM
-                             else '{"dataset": "org/reviews", "input": "nope", "output": "label"}', {"task": "t"})
+        coded = real_data.find(None, stub('{"dataset": "org/reviews", "input": "text", "output": "label", "output_map": {"negative": "bad"}}'), {})
+        same = real_data.find(None, stub('{"dataset": "org/reviews", "input": "text", "output": "text"}'), {})
+        bad = real_data.find(None, stub('{"dataset": "org/reviews", "input": "nope", "output": "label"}'), {"task": "t"})
     finally:
         real_data._get = orig
     assert [(e["input"], e["output"]) for e in r["seed_examples"]] == [("great film", "positive"), ("awful", "negative")]
     assert r["seed_examples"][0]["source"] == "real" and r["seed_examples"][1]["source_ref"] == "huggingface:org/reviews/default/test#1"
     assert any("split=test" in u for u in seen) and r["license"] == "mit"
-    assert [e["output"] for e in coded["seed_examples"]] == ["great film", "bad"]   # codes mapped to replies
+    assert [e["output"] for e in coded["seed_examples"]] == ["positive", "bad"]     # codes mapped to replies
+    assert same["seed_examples"] == [] and "answer column is also an input column" in same["why"]
     assert bad["seed_examples"] == [] and bad["why"]
     # offline / broken: never raises
     assert real_data.find(None, lambda *a, **k: 1 / 0, {})["why"].startswith("search failed")

@@ -6,6 +6,7 @@ import contextlib, io, json, os, re, sys, tempfile, threading, time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 os.environ.setdefault("DATAGEN_VERIFY_BACKEND", "same")   # offline: M3 uses the fake M2 client, not OpenAI Sol
+os.environ["DATAGEN_GEN_BACKEND"] = "default"              # offline: M2 uses the patched get_llm_client fake
 import gen_data
 from gen_data import call_llm, call_json_list, plan_batch, update_per_ex, est_round
 
@@ -269,6 +270,10 @@ L.LLM_CALL_CAP_S = 0.6
 again = agent_calls("hopeless", SlowCheck(0.01), 6, budget="3")     # a faster checker / new settings
 L.LLM_CALL_CAP_S = 18.0
 check("new settings (different budget) -> tries again and finishes", again[-1][0].get("done"))
+
+head = "Extract the key trial facts from this abstract as JSON.\n\nBackground: "
+check("dedupe compares whole prompts, not the first 60 characters",
+      len({gen_data._user_key({"messages": [{"role": "user", "content": head + f"study {i}"}]}) for i in range(5)}) == 5)
 
 print(f"\n{'ALL PASSED' if not fails else f'{fails} FAILED'}")
 sys.exit(1 if fails else 0)
