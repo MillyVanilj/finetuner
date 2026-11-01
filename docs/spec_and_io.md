@@ -78,7 +78,7 @@ validation warns when one is changed from its default, so nobody expects it to t
 | `scoring.pass_threshold` | | `0.5` | **not read yet** (planned: Eval) | Item counts as passed if its score ≥ this |
 | `benchmark.n_dev` / `n_heldout` | | 200 / 100 | BenchGen | Dev = scored every loop. Held-out = scored once, at the end |
 | `benchmark.seed_examples_to_heldout` | | `true` | BenchGen | Put the user's real examples in held-out |
-| `benchmark.real_sources` | | `[]` | **not read yet** (planned: BenchGen) | e.g. `["pubmed", "huggingface:<id>"]` |
+| `benchmark.real_sources` | | `[]` | Report (model card) | Where `seed_examples` came from besides the user, e.g. `["huggingface:<id>"]`; set by M1's search |
 | `targets.target_score` | | `null` | Evaluator | Stop when tuned dev score ≥ this |
 | `targets.min_gain` | | `0.02` | Evaluator | Stop when gain over the last loop is smaller |
 | `targets.max_loops` | | `3` | Evaluator | |
@@ -86,15 +86,28 @@ validation warns when one is changed from its default, so nobody expects it to t
 | `budget.max_api_usd` / `max_gpu_hours` | | 20 / 2 | `max_gpu_hours`: Trainer pre-flight, Evaluator. `max_api_usd`: **not read yet** | Hard stop |
 | `models.student/generator/verifier/bench_writer/judge` | | see `ftc/spec.py` | `student`: Trainer (every run). `judge`: Eval, if it is a `claude-…` model and `$FINETUNE_JUDGE_MODEL` isn't set (that machine-wide override wins). The other three: **not read yet** (DataGen and BenchGen pick their model from env/flags) | Different families per role (decisions.md, Decision 3). Validation warns if generator = judge |
 | `training` | | `{}` | Trainer (first run; later runs take the Evaluator's retrain config) | LoRA overrides: model, rank, alpha, lr, epochs, batch_size, grad_accum, max_length, seed (other keys are an error) |
-| `m1` | | | UI | `{goal, answers, source}`: how M1 produced the spec |
+| `m1` | | | UI, Report | How M1 produced the spec: `{goal, source, answers, assumptions, real_search?}`, see below |
 
 Examples: `examples/specs/chem_qa.json` (Owen's chemistry task, upgraded) and `examples/specs/pubmed_extract.json`
 (JSON extraction, field-F1 scoring).
 
 **M1 (prompt verification)** = `ftc/m1.py`. Use it from the dashboard's *New task* page, or with
-`python3 -m ftc.m1 "goal..."` in a terminal. It drafts the spec with Claude and asks at most 5 clarifying questions,
+`python3 -m ftc.m1 "goal..."` in a terminal. It drafts the spec with Claude and asks at most 3 clarifying questions,
 each with a default, then applies the answers. It runs *before* the agents, because ScienceClaw can't pause to ask
-a human. Without an API key it returns a template.
+a human. Without an API key it returns a template, guessing the reply type from words in the goal ("as JSON",
+"classify … as a, b or c", "how many").
+
+Most users skip the questions, so M1 fills the gaps and **records what it filled**:
+- `m1.answers`: `{"q1": {"question", "answer", "default"}}`; `answer: null` means skipped (the default was used).
+  The dashboard's *Use all defaults* button skips them all.
+- `m1.assumptions`: every value the user never gave:
+  `[{"field": "targets.target_score", "value": 0.8, "by": "m1"|"rule"|"template"|"default"|"search", "why": "..."}]`.
+  Once the field no longer holds that value (the user edited it), `ftc/spec.py` drops the entry. The dashboard marks
+  these fields with a dashed border and lists them; the model card and `final_report.json` list them too.
+- No real examples after the answers → M1 searches Hugging Face (`ftc/real_data.py`, Decision 4 source 2): Claude
+  writes search terms, picks a dataset that fits and whose licence allows use, and names its input/output columns; up
+  to 30 rows become `seed_examples` with `source: "real"` and `source_ref: "huggingface:<id>/<config>/<split>#<row>"`.
+  The search itself is kept in `m1.real_search`. Needs an API key and internet; `FTC_HF_SEARCH=0` turns it off.
 
 ## 3. Hand-off files
 
@@ -189,7 +202,7 @@ Overwrite it every ~20 items (`Pipeline.progress("eval", ...)` does this):
 Skills that take a spec should accept `--spec`, optionally with `--task-spec-path` as an alias.
 
 ### 3.7 Final report: `final/final_report.json`
-`{pipeline_id, best_loop, train_job_id, adapter_path, hub_url, infinite_post_url, heldout: {systems, by_source}, dev_history: [{loop, tuned}], model_card_path, created_at}`.
+`{pipeline_id, best_loop, train_job_id, adapter_path, hub_url, infinite_post_url, heldout: {systems, by_source}, dev_history: [{loop, tuned}], assumptions, model_card_path, created_at}`. `assumptions` is the spec's `m1.assumptions`.
 
 ### 3.8 Training progress (Trainer → UI): already exists
 `runs/<job_id>/status.json` (live), plus **new** `runs/<job_id>/train_log.jsonl`: `train_sft.py` now appends every
