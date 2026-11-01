@@ -20,6 +20,10 @@ looks different, trust the repo and **update this file** (whoever merges or open
   writes the benchmark), #13 BenchGen JSON-fence parsing fix, #17 BenchGen says why a job stopped + dashboard
   clears a stale "Failed" after a reset.
 - **Open:**
+  - **BenchGen skips refused categories** (branch `worktree-bench-skip-refused`): when Claude declines to write
+    prompts for a category (e.g. "user asks for harmful content that should be declined"), BenchGen now drops
+    that cell and moves its items to the others, instead of failing the whole benchmark after 3 restarts.
+    API errors still stop it as before. Tested, merge it.
   - **#18** eval job survives `install.sh` (an eval crashed on Brev because `install.sh` re-copied the skill
     folder it was running in); `install.sh` now skips unchanged skills. Small, tested, merge it.
   - **#12 (+ #14 merged into it)** *agent mode*: the pipeline run by real ScienceClaw agents handing work

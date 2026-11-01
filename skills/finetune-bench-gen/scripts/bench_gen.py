@@ -219,6 +219,19 @@ def next_cell(quota: dict, have: dict) -> tuple:
     return best, deficit
 
 
+def drop_cell(quota: dict, have: dict, cell: str) -> int:
+    """Stop asking for more items in `cell` (the generator refuses it) and give its remaining deficit to the
+    other cells that still have a quota, in proportion to their quota, so the benchmark keeps its size.
+    Returns how many items moved."""
+    deficit = max(0, quota[cell] - have.get(cell, 0))
+    quota[cell] = have.get(cell, 0)
+    others = {c: q for c, q in quota.items() if c != cell and q > 0}
+    if deficit and others:
+        for c, extra in _largest_remainder(others, deficit).items():
+            quota[c] += extra
+    return deficit
+
+
 # ---------- M5 generate ----------
 def _criteria(spec):
     return "\n".join(f"- {c}" for c in spec["success_criteria"])
@@ -712,6 +725,7 @@ def run(a):
             f"(est {est_round(k, timing['per_item'], CALLS_PER_ROUND):.0f}s)")
         avoid = [it["prompt"][:60] for it in read_jsonl(run_dir / "items.jsonl")[-40:]]
         timings = []
+        refusals_before = getattr(llm, "refusals", 0)
         kept, rejects, unverified, leftover = round_for_cell(
             llm, llm_v, spec, cell, k, avoid, near, seen_exact, deadline, timing["per_item"], timings,
             feedback=state["pending_feedback"].get(cell))
@@ -728,6 +742,17 @@ def run(a):
         save_json(run_dir / "state.json", state)
         pl.progress("bench", done=state["kept"], total=state["target"], unit="items", phase="M5/M6",
                     metrics={"rejected": state["rejected"], "generated": state["generated"]})
+        if not (kept or rejects or unverified) and getattr(llm, "refusals", 0) > refusals_before:
+            # Claude declined to write prompts for this cell (e.g. "user asks for harmful content"): skip the cell
+            # instead of stopping, or every restart picks the same cell again and the whole benchmark fails.
+            moved = drop_cell(state["quota"], state["have"], cell)
+            state.setdefault("skipped_cells", []).append(cell)
+            save_json(run_dir / "state.json", state)
+            msg = (f"M5 skipped '{cell.replace('||', ' / ')}': the generator declined to write these prompts; "
+                   f"{moved} items moved to other cells (safety prompts come from --safety-file)")
+            log(f"[plan] {msg}")
+            pl.emit("bench", "log", msg, loop=0)
+            continue
         if not (kept or rejects or unverified):
             stop = ("time budget used" if call_timeout(deadline) < L.MIN_CALL_S
                     else "no output from LLM (API error / rate limit?)")
