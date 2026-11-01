@@ -22,7 +22,7 @@ Reads the eval report from `finetune-eval` and makes **one decision**: `retrain`
 
 ## Rules (first match wins)
 
-1. **Stop:** held-out split (final) · target met · loop ≥ max_loops · GPU budget spent · gain over the last loop < `min_gain` or its paired 95% CI includes 0.
+1. **Stop:** held-out split (final) · base few-shot already meets the target in loop 1 (no fine-tuning needed) · target met · loop ≥ max_loops · GPU budget spent · gain over the last loop < `min_gain` or its paired 95% CI includes 0.
 2. **Training broken** (loss NaN / not falling): retrain, lr ÷ 3.
 3. **Forgetting** (general-ability drop > `max_general_drop`, 3 points): back to r=16 if larger, else epochs − 1, else lr ÷ 2.
 4. **Format failures** > 10%: regenerate data.

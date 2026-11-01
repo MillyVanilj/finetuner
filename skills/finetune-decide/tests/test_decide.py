@@ -71,6 +71,11 @@ def t_target_met(root):
     assert out["action"] == "stop" and out["rule"] == "target met", out
 
 
+def t_base_fewshot_meets_target(root):
+    out = decide(make_run(root, "j1", tuned=0.78, few=0.85), "--target-score", "0.8")
+    assert out["action"] == "stop" and out["rule"] == "base few-shot meets target", out
+
+
 def t_underfit_rank64(root):
     out = decide(make_run(root, "j1", losses=(1.9, 1.85, 1.82, 1.8, 1.8, 1.79), tuned=0.52, few=0.5))
     assert out["action"] == "retrain" and out["rule"] == "underfitting", out

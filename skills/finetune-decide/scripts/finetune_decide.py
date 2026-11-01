@@ -232,6 +232,9 @@ def decide(n, spec, d, cfg, loop, prev, gpu_h, fail_cats, job_id, extra_examples
     # 1. hard stops
     if n["split"] == "heldout":
         return stop("final held-out eval", f"held-out score {tuned:.3f}; the held-out split is scored once, at the end")
+    if T is not None and loop == 1 and few is not None and few >= T and tuned < T:
+        return stop("base few-shot meets target", f"base few-shot {few:.3f} already >= target {T} "
+                    f"(tuned {tuned:.3f}); prompting is enough, fine-tuning isn't needed")
     if T is not None and tuned >= T:
         return stop("target met", f"tuned dev score {tuned:.3f} >= target {T}")
     if loop >= spec["max_loops"]:
