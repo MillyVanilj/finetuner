@@ -28,6 +28,8 @@ Done:
 ```
 `adapter_path` is the hand-off key for the Evaluator.
 
+When the job finishes, it logs one `train done`/`failed` event (plus an `adapter_path` link) to the pipeline recorded in `run.json`, if any, for the dashboard.
+
 Exit codes: 0 ok · 1 failed/unknown job · 3 still running (only with `--require-done`).
 
 ## Example

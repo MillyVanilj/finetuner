@@ -36,6 +36,33 @@ def tail(path: Path, n=15):
         return []
 
 
+def report_to_pipeline(run, run_dir: Path, state, out):
+    """Tell the dashboard once when the job finishes (status is polled many times). Never raises."""
+    if state not in ("done", "failed") or not run.get("pipeline_dir"):
+        return
+    marker = run_dir / ".pipeline_reported"
+    if marker.exists():
+        return
+    try:
+        root = Path(os.environ.get("FINETUNER_DIR", Path.home() / "finetuner")).expanduser()
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+        from ftc.pipeline import Pipeline
+        pl = Pipeline.from_any(run["pipeline_dir"])
+        if not pl.active:
+            return
+        jid = out["train_job_id"]
+        if state == "done":
+            pl.link("adapter_path", out.get("adapter_path"), stage="train", append=True)
+            pl.emit("train", "done", f"Job {jid} done in {out.get('runtime_s')} s", train_job_id=jid,
+                    adapter_path=out.get("adapter_path"), metrics=out.get("metrics"))
+        else:
+            pl.emit("train", "failed", f"Job {jid} failed: {out.get('error')}", train_job_id=jid)
+        marker.touch()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def main():
     p = argparse.ArgumentParser(description="Check a fine-tuning job.")
     p.add_argument("--train-job-id", required=True)
@@ -83,6 +110,7 @@ def main():
     else:
         out["summary"] = f"Job {args.train_job_id}: {state}"
 
+    report_to_pipeline(run, run_dir, state, out)
     print(json.dumps(out))
     if state == "failed" or state == "unknown":
         sys.exit(1)

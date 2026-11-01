@@ -26,6 +26,7 @@ What it does, in order:
 | `--model --rank --alpha --lr --epochs` | no | Explicit overrides |
 | `--push-to-hub` | no | HF repo id to upload the adapter to (needs `HF_TOKEN`) |
 | `--dry-run` | no | Validate and write run.json only; don't train |
+| `--pipeline-dir` | no | Pipeline folder (`$FINETUNER_DIR/pipelines/<id>/`) for live dashboard events; else `$FTC_PIPELINE_DIR`. Without one, no events: training works the same |
 
 ## Output (JSON on stdout)
 

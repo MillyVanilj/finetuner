@@ -33,7 +33,29 @@ def log(*a):
     print(*a, file=sys.stderr)
 
 
+PL = None  # pipeline event log (dashboard); stays a no-op if there is no pipeline
+
+
+def get_pipeline(*candidates):
+    """ftc.pipeline.Pipeline for the first candidate path inside a pipeline dir (or $FTC_PIPELINE_DIR).
+    Never raises: the dashboard is optional and must not break training."""
+    try:
+        root = Path(os.environ.get("FINETUNER_DIR", Path.home() / "finetuner")).expanduser()
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+        from ftc.pipeline import Pipeline
+        for c in [*candidates, None]:
+            pl = Pipeline.from_any(c)
+            if pl.active:
+                return pl
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 def fail(msg, **extra):
+    if PL and not str(msg).startswith("GPU busy"):
+        PL.emit("train", "failed", f"finetune-submit: {msg}")
     print(json.dumps({"status": "error", "error": msg, "summary": f"finetune-submit failed: {msg}", **extra}))
     sys.exit(1)
 
@@ -105,11 +127,14 @@ def main():
     p.add_argument("--epochs", type=float)
     p.add_argument("--push-to-hub", help="HF repo id, e.g. user/run-001 (needs HF_TOKEN)")
     p.add_argument("--dry-run", action="store_true", help="Validate + write run.json, don't launch")
+    p.add_argument("--pipeline-dir", help="Pipeline folder for dashboard events (else $FTC_PIPELINE_DIR)")
     p.add_argument("--format", default="json")  # ScienceClaw may pass this; we always print JSON
     args, unknown = p.parse_known_args()  # ignore extras like --query that ScienceClaw passes
     if unknown:
         log(f"ignoring extra args: {unknown}")
 
+    global PL
+    PL = get_pipeline(args.pipeline_dir, args.retrain_config_path, args.train_path)
     root, runs, train_python, train_script = paths()
     data = Path(args.train_path).expanduser().resolve()
     n_examples, data_sha = validate_jsonl(data)
@@ -161,6 +186,7 @@ def main():
                     "adapter": str(run_dir / "adapter"), "metrics": str(run_dir / "metrics.json"),
                     "hub_repo": args.push_to_hub},
         "dry_run": args.dry_run,
+        "pipeline_dir": str(PL.dir) if PL else None,
     }
     (run_dir / "run.json").write_text(json.dumps(run_record, indent=2))
 
@@ -170,6 +196,11 @@ def main():
                                 cwd=str(run_dir), start_new_session=True)  # survives this skill exiting
         (run_dir / "train.pid").write_text(str(proc.pid))
         log(f"launched pid {proc.pid}")
+        if PL:
+            PL.link("train_job_id", job_id, stage="train", append=True)
+            PL.emit("train", "start", f"LoRA r={cfg['rank']} lr={cfg['lr']} epochs={cfg['epochs']} on "
+                    f"{n_examples} examples ({cfg['model']})", train_job_id=job_id, run_dir=str(run_dir),
+                    parent_job_id=args.parent_job_id)
 
     print(json.dumps({
         "status": "dry_run" if args.dry_run else "submitted",
