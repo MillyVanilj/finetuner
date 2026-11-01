@@ -18,7 +18,7 @@ Reads one eval report and applies fixed rules (`docs/evaluator-notes.md`) to pic
 
 Everything else is found from the report: the pipeline folder (searched in every parent folder of the report, `--spec` or `$FTC_PIPELINE_DIR`) and the training run next to `adapter_path` (`metrics.json` for the loss curve, `run.json` for settings and training data, `eval_<split>/outputs.jsonl` for per-item scores). Unknown flags are ignored.
 
-**Loops without a pipeline folder** (plain ScienceClaw agents) are counted in `<bench dir>/.evaluator_history.jsonl`, one entry per training job, so `max_loops` and "no gain" still work.
+**Loops without a pipeline folder** (plain ScienceClaw agents) are counted in `<bench dir>/.evaluator_history.jsonl`, one entry per evaluation the Evaluator receives, so `max_loops` and "no gain" still work. A reused training job (finetune-submit found identical data and settings) therefore counts as a new loop; it changed nothing, so the "no gain" rule stops there, and its GPU hours are counted once. Re-running the Evaluator by hand on the same report also counts as a loop (it can stop sooner, never later); inside a pipeline folder, loops are numbered exactly.
 
 ## Rules (in order; the first that fires wins)
 
