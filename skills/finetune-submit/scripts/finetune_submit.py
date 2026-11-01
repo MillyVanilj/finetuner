@@ -286,6 +286,9 @@ def main():
     if decision in ("wait", "refuse") and not args.dry_run:
         if PL:
             PL.emit("train", "log" if decision == "wait" else "failed", f"Pre-flight {decision}: {reason}")
+            if decision == "refuse":  # no train_job_id is emitted, so the agent chain ends here: show it as a stop
+                PL.emit("decide", "decision", f"Stopped: training refused by pre-flight ({reason})",
+                        action="stop", stop_reason=f"preflight_refused: {reason}", decided_by="finetune-submit")
         print(json.dumps({"status": "error", "error": f"pre-flight {decision}: {reason}", "retry": decision == "wait",
                           "preflight": preflight_record,
                           "summary": f"Not training ({decision}): {reason}"}))
