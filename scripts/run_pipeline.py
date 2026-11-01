@@ -219,7 +219,8 @@ def run_datagen(pl: Pipeline, spec_path: Path, run_id: str, loop: int, note: str
             linked = True
         if out.get("error") or (rc != 0 and not out):
             raise RunnerError(f"DataGen failed: {out.get('error') or err}")
-        progress = tuple(out.get(k) for k in ("raw_kept", "rejected_total", "pending_verify", "unverified_total"))
+        # kept/rejected only: a failing verifier still moves pending/unverified on every call
+        progress = (out.get("raw_kept"), out.get("rejected_total"))
         waiting = out.get("state") == "waiting_for_bench"   # done generating, BenchGen still writing: not stuck
         same = same + 1 if progress == last and not waiting else 0
         last = progress

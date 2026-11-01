@@ -113,6 +113,12 @@ def item_scores(orig_report):
             if o.get("system") == "tuned" and o.get("id") is not None}
 
 
+def pick_best(reports, max_drop):
+    """Best loop: an adapter that kept its general skills beats a slightly higher dev score that forgot them."""
+    return max(reports, key=lambda r: (not any(g["delta"] < -max_drop for g in r.get("general") or []),
+                                       r["systems"]["tuned"]["score"]))
+
+
 def decide(report, targets, history, cfg, signals, n_examples, ctx=None):
     """Pure rule table. history = earlier loops' [{"loop", "report", "decision"}], oldest first.
     ctx (optional, all keys optional): actual_epochs, clamped, gpu_hours, max_gpu_hours,
@@ -326,7 +332,7 @@ def main():
         pl.emit("decide", "start", "Evaluator checking stop rules", loop=loop)
         d = decide(report, targets, history, info["cfg"], train_signals(info["metrics"]), n_examples, ctx)
         d["vs_last_loop"], d["gpu_hours_used"] = vs_last, round(gpu_h, 3)
-        best = max([*(h["report"] for h in history), report], key=lambda r: r["systems"]["tuned"]["score"])
+        best = pick_best([*(h["report"] for h in history), report], targets["max_general_drop"])
 
     d = {"loop": loop, **d, "tuned_score": report["systems"]["tuned"]["score"],
          "target_score": targets["target_score"], "train_job_id": info["job_id"],

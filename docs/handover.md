@@ -20,6 +20,9 @@ looks different, trust the repo and **update this file** (whoever merges or open
   writes the benchmark), #13 BenchGen JSON-fence parsing fix, #17 BenchGen says why a job stopped + dashboard
   clears a stale "Failed" after a reset.
 - **Open:**
+  - **#24** five fixes before the final runs (training-speed estimate, best adapter vs forgetting, DataGen
+    stall/dedupe, real format check). Before final runs: move smoke runs out of `runs/` on Brev, set
+    `FTC_MAX_JOB_HOURS` if jobs may exceed 1 h. Still open: the forgetting check fires on noise at small M8 sizes.
   - **Grading + data quality** (#26, merged), from the weak NL→SQL run (tuned 48 % vs few-shot
     49 %): the HF importer had taken only the schema column, so all 30 "real" held-out items had no question
     (even Claude scored 10 %), and the Evaluator then asked for more "typical cases", which made loop 2 worse.

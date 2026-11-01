@@ -110,7 +110,7 @@ def build_gen_prompt(spec: dict, k: int, focus: str, avoid: list[str], feedback:
     avoid_block = ""
     if recent:
         avoid_block = "\nDo NOT repeat or paraphrase these existing user messages:\n" + \
-                      "\n".join(f"- {p}" for p in recent) + "\n"
+                      "\n".join(f"- {' '.join(p.split())[:160]}" for p in recent) + "\n"
     feedback_block = ""
     if feedback:
         feedback_block = "\nEarlier examples were REJECTED by a reviewer for these reasons. Avoid these mistakes:\n" + \
@@ -121,10 +121,10 @@ def build_gen_prompt(spec: dict, k: int, focus: str, avoid: list[str], feedback:
 
 
 def _user_key(example: dict):
-    """First 60 chars of the first user message, or None if the example is malformed."""
+    """The first user message, or None if the example is malformed."""
     try:
         msg = next(m for m in example["messages"] if m.get("role") == "user")
-        return str(msg["content"]).strip()[:60] or None
+        return str(msg["content"]).strip() or None
     except Exception:
         return None
 
