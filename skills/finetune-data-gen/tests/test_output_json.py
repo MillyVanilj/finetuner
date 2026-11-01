@@ -16,7 +16,10 @@ def call(params):
     gen_data._T_START = time.time(); sys.argv = ["gen_data.py"] + executor_argv(params)
     out = io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
-        gen_data.main()
+        try:
+            gen_data.main()
+        except SystemExit:          # exit 1 while not done: the stdout JSON is what we check
+            pass
     return out.getvalue()
 
 out = call({"spec": str(p), "query": "chem"})          # no "format" param, like the agent

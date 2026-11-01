@@ -37,11 +37,21 @@ python3 {baseDir}/scripts/gen_data.py --query "polite customer-support replies f
 Repeat the **same** command: the run id is derived from the spec file name or the query, so
 repeated calls resume the same run.
 
+## How the ScienceClaw reactor sees this skill
+
+The reactor hands an artifact to a skill when **any** key of the artifact matches a `--flag` in the skill's
+`--help` text, and marks the artifact consumed when the skill exits 0. So `--help` shows only the pipeline
+hand-off inputs (`--spec` / `--task-spec-path`, `--data-feedback-path`); every option in the table below still works but is hidden from `--help`, so generic
+names (`query`, `run_id`, `n_examples`, `format`, ...) in other skills' outputs can't start or error-loop this
+skill. The skill **exits 1 until it is done**, so its input hand-off stays unconsumed and it is called again
+next cycle. Checked by `tests/test_handoffs.py`.
+
 ## Parameters
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `--spec` | Path to the task spec JSON (see below). Preferred | one of `--spec` / `--query` |
+| `--task-spec-path` / `--spec` | Path to the task spec JSON (see below). Preferred | one of spec / `--query` / feedback |
+| `--data-feedback-path` | `data_feedback.json` from finetune-decide (`regenerate_data`). Builds the next loop's spec like `run_pipeline.py`: weak categories first (twice) in `edge_cases`, `n_examples` + `extra_examples`, notes as a success criterion; written to `<pipeline>/loops/<n+1>/task_spec_data.json`, run id `<pipeline_id>-l<n+1>`, contamination check against `<pipeline>/bench` | none |
 | `--query` | Free-text fine-tuning request; used to draft a spec when no `--spec` is given | one of `--spec` / `--query` |
 | `--n-examples` | Number of training examples (overrides the spec) | spec value, or 50 for `--query` |
 | `--run-id` | Name of this run; progress lives in `~/.scienceclaw/finetune/runs/<run-id>/` | spec file name, or slug of the query |
@@ -88,7 +98,7 @@ Example: `{baseDir}/examples/spec_chem.json`
   "train_examples": 50,
   "train_path": "~/.scienceclaw/finetune/runs/chem-v1/train.jsonl",
   "raw_kept": 50, "rejected_total": 3, "unverified_total": 0, "pending_verify": 0,
-  "format": {"read": 50, "invalid": {}, "exact_duplicates": 0, "near_duplicates": 0, "contaminated": 0},
+  "m4": {"read": 50, "invalid": {}, "exact_duplicates": 0, "near_duplicates": 0, "contaminated": 0, "bench": "..."},
   "batches_this_call": 1, "stop_reason": "done", "sec_per_example": 1.25, "parallel": 1,
   "run_dir": "~/.scienceclaw/finetune/runs/chem-v1", "elapsed_s": 21.4
 }
@@ -136,7 +146,7 @@ python3 {baseDir}/lib/format_data.py --run-id chem-v1 --bench path/to/benchmark.
   - In a pipeline (spec at `<pipeline>/task_spec.json`) while `<pipeline>/bench` is still being generated,
     DataGen generates everything but does not write `train.jsonl`: it returns
     `"state": "waiting_for_bench"` and exits 1, so ScienceClaw calls it again.
-  - Without any benchmark, the result has `"format": {"bench": null}` and a `warnings` entry. If a matching
+  - Without any benchmark, the result has `"m4": {"bench": null}` and a `warnings` entry. If a matching
     benchmark is frozen later, the next call re-runs the contamination check (no LLM) and generates
     replacements for removed rows.
 

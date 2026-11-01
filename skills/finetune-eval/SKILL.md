@@ -12,8 +12,8 @@ Scores a LoRA adapter from `train_sft.py` against its base model. The job takes 
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `--adapter-path` | `adapter/` dir from `train_sft.py` (its `metrics.json` next to it gives the base model and training data) | Required |
-| `--bench-dir` | Benchmark folder from L2: `dev.jsonl`, `heldout.jsonl`, optional `safety.jsonl` | Required |
+| `--adapter-path` | `adapter/` dir from `train_sft.py` (its `metrics.json` next to it gives the base model and training data). Called with only `--bench-dir` (no adapter yet), the skill records the benchmark and exits 0 (`"state": "noted"`) | Required for an eval |
+| `--bench-dir` | Benchmark folder from L2: `dev.jsonl`, `heldout.jsonl`, optional `safety.jsonl`. If omitted: the pipeline's benchmark (`pipeline_dir` in the adapter's `run.json` → `pipeline.json` links `bench_dir`, then `$FTC_PIPELINE_DIR`), else the last `--bench-dir` this skill was given (`$FINETUNER_RUNS/.last_bench_dir`). In agent mode the BenchGen artifact is consumed by the first eval, so later loops arrive with `adapter_path` only | see left |
 | `--split` | `dev` every loop, `heldout` once at the end | dev |
 | `--skip-general` | Skip M8 (lm-eval) for faster loops | off |
 | `--format` | `json` or `summary` | json |
@@ -46,7 +46,7 @@ Deciding what to do with the report (retrain settings, LoRA rank, data feedback,
 
 ## Output
 
-`<run dir>/eval_<split>/`: `report.json` (everything above, plus train loss from `metrics.json`), `outputs.jsonl` (every answer with its score), `status.json`, `eval.log`. On success the skill prints `eval_report_path` plus headline numbers. A failed job is not restarted automatically: fix the cause, delete the folder, and call again.
+`<run dir>/eval_<split>/`: `report.json` (everything above, plus train loss from `metrics.json`), `outputs.jsonl` (every answer with its score), `status.json`, `eval.log`. On success it also writes `eval_report.json` (or `heldout_report.json`) next to `report.json` in the docs/spec_and_io.md §3.4 format that finetune-decide reads, plus a copy in `<pipeline>/loops/<n>/eval/` when the run belongs to a pipeline. It prints `eval_report_path` (the §3.4 file, so the reactor hands it straight to finetune-decide), `report_path` (the raw report.json) and headline numbers. A failed job is not restarted automatically: fix the cause, delete the folder, and call again.
 
 ## Examples
 
