@@ -149,6 +149,30 @@ def t_reeval_same_job_same_loop(root):
     assert decide(make_run(root, "j2", tuned=0.8, parent="j1"))["loop"] == 2
 
 
+def t_run_pipeline_layout(root):
+    """run_pipeline passes a §3.4 copy in <pipeline>/loops/<n>/eval/: loops must still count up, scores come
+    from finetune-eval's original report (via adapter_path)."""
+    pdir = root / "pipelines" / "demo"
+    pdir.mkdir(parents=True)
+    (pdir / "pipeline.json").write_text(json.dumps({"pipeline_id": "demo", "loop": 1, "links": {}}))
+    (pdir / "task_spec.json").write_text(json.dumps({"targets": {"target_score": 0.95}}))
+    flat = (1.9, 1.85, 1.82, 1.8, 1.8, 1.79)
+    outs = []
+    for loop, (job, kw) in enumerate([("j1", dict(losses=flat, tuned=0.52, few=0.5)),
+                                      ("j2", dict(losses=flat, tuned=0.5, few=0.5, cfg={"rank": 64}, parent="j1"))], 1):
+        orig = make_run(root, job, **kw)
+        copy = pdir / "loops" / str(loop) / "eval" / "eval_report.json"
+        copy.parent.mkdir(parents=True)
+        copy.write_text(json.dumps({"split": "dev", "adapter_path": str(orig.parent.parent / "adapter"),
+                                    "systems": {"tuned": {"score": kw["tuned"]}}}))
+        outs.append(decide(copy))
+    assert outs[0]["loop"] == 1 and outs[0]["rule"] == "underfitting", outs[0]
+    assert outs[1]["loop"] == 2 and outs[1]["rule"] == "no gain over last loop", outs[1]
+    rec = json.loads(Path(outs[1]["decision_path"]).read_text())
+    assert rec["scores_from"].endswith("eval_dev/report.json") and rec["vs_last_loop"]["ci95"], rec
+    assert (pdir / "loops" / "2" / "decision.json").exists()
+
+
 def t_spec_v34_report_and_spec(root):
     """docs/spec_and_io.md §3.4 report shape + spec targets."""
     rep = make_run(root, "j1")

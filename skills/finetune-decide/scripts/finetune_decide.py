@@ -95,8 +95,8 @@ def normalize_report(r, report_path):
         n["teacher"] = (s.get("teacher") or {}).get("score")
         fr = (s.get("tuned") or {}).get("format_rate")
         n["format_fail"] = 0.0 if fr is None else 1 - fr
-        n["gain_few"] = None  # no paired CI in §3.4: approximate from the two CIs below
-        if n["tuned"] is not None and n["few"] is not None:
+        n["gain_few"] = r.get("gain_vs_base_few_shot")  # run_pipeline's conversion keeps the paired CI
+        if not n["gain_few"] and n["tuned"] is not None and n["few"] is not None:  # else approximate it
             lo = (n["tuned_ci"] or [n["tuned"]])[0] - n["few"]
             n["gain_few"] = {"mean": round(n["tuned"] - n["few"], 4), "ci95": [round(lo, 4), None]}
         n["by_category"] = {c["category"]: {"tuned": c.get("tuned"), "n": c.get("n", 0)}
@@ -309,13 +309,18 @@ def main():
     if unknown:
         print(f"ignoring extra args: {unknown}", file=sys.stderr)
 
-    report_path = Path(args.eval_report_path).expanduser().resolve()
+    given_path = report_path = Path(args.eval_report_path).expanduser().resolve()
     raw = read_json(report_path)
     if raw is None:
         fail(f"cannot read eval report {report_path}")
+    pl = find_pipeline(args.spec, str(given_path), raw.get("adapter_path"))
+    if "task" not in raw and raw.get("adapter_path"):
+        # A §3.4 copy (run_pipeline converts it): prefer finetune-eval's original report next to the run,
+        # which also has bench_file + outputs.jsonl (per-item scores for paired CIs and failure categories).
+        orig = Path(raw["adapter_path"]).expanduser().parent / f"eval_{raw.get('split', 'dev')}" / "report.json"
+        if read_json(orig):
+            report_path, raw = orig.resolve(), read_json(orig)
     n = normalize_report(raw, report_path)
-
-    pl = find_pipeline(args.spec, str(report_path), n.get("adapter_path"))
     spec_path = args.spec or (str(pl.dir / "task_spec.json") if pl else None)
     spec, spec_raw = load_spec(spec_path)
     for k in ("target_score", "max_loops", "min_gain"):
@@ -335,7 +340,7 @@ def main():
 
     # Loop history lives with the benchmark (fixed for the whole pipeline), so loops are counted
     # across both retrains and data regenerations (a regenerated-data job has no parent_job_id).
-    hist_f = bench_dir / ".evaluator_history.jsonl"
+    hist_f = (pl.dir if pl else bench_dir) / ".evaluator_history.jsonl"
     by_job = {}  # one entry per job (latest wins), in first-seen order: re-evaluating a job isn't a new loop
     for h in read_jsonl(hist_f):
         if h.get("split") == n["split"] and h.get("job_id") != job_id:
@@ -377,7 +382,7 @@ def main():
               "gain_vs_base_few_shot": n["gain_few"], "vs_last_loop": prev,
               "training": {k: v for k, v in d.items() if k != "eval_losses"}, "general_drop": n["general_drop"],
               "format_fail_rate": n["format_fail"], "failure_categories": fail_cats, "gpu_hours_used": round(gpu_h, 3),
-              "train_job_id": job_id, "config": cfg, "eval_report_path": str(report_path),
+              "train_job_id": job_id, "config": cfg, "eval_report_path": str(given_path), "scores_from": str(report_path),
               "spec_path": spec_path, "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
     if dec["action"] == "retrain":
         f = out_dir / "retrain_config.json"
