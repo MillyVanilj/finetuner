@@ -20,6 +20,9 @@ looks different, trust the repo and **update this file** (whoever merges or open
   writes the benchmark), #13 BenchGen JSON-fence parsing fix, #17 BenchGen says why a job stopped + dashboard
   clears a stale "Failed" after a reset.
 - **Open:**
+  - **#27** hosting the dashboard (`docs/hosting.md`): `server.py --read-only` behind a Cloudflare tunnel for a
+    live public link, and `scripts/export_static.py` for a frozen copy (Netlify / GitHub Pages) that outlives
+    Brev. The normal server has no login: never expose it. Export the real run before stopping Brev.
   - **#24** five fixes before the final runs (training-speed estimate, best adapter vs forgetting, DataGen
     stall/dedupe, real format check). Before final runs: move smoke runs out of `runs/` on Brev, set
     `FTC_MAX_JOB_HOURS` if jobs may exceed 1 h. Still open: the forgetting check fires on noise at small M8 sizes.
@@ -174,6 +177,9 @@ queued (nothing new is generated meanwhile); if Sol can't check even one example
 python3 dashboard/server.py                      # live view, create a pipeline, ▶ Start = run_pipeline.py
 python3 scripts/run_pipeline.py --pipeline ~/finetuner/pipelines/<id> [--skip-general]
 python3 scripts/simulate_pipeline.py             # fake run for the dashboard (no GPU/API)
+# share with judges (docs/hosting.md): NEVER expose the normal server, it has no login
+python3 dashboard/server.py --read-only --port 8766 & ~/cloudflared tunnel --url http://localhost:8766
+python3 scripts/export_static.py --out ~/site    # frozen copy for Netlify Drop / GitHub Pages, before Brev is stopped
 # agent mode (#12):  python3 -m ftc.cli agents kickoff <pipeline_dir> && python3 -m ftc.cli agents start
 # agent mode (#15):  ~/scienceclaw/.venv/bin/python scripts/run_agents.py --pipeline <pipeline_dir>
 ```

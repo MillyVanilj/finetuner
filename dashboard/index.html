@@ -290,6 +290,10 @@ pre.cmd { background: var(--surface-2); padding: 8px 10px; border-radius: 8px; o
 .compose textarea { min-height: 36px; height: 36px; resize: vertical; }
 .compose .re { grid-column: 1 / -1; font-size: 12px; color: var(--ink-2); }
 @media (max-width: 800px) { .compose { grid-template-columns: 1fr 1fr; } .compose textarea { grid-column: 1 / -1; } }
+/* read-only view (server.py --read-only, or a static export): hide everything that writes */
+:root.ro #simBtn, :root.ro #newBtn, :root.ro #startBtn, :root.ro #stopBtn, :root.ro #benchRetry, :root.ro #wallCard .compose,
+:root.ro [data-pub], :root.ro label:has(#pubPublic), :root.ro [data-reply], :root.ro [data-react] { display: none !important; }
+:root.ro .rx { pointer-events: none; }
 </style>
 </head>
 <body>
@@ -448,6 +452,21 @@ pre.cmd { background: var(--surface-2); padding: 8px 10px; border-radius: 8px; o
 </div>
 
 <script>
+// window.FTC is injected by dashboard/server.py (--read-only) or scripts/export_static.py (static copy).
+const FTC = window.FTC || {};
+if (FTC.readOnly || FTC.static) document.documentElement.classList.add("ro");
+// Static copy: every GET api/<name>?p=<id>&path=<f> reads data/<key>.json. Same key as export_static.py.
+function staticKey(u) {
+  const x = new URL(u, "http://x/");
+  return [x.pathname.replace(/^\/api\//, ""), x.searchParams.get("p"), x.searchParams.get("path")]
+    .filter(Boolean).join("__").replace(/[^A-Za-z0-9._-]/g, "_") + ".json";
+}
+if (FTC.static) {
+  const f0 = window.fetch.bind(window);
+  window.fetch = (u, o) => typeof u === "string" && u.startsWith("api/")
+    ? (o && o.method && o.method !== "GET" ? Promise.resolve(new Response('{"error":"static copy: read-only"}')) : f0("data/" + staticKey(u)))
+    : f0(u, o);
+}
 "use strict";
 // ---------------- utilities ----------------
 const $ = (id) => document.getElementById(id);
@@ -577,7 +596,7 @@ const STAGES = [
 ];
 
 async function loadPipelines(selectId) {
-  const r = await fetch("/api/pipelines").then(r => r.json()).catch(() => ({pipelines: []}));
+  const r = await fetch("api/pipelines").then(r => r.json()).catch(() => ({pipelines: []}));
   const sel = $("pipeSel"); sel.innerHTML = "";
   r.pipelines.forEach(p => { const o = document.createElement("option"); o.value = p.pipeline_id; o.textContent = `${p.title || p.pipeline_id} · ${p.pipeline_id.slice(-15)}`; sel.appendChild(o); });
   if (!r.pipelines.length) { $("empty").style.display = ""; $("main").style.display = "none"; sel.style.display = "none"; return; }
@@ -592,13 +611,14 @@ function connect(pid) {
   if (ES) ES.close(); PID = pid; S = null; SEL = null; USER_SEL = false;
   RES_FP = null; ANSWERS = null; RES_TAB = "fixed"; BROWSE = {q: "", kind: "", page: 0};
   $("main").style.display = "";
-  if (hp.get("once") && hp.get("p") === pid) { // static snapshot (screenshots, slow links): no live stream
+  if (FTC.static || (hp.get("once") && hp.get("p") === pid)) { // static snapshot (screenshots, slow links, static copy): no live stream
     SEL = hp.get("stage") || null; USER_SEL = !!SEL; $("liveTxt").textContent = "snapshot";
-    fetch("/api/state?p=" + encodeURIComponent(pid)).then(r => r.json()).then(s => { S = s; render(); });
+    if (FTC.static) history.replaceState(null, "", "#p=" + encodeURIComponent(pid));
+    fetch("api/state?p=" + encodeURIComponent(pid)).then(r => r.json()).then(s => { S = s; render(); });
     return;
   }
   history.replaceState(null, "", "#p=" + encodeURIComponent(pid));
-  ES = new EventSource("/api/stream?p=" + encodeURIComponent(pid));
+  ES = new EventSource("api/stream?p=" + encodeURIComponent(pid));
   ES.addEventListener("state", e => { S = JSON.parse(e.data); render(); setLive(true); });
   ES.onerror = () => setLive(false);
   ES.onopen = () => setLive(true);
@@ -670,12 +690,12 @@ function renderRunner() {
 async function startRun() {
   if (!confirm("Start the real pipeline on this machine?\n\nIt runs DataGen + BenchGen (API calls), then LoRA training on the GPU (finetune-submit's pre-flight checks decide), evaluation and the Evaluator, looping until it stops.\n\nNeeds the Brev machine set up (scripts/setup_brev.sh, install.sh, .env keys loaded).")) return;
   $("startBtn").disabled = true;
-  const r = await fetch(`/api/pipelines/${encodeURIComponent(PID)}/start`, {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"}).then(r => r.json());
+  const r = await fetch(`api/pipelines/${encodeURIComponent(PID)}/start`, {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"}).then(r => r.json());
   if (!r.ok) alert(r.error || "Could not start");
 }
 async function stopRun() {
   if (!confirm("Stop the runner? It stops after its current step. Jobs it already launched (training, eval) keep running on the GPU.")) return;
-  const r = await fetch(`/api/pipelines/${encodeURIComponent(PID)}/stop`, {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"}).then(r => r.json());
+  const r = await fetch(`api/pipelines/${encodeURIComponent(PID)}/stop`, {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"}).then(r => r.json());
   if (!r.ok) alert(r.error || "Could not stop");
 }
 function lastDoneStage() { let last = "spec"; STAGES.forEach(s => { if (S.stages[s.key].status === "done") last = s.key; }); return last; }
@@ -849,7 +869,7 @@ function renderResult() {
 
 async function loadAnswers() {
   ANSWERS = {rows: [], loading: true};
-  ANSWERS = await fetch("/api/answers?p=" + encodeURIComponent(PID)).then(r => r.json()).catch(() => ({rows: []}));
+  ANSWERS = await fetch("api/answers?p=" + encodeURIComponent(PID)).then(r => r.json()).catch(() => ({rows: []}));
   RES_FP = null; renderResult();
 }
 function browseHtml(base, thr) {
@@ -895,12 +915,12 @@ function bindPublish() {
       : "Post the result (verdict, method, caveats, one example, HF link) to Infinite?\n\nIt is public on lamm.mit.edu/infinite. Needs a registered agent with 10 karma.";
     if (!confirm(msg)) return;
     b.disabled = true;
-    const r = await fetch(`/api/pipelines/${encodeURIComponent(PID)}/publish`, {method: "POST", headers: {"Content-Type": "application/json"},
+    const r = await fetch(`api/pipelines/${encodeURIComponent(PID)}/publish`, {method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({target, public: !!pub})}).then(r => r.json()).catch(e => ({error: String(e)}));
     if (!r.ok) { alert(r.error || "Could not start"); b.disabled = false; } }); });
 }
 async function openCard() {
-  const r = await fetch("/api/model_card?p=" + encodeURIComponent(PID)).then(r => r.json()).catch(() => ({}));
+  const r = await fetch("api/model_card?p=" + encodeURIComponent(PID)).then(r => r.json()).catch(() => ({}));
   $("mcText").textContent = r.text || "No model card yet."; $("mcOv").classList.add("show");
 }
 function copyText(t, btn) { navigator.clipboard?.writeText(t).then(() => { const o = btn.textContent; btn.textContent = "Copied"; setTimeout(() => btn.textContent = o, 1200); }); }
@@ -972,7 +992,7 @@ function setReply(p) {
 async function wallPost() {
   const text = $("wText").value.trim(); if (!text || !PID) return;
   $("wPost").disabled = true;
-  const r = await fetch("/api/wall?p=" + encodeURIComponent(PID), {method: "POST", headers: {"Content-Type": "application/json"},
+  const r = await fetch("api/wall?p=" + encodeURIComponent(PID), {method: "POST", headers: {"Content-Type": "application/json"},
     body: JSON.stringify({author: me(), text, to: $("wTo").value, kind: $("wKind").value, reply_to: REPLY_TO})})
     .then(r => r.json()).catch(e => ({error: String(e)}));
   $("wPost").disabled = false;
@@ -980,7 +1000,7 @@ async function wallPost() {
   else alert("Could not pin the note: " + (r.error || "unknown error"));
 }
 async function wallReact(post, emoji) {
-  await fetch("/api/wall/react?p=" + encodeURIComponent(PID), {method: "POST", headers: {"Content-Type": "application/json"},
+  await fetch("api/wall/react?p=" + encodeURIComponent(PID), {method: "POST", headers: {"Content-Type": "application/json"},
     body: JSON.stringify({post, author: me(), emoji})}).catch(() => {});
 }
 $("wPost").addEventListener("click", wallPost);
@@ -1051,11 +1071,11 @@ function pBench() {
     <div class="sec"><h4>Sample dev items</h4><div id="bSample" class="muted">${sp.dev ? "Loading…" : "Available when the benchmark is ready."}</div></div>`;
   return {html, after: () => {
     $("benchRetry")?.addEventListener("click", async () => {
-      const r = await fetch(`/api/pipelines/${encodeURIComponent(PID)}/bench/retry`, {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"}).then(r => r.json());
+      const r = await fetch(`api/pipelines/${encodeURIComponent(PID)}/bench/retry`, {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"}).then(r => r.json());
       alert(r.ok ? "BenchGen reset. Fix the cause in the log first, then press ▶ Restart pipeline." : r.error); });
     hbars($("bCat"), Object.entries(sp.dev?.by_category || {}).map(([k, v]) => ({label: k, values: [{name: "items", color: "--s1", v}]})), {aria: "Dev items per category", empty: "–"});
     hbars($("bSrc"), Object.entries(sp.heldout?.by_source || {}).map(([k, v]) => ({label: k, values: [{name: "items", color: "--s1", v}]})), {aria: "Held-out items by source", empty: "–"});
-    if (sp.dev) fetch(`/api/file?p=${encodeURIComponent(PID)}&path=bench/dev.jsonl&n=4`).then(r => r.json()).then(r => { const el = $("bSample"); if (!el || !r.lines) return;
+    if (sp.dev) fetch(`api/file?p=${encodeURIComponent(PID)}&path=bench/dev.jsonl&n=4`).then(r => r.json()).then(r => { const el = $("bSample"); if (!el || !r.lines) return;
       el.classList.remove("muted"); el.innerHTML = r.lines.map(l => { try { const it = JSON.parse(l); return `<div class="ex"><div class="muted" style="font-size:11.5px">${esc(it.id)} · ${esc(it.category)} · ${esc(it.difficulty)} · ${esc(it.source)}</div><div class="u">${esc(it.question || (it.messages || []).filter(m => m.role === "user").map(m => m.content).join(" "))}</div><div class="a">${esc(it.reference)}</div></div>`; } catch { return ""; } }).join(""); });
   }};
 }
@@ -1181,12 +1201,12 @@ $("pipeSel").addEventListener("change", e => connect(e.target.value));
 $("simBtn").addEventListener("click", () => simulate(null));
 async function simulate(spec) {
   $("simBtn").disabled = true;
-  const r = await fetch("/api/simulate", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({spec, speed: 1.5})}).then(r => r.json());
+  const r = await fetch("api/simulate", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({spec, speed: 1.5})}).then(r => r.json());
   $("simBtn").disabled = false;
   if (r.pipeline_id) { closeOv(); loadPipelines(r.pipeline_id); } else alert((r.errors || []).join("\n") || r.error || "Could not start the simulator");
 }
 setInterval(async () => { // pick up pipelines created elsewhere
-  const r = await fetch("/api/pipelines").then(r => r.json()).catch(() => null); if (!r) return;
+  const r = await fetch("api/pipelines").then(r => r.json()).catch(() => null); if (!r) return;
   const sel = $("pipeSel"); if (r.pipelines.length !== sel.options.length) loadPipelines(PID);
 }, 5000);
 
@@ -1196,7 +1216,7 @@ const ov = $("ov");
 $("newBtn").addEventListener("click", () => { ov.classList.add("show"); $("goal").focus(); });
 $("closeOv").addEventListener("click", closeOv);
 function closeOv() { ov.classList.remove("show"); }
-fetch("/api/examples").then(r => r.json()).then(r => { Object.entries(r.examples || {}).forEach(([k, v]) => { const o = document.createElement("option"); o.value = k; o.textContent = v.title || k; $("exSel").appendChild(o); });
+fetch("api/examples").then(r => r.json()).then(r => { Object.entries(r.examples || {}).forEach(([k, v]) => { const o = document.createElement("option"); o.value = k; o.textContent = v.title || k; $("exSel").appendChild(o); });
   $("exSel").addEventListener("change", e => { const ex = r.examples[e.target.value]; if (!ex) return; $("goal").value = ex.task; SPEC = ex; QUESTIONS = []; $("qBox").innerHTML = ""; fillForm(ex); step(3); validate(); });
   const hp = new URLSearchParams(location.hash.slice(1));   // #new=1&ex=chem_qa opens the form directly
   if (hp.get("new")) { ov.classList.add("show"); if (hp.get("ex") && r.examples[hp.get("ex")]) { $("exSel").value = hp.get("ex"); $("exSel").dispatchEvent(new Event("change")); } } });
@@ -1205,7 +1225,7 @@ function step(n) { [1, 2, 3, 4].forEach(i => $("st" + i).classList.toggle("on", 
 $("draftBtn").addEventListener("click", async () => {
   const goal = $("goal").value.trim(); if (!goal) { $("goal").focus(); return; }
   $("draftBtn").disabled = true; $("draftMsg").textContent = "M1 is drafting the spec…";
-  const r = await fetch("/api/spec/draft", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({goal})}).then(r => r.json()).catch(e => ({error: String(e)}));
+  const r = await fetch("api/spec/draft", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({goal})}).then(r => r.json()).catch(e => ({error: String(e)}));
   $("draftBtn").disabled = false;
   if (r.error) { $("draftMsg").textContent = r.error; return; }
   $("draftMsg").textContent = r.source === "llm" ? "Drafted by Claude. Answer the questions or edit the spec below."
@@ -1223,7 +1243,7 @@ function renderQuestions() {
     const answers = {}; QUESTIONS.forEach(q => { const t = document.querySelector(`[data-q="${CSS.escape(String(q.id))}"]`);
       answers[q.id] = {question: q.question, answer: (useTyped && t && t.value.trim()) || null, default: q.default ?? null}; });
     $("answerBtn").disabled = $("skipBtn").disabled = true; $("answerBtn").textContent = "Updating spec (and looking for real examples)…";
-    const r = await fetch("/api/spec/draft", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({goal: $("goal").value, spec: readForm(), answers})}).then(r => r.json()).catch(e => ({error: String(e)}));
+    const r = await fetch("api/spec/draft", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({goal: $("goal").value, spec: readForm(), answers})}).then(r => r.json()).catch(e => ({error: String(e)}));
     if (r.error || !r.spec) { $("answerBtn").disabled = $("skipBtn").disabled = false; $("answerBtn").textContent = "Apply answers"; showMsgs({errors: [r.error || "M1 returned no spec"]}); return; }
     if (r.llm_error) $("draftMsg").textContent = r.llm_error + "; your answers were applied where possible.";
     SPEC = r.spec; QUESTIONS = r.questions || []; fillForm(SPEC); renderQuestions(); showMsgs(r); step(3);
@@ -1274,7 +1294,7 @@ let vT = null;
 $("specForm").addEventListener("input", () => { toggleFields(); clearTimeout(vT); vT = setTimeout(validate, 350); });
 $("specForm").addEventListener("change", () => { toggleFields(); validate(); });
 async function validate() {
-  const r = await fetch("/api/spec/validate", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({spec: readForm()})}).then(r => r.json()).catch(e => ({error: String(e)}));
+  const r = await fetch("api/spec/validate", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({spec: readForm()})}).then(r => r.json()).catch(e => ({error: String(e)}));
   if (r.error && !r.errors) r.errors = [r.error];   // a server error is never "valid"
   showMsgs(r); $("specPreview").textContent = JSON.stringify(r.spec ?? {}, null, 2); $("createBtn").disabled = !!(r.errors && r.errors.length); return r;
 }
@@ -1299,7 +1319,7 @@ function showMsgs(r) { if (r.spec) showAssumptions(r.spec); $("valMsgs").innerHT
 $("createBtn").addEventListener("click", async () => {
   $("createBtn").disabled = true;   // one click = one pipeline
   const v = await validate(); if (v.errors?.length) return;
-  const r = await fetch("/api/pipelines", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({spec: v.spec})}).then(r => r.json()).catch(e => ({errors: [String(e)]}));
+  const r = await fetch("api/pipelines", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({spec: v.spec})}).then(r => r.json()).catch(e => ({errors: [String(e)]}));
   if (r.errors || r.error || !r.commands) { showMsgs({errors: r.errors || [r.error || "could not create the pipeline"]}); $("createBtn").disabled = false; return; }
   step(4);
   $("createOut").innerHTML = `<div class="callout stop"><b>Pipeline created:</b> <span class="mono">${esc(r.dir)}</span></div><h4>Next</h4>` +
