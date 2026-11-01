@@ -97,7 +97,11 @@ One item per line:
 ```
 
 While running: `{"state": "started" | "running", "done": false, "verified": 64, "target": 200, ...}`.
-If the job stops 3 times or the reviewer rejects too much: `"state": "failed"` with the log path.
+`"state": "starting"` means another call is launching the job at that moment (a lock prevents two jobs).
+A job that dies is restarted; the count resets whenever it produced new items, so `"state": "failed"`
+means 3 failures **in a row** without progress (or the reviewer rejected too much). Fix the cause, delete
+`worker.json`, call again. Spec and safety paths may be relative: they are checked at once and handed to the
+job as absolute paths.
 
 ## Run folder
 

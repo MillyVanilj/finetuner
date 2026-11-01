@@ -5,8 +5,13 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "scripts"))
 import bench_gen as B
-sys.path.insert(0, str(HERE / "fixtures"))
-import eval_scoring as ES          # the Evaluator's own scoring.py (copy), to check the contract
+# The Evaluator's own scoring.py: the real one when finetune-eval is installed next to us, else the copy
+import importlib.util
+_real = HERE.parents[1] / "finetune-eval" / "scripts" / "eval" / "scoring.py"
+_src = _real if _real.exists() else HERE / "fixtures" / "eval_scoring.py"
+_spec = importlib.util.spec_from_file_location("eval_scoring", _src)
+ES = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(ES)
+print(f"(contract checks use {'the real' if _real.exists() else 'the copied'} finetune-eval scoring.py)")
 from finetune_common.textsim import NearIndex, normalize
 from finetune_common.grading import normalize_grading
 
@@ -379,6 +384,54 @@ check("old frozen benchmark re-exported with the new fields, same ids, no LLM cl
       r["done"] and all("question" in x and x["split"] == "dev" for x in d_new)
       and [x["id"] for x in d_new] == [x["id"] for x in d2]
       and json.loads((old / "bench_meta.json").read_text())["format_version"] == B.FORMAT_VERSION)
+
+# --- 17. review fixes (PR #2 review) ---
+from finetune_common.grading import reference_consistent as RC
+check("choice key 'A' is not matched by the article 'A' in a sentence",
+      not RC({"type": "choice", "answer": "A"}, "A catalyst does not change K.")
+      and RC({"type": "choice", "answer": "A"}, "ANSWER: A\nWHY: x") and RC({"type": "choice", "answer": "B"}, "(B)"))
+
+# relative paths: the worker gets absolute ones (it runs with cwd = ScienceClaw)
+import os as _os2
+launched.clear(); launched_pid[0] = _os2.getpid()
+cwd0 = _os2.getcwd(); _os2.chdir(tmp)
+try:
+    res, err, code = run_main(["--task-spec-path", "arith.json", "--run-id", "relpath", "--n-items", "6",
+                               "--safety-file", "safety_in.jsonl"], Fake(), foreground=False)
+finally:
+    _os2.chdir(cwd0)
+cmd = launched[-1]
+check("relative --task-spec-path / --safety-file become absolute in the worker command",
+      res["state"] == "started" and cmd[cmd.index("--task-spec-path") + 1] == str((tmp / "arith.json").resolve())
+      and cmd[cmd.index("--safety-file") + 1] == str((tmp / "safety_in.jsonl").resolve())
+      and cmd[cmd.index("--bench-dir") + 1].startswith("/"))
+n_before = len(launched)
+res, err, code = run_main(["--task-spec-path", str(tmp / "nope.json"), "--run-id", "relpath2"], Fake(), foreground=False)
+check("missing spec file -> clear error at once, no worker started",
+      code == 1 and "spec file not found" in res["error"] and len(launched) == n_before)
+
+# restart counter resets when the dead worker had made progress
+rd = tmp / "bench" / "progress-run"; rd.mkdir(parents=True)
+(rd / "state.json").write_text(json.dumps({"kept": 40, "target": 100, "done": False}))
+(rd / "worker.json").write_text(json.dumps({"pid": 999999, "starts": 3, "kept_at_start": 25}))
+res, err, code = run_main(["--spec", str(spec_f), "--run-id", "progress-run"], Fake(), foreground=False)
+w = json.loads((rd / "worker.json").read_text())
+check("3 earlier starts but new items since -> restarted (count reset), not failed",
+      res["state"] == "started" and w["starts"] == 1 and w["kept_at_start"] == 40)
+(rd / "worker.json").write_text(json.dumps({"pid": 999999, "starts": 3, "kept_at_start": 40}))
+res, err, code = run_main(["--spec", str(spec_f), "--run-id", "progress-run"], Fake(), foreground=False)
+check("3 starts in a row without new items -> failed", res["state"] == "failed" and "in a row" in res["error"])
+
+# lock: a launch already in progress -> "starting", no second worker
+rd2 = tmp / "bench" / "locked-run"; rd2.mkdir(parents=True)
+(rd2 / "worker.lock").write_text("123")
+n_before = len(launched)
+res, err, code = run_main(["--spec", str(spec_f), "--run-id", "locked-run"], Fake(), foreground=False)
+check("fresh lock -> 'starting', no second worker", res["state"] == "starting" and len(launched) == n_before and code == 1)
+old = time.time() - 3600; _os2.utime(rd2 / "worker.lock", (old, old))
+res, err, code = run_main(["--spec", str(spec_f), "--run-id", "locked-run"], Fake(), foreground=False)
+check("stale lock (crash) is cleared -> worker started, lock removed",
+      res["state"] == "started" and not (rd2 / "worker.lock").exists())
 
 print(f"\n{'ALL PASSED' if not fails else f'{fails} FAILED'}")
 sys.exit(1 if fails else 0)

@@ -291,6 +291,22 @@ def find_bench(arg, spec, spec_path=None):
     return None
 
 
+def pending_bench(spec_path):
+    """A BenchGen benchmark for this pipeline that exists but is NOT frozen yet (<pipeline>/bench next to
+    the spec). DataGen then waits instead of writing train.jsonl without the contamination check."""
+    if not spec_path:
+        return None
+    b = Path(spec_path).resolve().parent / "bench"
+    meta = b / "bench_meta.json"
+    if (b / "state.json").exists() and not (meta.exists() and json.loads(meta.read_text()).get("frozen")):
+        return b
+    return None
+
+
+NO_BENCH_WARNING = ("no frozen benchmark found for this spec: contamination check skipped. Run BenchGen first, "
+                    "or call DataGen again after it finishes (M4 then re-checks automatically)")
+
+
 def build_result(run_id, state, target, fmt, run_dir, extra=None) -> dict:
     result = {"run_id": run_id, "done": state["done"], "target": target,
               "train_examples": fmt["kept"] if fmt else None,
@@ -370,8 +386,8 @@ def main():
         print(json.dumps(result, indent=2), flush=True)
     else:
         print(json.dumps(result, indent=2) if a.format == "json" else summary_line(result), flush=True)
-    if code:
-        sys.exit(code)
+    if code or result.get("state") == "waiting_for_bench":
+        sys.exit(code or 1)        # exit 1: ScienceClaw keeps the hand-off unconsumed and calls again
 
 
 def run(a) -> dict:
@@ -388,10 +404,29 @@ def run(a) -> dict:
     # Already finished: answer from the saved report without creating an LLM client.
     report_f = run_dir / "format_report.json"
     if state.get("done") and report_f.exists() and (run_dir / "train.jsonl").exists() and saved_spec.exists():
-        log("[run] already done; returning the saved result")
-        target = int(json.loads(saved_spec.read_text())["n_examples"])
-        return build_result(a.run_id, state, target, json.loads(report_f.read_text()), run_dir,
-                            {"batches_this_call": 0})
+        done_spec = json.loads(saved_spec.read_text())
+        target = int(done_spec["n_examples"])
+        fmt = json.loads(report_f.read_text())
+        late = None
+        if not state.get("bench_checked") and (a.bench or "").lower() != "none":
+            late = find_bench(a.bench, done_spec, a.spec)       # a benchmark that froze after we finished?
+        if not late:
+            log("[run] already done; returning the saved result")
+            fmt["bench"] = state.get("bench_checked")
+            warn = [NO_BENCH_WARNING] if not state.get("bench_checked") and (a.bench or "").lower() != "none" else []
+            return build_result(a.run_id, state, target, fmt, run_dir, {"batches_this_call": 0, "warnings": warn})
+        log(f"[M4] benchmark {late} is now available: re-running the contamination check (no LLM)")
+        fmt = format_run(run_dir, bench=late)
+        fmt["bench"] = state["bench_checked"] = str(late)
+        shortfall = target - fmt["kept"]
+        if shortfall <= 0 or state.get("top_ups", 0) >= MAX_TOP_UPS:
+            save_state(run_dir, state)
+            return build_result(a.run_id, state, target, fmt, run_dir, {"batches_this_call": 0})
+        state["top_ups"] = state.get("top_ups", 0) + 1                 # leaked rows removed: generate replacements
+        state["raw_target"] = state.get("raw_target", target) + shortfall
+        state["done"] = False
+        save_state(run_dir, state)
+        log(f"[M4] {shortfall} rows overlapped the benchmark; generating replacements")
 
     llm = get_llm_client("DataGen")
     if a.spec:
@@ -480,9 +515,20 @@ def run(a) -> dict:
     fmt = None
     if state["kept"] >= raw_target:
         # M4: validate + dedup -> train.jsonl. Deterministic and fast (<0.2 s for 2000 rows).
-        bench = find_bench(a.bench, spec, a.spec)
+        # Inside a pipeline, ITS benchmark is the one the Evaluator scores: wait for it even if another
+        # frozen benchmark for the same spec exists elsewhere.
+        waiting = pending_bench(a.spec) if a.bench is None else None
+        bench = None if waiting else find_bench(a.bench, spec, a.spec)
+        if waiting:
+            log(f"[M4] benchmark {waiting} is still being generated; waiting before writing train.jsonl")
+            save_state(run_dir, state)
+            return build_result(a.run_id, state, target, None, run_dir, {
+                "state": "waiting_for_bench", "waiting_for": str(waiting), "batches_this_call": batches,
+                "stop_reason": "all examples generated; waiting for BenchGen to freeze the benchmark "
+                               "(contamination check) - call again", "sec_per_example": timing["per_ex"]})
         fmt = format_run(run_dir, bench=bench)
         fmt["bench"] = str(bench) if bench else None
+        state["bench_checked"] = fmt["bench"]
         shortfall = target - fmt["kept"]
         if shortfall > 0 and state.get("top_ups", 0) < MAX_TOP_UPS:
             state["top_ups"] = state.get("top_ups", 0) + 1
@@ -493,9 +539,10 @@ def run(a) -> dict:
         else:
             state["done"] = True
     save_state(run_dir, state)
+    warnings = [NO_BENCH_WARNING] if fmt and fmt.get("bench") is None and (a.bench or "").lower() != "none" else []
     return build_result(a.run_id, state, target, fmt, run_dir,
                         {"batches_this_call": batches, "stop_reason": stop_reason if not state["done"] else "done",
-                         "sec_per_example": timing["per_ex"], "parallel": parallel})
+                         "sec_per_example": timing["per_ex"], "parallel": parallel, "warnings": warnings})
 
 
 if __name__ == "__main__":

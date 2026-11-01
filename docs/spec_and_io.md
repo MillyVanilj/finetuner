@@ -98,6 +98,8 @@ a human. Without an API key it returns a template.
 ### 3.1 Training data (DataGen → Trainer): unchanged
 JSONL, one `{"messages": [{"role":"system"?}, {"role":"user"}, {"role":"assistant"}]}` per line.
 DataGen's result key is `train_path`; `finetune-submit` accepts it as `--train-path`.
+Run order: inside a pipeline, if `bench/` exists but is not frozen yet, DataGen returns `"state": "waiting_for_bench"`
+and exits 1 (no `train_path` yet), so the contamination check always uses this pipeline's benchmark.
 
 ### 3.2 Benchmark items (BenchGen → Eval, and DataGen's contamination check)
 `bench/dev.jsonl` and `bench/heldout.jsonl`, one item per line:

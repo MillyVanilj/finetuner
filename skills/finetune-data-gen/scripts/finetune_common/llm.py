@@ -40,9 +40,10 @@ def _load_llm_client():
 _llm_mod = _load_llm_client()
 LLMClient = _llm_mod.LLMClient
 
-# All finetune skills (DataGen, BenchGen, Evaluator) run on Gemini by default, regardless of
-# ScienceClaw's global LLM_BACKEND / ~/.scienceclaw/llm_config.json (which may point at Anthropic
-# for the rest of ScienceClaw). Override for these skills only with FINETUNE_LLM_BACKEND.
+# Default backend for the finetune skills that don't choose their own (DataGen and its M3 verifier),
+# regardless of ScienceClaw's global LLM_BACKEND / ~/.scienceclaw/llm_config.json (which may point at
+# Anthropic for the rest of ScienceClaw). Override for these skills only with FINETUNE_LLM_BACKEND.
+# BenchGen does NOT use this default: it pins anthropic / Claude Opus (its --backend / --model).
 # Gemini settings come from llm_client: GEMINI_API_KEY (or GOOGLE_API_KEY, or gemini_api_key in
 # llm_config.json), GEMINI_MODEL (default gemini-3.6-flash).
 DEFAULT_BACKEND = os.environ.get("FINETUNE_LLM_BACKEND") or "gemini"

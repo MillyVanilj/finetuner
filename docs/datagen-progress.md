@@ -57,6 +57,12 @@ transformers 5: `apply_chat_template(..., return_tensors="pt", return_dict=True)
 - WSL: keep the Python venv in the Linux home, not on `/mnt/c` (`import anthropic` took 58 s from `/mnt/c`, ~1 s from `~`).
 - Reject rate ~5 %; manual check of 10 kept chemistry examples: all correct.
 
+- **Nov 1, PR review fixes**: run order. In a pipeline, DataGen waits (`waiting_for_bench`, exit 1) while `<pipeline>/bench`
+  is not frozen, even if another frozen benchmark for the same spec exists. Without a benchmark the result carries
+  `"format": {"bench": null}` + a warning; a benchmark frozen later triggers a re-check (no LLM) and replacement rows.
+  Stricter multiple-choice key check (the article "A" no longer matches option A).
+
 ## Open
-- Exit 1 until done (like BenchGen / finetune-eval) so the reactor retries; today DataGen exits 0 with `"done": false`.
+- Exit 1 until done in general (like BenchGen / finetune-eval) so the reactor retries; today DataGen exits 0 with
+  `"done": false` except while waiting for the benchmark.
 - Use spec v2 `seed_examples` (few-shot) and `coverage.topics` (batch rotation); emit pipeline events.

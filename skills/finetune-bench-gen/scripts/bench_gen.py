@@ -611,7 +611,7 @@ def _model_name(c):
     return getattr(c, f"{_backend(c)}_model", None)
 
 
-def verify_pending(llm_v, spec, run_dir, state, deadline, near_all):
+def verify_pending(llm_v, spec, run_dir, state, deadline):
     f = run_dir / "pending_verify.jsonl"
     items = read_jsonl(f)
     if not items or call_timeout(deadline) < L.MIN_CALL_S:
@@ -654,6 +654,8 @@ def run(a):
         return build_result(run_dir, state, upgrade_frozen(run_dir, state, load_json(meta_f), a),
                             {"rounds_this_call": 0})
 
+    if a.spec:
+        load_spec(a.spec, required=SPEC_KEYS)       # a bad spec fails here, before any client or API cost
     llm = make_client("BenchGen", a.backend)
     if _backend(llm) == "anthropic" and a.model:
         llm.anthropic_model = a.model             # BenchGen pins its own model, independent of ANTHROPIC_MODEL
@@ -690,7 +692,7 @@ def run(a):
         k = normalize(it["prompt"]); near.add(k); seen_exact.add(k)
     for x in seed_items(spec, state.get("n_seeds", 0)):     # never generate near-copies of the user's examples
         k = normalize(x["question"]); near.add(k); seen_exact.add(k)
-    verify_pending(llm_v, spec, run_dir, state, deadline, near)
+    verify_pending(llm_v, spec, run_dir, state, deadline)
     save_json(run_dir / "state.json", state)
 
     timing, rounds, stop = state["timing"], 0, "quota met"
@@ -763,12 +765,57 @@ def _alive(pid) -> bool:
         return False
 
 
-def launch_or_poll(a, argv) -> dict:
+LOCK_STALE_S = 60             # a launch lock older than this is left over from a crash
+
+
+def worker_cmd(a, run_id, run_dir) -> list:
+    """The background job's command line, rebuilt from the parsed arguments with ABSOLUTE paths:
+    the job runs with cwd = the ScienceClaw folder, so a relative --task-spec-path or --safety-file
+    from the caller would point to the wrong place."""
+    cmd = [sys.executable, str(Path(__file__).resolve()), "--foreground", "--time-budget", "0",
+           "--run-id", run_id, "--bench-dir", str(Path(run_dir).resolve()), "--format", "json"]
+    if a.spec:
+        cmd += ["--task-spec-path", str(Path(a.spec).expanduser().resolve())]
+    elif a.query:
+        cmd += ["--query", a.query]
+    if a.safety_file:
+        cmd += ["--safety-file", str(Path(a.safety_file).expanduser().resolve())]
+    for flag, val in (("--n-items", a.n_items), ("--heldout-frac", a.heldout_frac), ("--backend", a.backend),
+                      ("--model", a.model), ("--verify-backend", a.verify_backend),
+                      ("--batch-size", a.batch_size), ("--seed", a.seed)):
+        if val is not None:
+            cmd += [flag, str(val)]
+    return cmd
+
+
+def _take_lock(run_dir) -> bool:
+    """One launcher at a time per benchmark folder (two simultaneous calls must not start two jobs)."""
+    lock = run_dir / "worker.lock"
+    try:
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(os.getpid()).encode()); os.close(fd)
+        return True
+    except FileExistsError:
+        try:
+            if time.time() - lock.stat().st_mtime > LOCK_STALE_S:
+                lock.unlink()
+                return _take_lock(run_dir)
+        except OSError:
+            pass
+        return False
+
+
+def launch_or_poll(a, argv=None) -> dict:
     """Skill-call mode. ScienceClaw stops a skill after 30-45 s, but a 200-item benchmark takes minutes,
     so: frozen -> return it; worker running -> report progress; otherwise start the worker
-    (this script with --foreground --time-budget 0) in the background and return immediately."""
+    (this script with --foreground --time-budget 0) in the background and return immediately.
+    A worker that dies is restarted; the restart count resets whenever it made progress, so only
+    MAX_WORKER_STARTS failures IN A ROW (no new items in between) end in "failed"."""
     if not (a.spec or (a.query and a.query.strip())):
         raise ValueError("give --spec <file> (or --task-spec-path) or --query <fine-tuning request>")
+    for name, path in (("spec file", a.spec), ("safety file", a.safety_file)):
+        if path and not Path(path).expanduser().exists():      # fail here, not silently in the worker
+            raise ValueError(f"{name} not found: {path} (resolved to {Path(path).expanduser().resolve()})")
     run_dir, run_id, _pl = resolve_run_dir(a)
     run_dir.mkdir(parents=True, exist_ok=True)
     state = load_json(run_dir / "state.json", {})
@@ -784,22 +831,35 @@ def launch_or_poll(a, argv) -> dict:
     w = load_json(run_dir / "worker.json", {})
     if w and _alive(w.get("pid")):
         return build_result(run_dir, state, None, {"state": "running", "worker_pid": w["pid"], "log": str(log_f)})
-    starts = w.get("starts", 0)
-    if starts >= MAX_WORKER_STARTS:
-        tail = log_f.read_text()[-1500:] if log_f.exists() else ""
-        return build_result(run_dir, state, None, {
-            "state": "failed", "log": str(log_f), "log_tail": tail,
-            "error": f"background job stopped {starts} times without finishing; read the log, fix, then "
-                     f"delete {run_dir / 'worker.json'} to retry"})
-    cmd = [sys.executable, str(Path(__file__).resolve())] + list(argv) + \
-          ["--foreground", "--time-budget", "0", "--run-id", run_id, "--bench-dir", str(run_dir)]
-    with open(log_f, "a") as lf:
-        lf.write(f"\n===== start {starts + 1} at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-        lf.flush()
-        proc = subprocess.Popen(cmd, stdout=lf, stderr=lf, stdin=subprocess.DEVNULL,
-                                start_new_session=True, cwd=str(REPO_ROOT))
-    save_json(run_dir / "worker.json", {"pid": proc.pid, "starts": starts + 1,
-                                        "started": time.strftime("%Y-%m-%dT%H:%M:%S"), "cmd": cmd})
+    if not _take_lock(run_dir):
+        return build_result(run_dir, state, None, {"state": "starting", "log": str(log_f)})
+    try:
+        w = load_json(run_dir / "worker.json", {})         # re-read under the lock
+        if w and _alive(w.get("pid")):
+            return build_result(run_dir, state, None, {"state": "running", "worker_pid": w["pid"], "log": str(log_f)})
+        starts = w.get("starts", 0)
+        if w and state.get("kept", 0) > w.get("kept_at_start", 0):
+            starts = 0                                    # the last job made progress: not a failure streak
+        if starts >= MAX_WORKER_STARTS:
+            tail = log_f.read_text()[-1500:] if log_f.exists() else ""
+            return build_result(run_dir, state, None, {
+                "state": "failed", "log": str(log_f), "log_tail": tail,
+                "error": f"background job stopped {starts} times in a row without new items; read the log, "
+                         f"fix the cause, then delete {run_dir / 'worker.json'} to retry"})
+        cmd = worker_cmd(a, run_id, run_dir)
+        with open(log_f, "a") as lf:
+            lf.write(f"\n===== start {starts + 1} at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            lf.flush()
+            proc = subprocess.Popen(cmd, stdout=lf, stderr=lf, stdin=subprocess.DEVNULL,
+                                    start_new_session=True, cwd=str(REPO_ROOT))
+        save_json(run_dir / "worker.json", {"pid": proc.pid, "starts": starts + 1,
+                                            "kept_at_start": state.get("kept", 0),
+                                            "started": time.strftime("%Y-%m-%dT%H:%M:%S"), "cmd": cmd})
+    finally:
+        try:
+            (run_dir / "worker.lock").unlink()
+        except OSError:
+            pass
     log(f"[run] background job started (pid {proc.pid}); log: {log_f}")
     return build_result(run_dir, state, None, {"state": "started" if starts == 0 else "restarted",
                                                "target": state.get("target") or a.n_items or "from spec",
@@ -850,7 +910,7 @@ def main():
     try:
         if unknown:
             log(f"[args] ignoring unrecognized arguments: {unknown}")
-        result = run(a) if a.foreground else launch_or_poll(a, sys.argv[1:])
+        result = run(a) if a.foreground else launch_or_poll(a)
     except Exception as e:
         import traceback; traceback.print_exc()
         result, code = {"error": f"{type(e).__name__}: {e}", "done": False}, 1

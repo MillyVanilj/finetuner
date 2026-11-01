@@ -132,6 +132,13 @@ python3 {baseDir}/lib/format_data.py --run-id chem-v1 --bench path/to/benchmark.
 
 - Run `finetune-bench-gen` first: DataGen then finds the frozen benchmark for the same spec
   automatically and drops training examples that overlap any benchmark item (dev or held-out).
+- Run order is safe either way:
+  - In a pipeline (spec at `<pipeline>/task_spec.json`) while `<pipeline>/bench` is still being generated,
+    DataGen generates everything but does not write `train.jsonl`: it returns
+    `"state": "waiting_for_bench"` and exits 1, so ScienceClaw calls it again.
+  - Without any benchmark, the result has `"format": {"bench": null}` and a `warnings` entry. If a matching
+    benchmark is frozen later, the next call re-runs the contamination check (no LLM) and generates
+    replacements for removed rows.
 
 - Executor timeouts differ: the plain skill executor uses 30 s (keep the default 27), while the
   deep-investigation agent path allows longer. With a longer limit, set `DATAGEN_TIME_BUDGET`

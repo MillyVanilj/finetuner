@@ -100,5 +100,47 @@ except FileNotFoundError:
     ok = True
 check("unknown benchmark -> clear error", ok)
 
+# 4. run order (PR review #2): pipeline benchmark still running -> DataGen waits (exit 1); then proceeds
+pipe = tmp / "pipe"; (pipe / "bench").mkdir(parents=True)
+pspec = pipe / "task_spec.json"; pspec.write_text(json.dumps(SPEC))
+(pipe / "bench" / "state.json").write_text(json.dumps({"kept": 3, "target": 10, "done": False}))   # BenchGen busy
+def run_g(argv):
+    G._T_START = time.time(); sys.argv = ["gen_data.py"] + argv
+    out = io.StringIO(); code = 0
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+        try: G.main()
+        except SystemExit as e: code = e.code or 0
+    return json.loads(out.getvalue()), code
+dfake.i = 100; leaks[:] = []
+for _ in range(6):
+    r, code = run_g(["--spec", str(pspec), "--run-id", "pipe-data", "--parallel", "1"])
+    if r.get("state") == "waiting_for_bench" or r["done"]: break
+check("benchmark still being generated -> DataGen waits, exit 1, no train.jsonl",
+      r.get("state") == "waiting_for_bench" and code == 1 and not (tmp / "runs/pipe-data/train.jsonl").exists())
+# BenchGen freezes into the pipeline folder: reuse the frozen files from step 1
+import shutil
+for f in ("dev.jsonl", "heldout.jsonl", "bench_meta.json"):
+    shutil.copy(tmp / "bench/arith" / f, pipe / "bench" / f)
+r, code = run_g(["--spec", str(pspec), "--run-id", "pipe-data", "--parallel", "1"])
+check("benchmark frozen -> DataGen finishes with the pipeline benchmark", r["done"] and code == 0
+      and r["format"]["bench"] == str(pipe / "bench"))
+
+# 5. stand-alone, DataGen finished BEFORE the benchmark existed -> warning; later call re-checks and refills
+G.BENCH_DIR = F.BENCH_DIR = tmp / "bench-later"
+leaks[:] = bench_prompts[:2]; dfake.i = 0
+for _ in range(6):
+    r, code = run_g(["--spec", str(spec_f), "--run-id", "early-data", "--parallel", "1"])
+    if r["done"]: break
+check("no benchmark yet -> done, bench null, warning in the result",
+      r["done"] and r["format"]["bench"] is None and r["warnings"] and "contamination check skipped" in r["warnings"][0])
+shutil.copytree(tmp / "bench/arith", tmp / "bench-later/arith")
+for _ in range(6):
+    r, code = run_g(["--spec", str(spec_f), "--run-id", "early-data", "--parallel", "1"])
+    if r["done"] and r["batches_this_call"] == 0: break
+train2 = [json.loads(l)["messages"][0]["content"] for l in (tmp / "runs/early-data/train.jsonl").read_text().splitlines()]
+check("benchmark appears later -> next call re-checks (no LLM), drops the 2 leaks and refills to 12",
+      r["done"] and r["format"]["bench"] == str(tmp / "bench-later/arith") and not (set(train2) & set(bench_prompts))
+      and len(train2) == 12 and not r.get("warnings"))
+
 print(f"\n{'ALL PASSED' if not fails else f'{fails} FAILED'}")
 sys.exit(1 if fails else 0)

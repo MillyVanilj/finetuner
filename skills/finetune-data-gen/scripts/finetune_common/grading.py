@@ -105,7 +105,12 @@ def reference_consistent(grading: dict, reference: str) -> bool:
     if t == "numeric":
         return any(abs(x - grading["answer"]) <= grading["tolerance"] for x in parse_numbers(reference))
     if t == "choice":
-        return re.search(rf"(?<![A-Za-z]){grading['answer']}(?![a-z])", reference) is not None
+        # The letter must appear AS AN OPTION: "(B)", "B)", "B.", "B:", "answer/option/choice B", or alone on a
+        # line. A bare capital letter inside a sentence ("A catalyst ...") does not count.
+        L = re.escape(grading["answer"])
+        rx = (rf"\({L}\)|(?<![A-Za-z]){L}[).:](?!\w)|(?i:answer|option|choice)\s*(?:is\s*)?:?\s*\(?{L}(?![A-Za-z])"
+              rf"|^\s*{L}\s*$")
+        return re.search(rx, reference, re.M) is not None
     if t == "exact":
         return check_short_answer(grading, reference) is True
     return True

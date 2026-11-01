@@ -28,6 +28,9 @@ the user's `seed_examples` added to held-out, optional `--safety-file` copied, f
 - Skill call (`--task-spec-path <spec>`): starts a **background job** and exits 1; later calls report `running` (exit 1);
   frozen → `"done": true` + `bench_dir`, exit 0. Dead worker restarted ≤3×; a terminal failure (too many rejects) is not.
 - By hand: `--foreground --time-budget 0`. ~4 s per item with Opus → ~15 min for 200.
+- The background job gets absolute spec / safety paths (it runs with cwd = ScienceClaw; relative paths used to fail
+  there). A missing file is reported at once. Restarts: the count resets whenever the job produced new items, so
+  `failed` = 3 failures in a row without progress. A lock file stops two calls from starting two jobs.
 - **Safety prompts are not generated**: Claude declines to write harmful test prompts (and a curated set is better).
   Pass `--safety-file` (validated before generation). Without it, finetune-eval skips M9 with a note.
 - Claude calls go through `finetune_common.llm.AnthropicClient` (no `temperature`; ScienceClaw's llm_client sends it and
@@ -40,8 +43,8 @@ the user's `seed_examples` added to held-out, optional `--safety-file` copied, f
 - Full 200-item chemistry benchmark (`spec_chem.json`): running.
 
 ## Tests (offline)
-`tests/test_bench.py` (incl. contract checks with a byte-identical copy of finetune-eval's `scoring.py` in
-`tests/fixtures/`), `test_link.py` (DataGen auto-detects the frozen benchmark and drops leaked prompts, incl. rewordings),
+`tests/test_bench.py` (contract checks use finetune-eval's real `scoring.py` when it is installed next to BenchGen,
+else the copy in `tests/fixtures/`), `test_link.py` (DataGen auto-detects the frozen benchmark and drops leaked prompts, incl. rewordings),
 `test_pipeline.py` (pipeline folder, progress, events; needs `ftc`), `test_anthropic_client.py`.
 
 ## Open
