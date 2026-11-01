@@ -18,9 +18,9 @@ Hackathon ends Sunday night. Favor working demos over perfect code. Keep things 
 | Trainer | `skills/finetune-submit`, `skills/finetune-status` | `train_path` (+ `retrain_config_path`) → `train_job_id` → `adapter_path` |
 | L3 eval (M7–M9) | `skills/finetune-eval` | `adapter_path` + `bench_dir` → `eval_report_path` |
 | Iterate? (Evaluator) | `skills/finetune-decide` | `eval_report_path` → `retrain_config_path` + `train_path` · `data_feedback_path` · stop (`best_adapter_path`) |
-| Output | not built (`run_pipeline.py` scores held-out once and writes `final/final_report.json`) | best adapter → HF Hub, model card, Infinite post |
+| Output (ReportAgent) | `skills/finetune-report`, `ftc/report.py`, `ftc/publish.py` | `best_adapter_path` → held-out once → `final/final_report.json` (verdict, side-by-side examples), `model_card.md` → HF Hub (private by default), Infinite post (opt-in) |
 | Runner without agents | `scripts/run_pipeline.py` (dashboard ▶ Start) | runs the stages above in order, converts Eval's report to §3.4 |
-| Live view | `dashboard/`, `ftc/pipeline.py`, `scripts/simulate_pipeline.py` | reads the pipeline folder |
+| Live view | `dashboard/`, `ftc/pipeline.py`, `scripts/simulate_pipeline.py` | reads the pipeline folder; the **Result** card at the top shows the final model |
 | Poster wall | `ftc/wall.py`, `skills/finetune-wall`, dashboard 📌 card | agents (and humans) pin notes for each other in `wall.jsonl` |
 
 Every training run saves its config, dataset hash, metrics and adapter location (`run.json`, `metrics.json`), so results are reproducible.

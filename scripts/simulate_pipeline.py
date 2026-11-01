@@ -244,10 +244,12 @@ def wrong_answer(spec, ref, system, i):
         k = next(iter(d), "value")
         d[k] = "not stated" if isinstance(d.get(k), str) else 0
         return json.dumps(d), f"Wrong value for '{k}'."
-    if system.startswith("base") and i % 2 == 0:
-        return ("The pH of the solution would be approximately 1, since hydrochloric acid is a strong acid "
-                "that dissociates completely in water, releasing H+ ions.", "Does not follow the ANSWER/WHY format.")
     m = re.search(r"ANSWER: ([0-9.]+)", ref)
+    if system.startswith("base") and i % 2 == 0:
+        ph = m.group(1).rstrip("0").rstrip(".") if m else "2"
+        return (f"Great question! The pH would be about {ph}. Hydrochloric acid is a strong acid, so it dissociates "
+                "completely in water and the H+ concentration equals the acid concentration.",
+                "Right number, but does not follow the ANSWER/WHY format.")
     v = float(m.group(1)) + 1 if m else 3.0
     return (f"ANSWER: {v:.1f}\nWHY: HCl is a weak acid, so only part of it dissociates.",
             f"Wrong value ({v:.1f}): HCl is a strong acid and dissociates fully.")

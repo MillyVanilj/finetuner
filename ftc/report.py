@@ -221,9 +221,9 @@ def verdict(systems, gain, general, spec, n_items, by_source_counts, base, count
         drop = -(worst.get("delta") or 0)
         names = "/".join(g["task"].upper() for g in general)
         if drop > max_drop:
-            details.append(f"General skills ({names}): {worst['task'].upper()} fell {pts(drop)}.")
-            warnings.append({"level": "warn", "text": f"Forgetting: {worst['task'].upper()} dropped {pts(drop)} "
-                             f"(limit {pts(max_drop)}). The model got worse at things outside this task."})
+            details.append(f"General skills ({names}): {worst['task'].upper()} fell {pts(drop).lstrip('+')}.")
+            warnings.append({"level": "warn", "text": f"Forgetting: {worst['task'].upper()} dropped {pts(drop).lstrip('+')} "
+                             f"(limit {pts(max_drop).lstrip('+')}). The model got worse at things outside this task."})
         else:
             details.append(f"General skills held up ({names}): " + (f"the biggest drop is {pts(drop, 1).lstrip('+')}." if drop > 0
                            else "no drop."))
@@ -405,6 +405,7 @@ def build_final(pipeline_dir, best_loop=None, best_job=None, best_adapter=None, 
         # publishing results survive a rebuild (ftc/publish.py fills them)
         "hub_url": old.get("hub_url"), "hub_repo": old.get("hub_repo"), "hub_private": old.get("hub_private"),
         "infinite_post_url": old.get("infinite_post_url"), "publish_log": old.get("publish_log") or [],
+        "simulated": bool(old.get("simulated")),     # a rebuild must not turn a fake run into a publishable one
         "model_card_path": str(pdir / "final" / "model_card.md"),
         "created_at": old.get("created_at") or now_iso(), "updated_at": now_iso(),
     }
@@ -416,6 +417,7 @@ def build_final(pipeline_dir, best_loop=None, best_job=None, best_adapter=None, 
 def write_outputs(pl, final, spec=None):
     """final_report.json + the model card + the Infinite post text, all from the same dict."""
     spec = spec or pl.spec()
+    final["usage_snippet"] = usage_snippet(final, spec)    # follows hub_repo once the adapter is pushed
     pl.write_json("final/final_report.json", final)
     (pl.dir / "final" / "model_card.md").write_text(model_card(final, spec))
     pl.write_json("final/infinite_post.json", infinite_post(final, spec))

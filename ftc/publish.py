@@ -169,7 +169,7 @@ print(json.dumps({"result": r, "api_base": c.api_base}, default=str))
 """
 
 
-def post_infinite(pipeline_dir, community=None, timeout=120) -> dict:
+def post_infinite_fn(pipeline_dir, community=None, timeout=120) -> dict:
     """Post final/infinite_post.json to Infinite with ScienceClaw's client."""
     pl = Pipeline.from_any(pipeline_dir)
     final = _load(pl) if pl.active else None
@@ -213,6 +213,43 @@ def post_infinite(pipeline_dir, community=None, timeout=120) -> dict:
     return {"ok": True, "url": url}
 
 
+def finalize(pipeline_dir, best_loop=None, best_job=None, best_adapter=None, loop=None, post_infinite=None,
+             on_step=None, log=None) -> dict:
+    """The whole ReportAgent step after the held-out split was scored: build the final report and model card
+    (ftc/report.py), pin the verdict on the wall, push to the HF Hub (if HF_TOKEN is set and FTC_HF_PUSH != 0;
+    private unless FTC_HF_PUBLIC=1) and post to Infinite (only if asked: FTC_POST_INFINITE=1 or
+    post_infinite=True). Used by scripts/run_pipeline.py and the finetune-report skill. Returns the final report."""
+    from .report import build_final
+    step = on_step or (lambda _s: None)
+    say = log or (lambda _m: None)
+    pl = Pipeline.from_any(pipeline_dir)
+    loop = loop or pl.current_loop()
+    step("writing the final report")
+    final = build_final(pl.dir, best_loop=best_loop, best_job=best_job, best_adapter=best_adapter)
+    v = final["verdict"]
+    Wall.for_pipeline(pl).post(
+        "ReportAgent", v["headline"] + (" " + " ".join(v["details"][:2]) if v["details"] else "")
+        + (f" Caveats: {len(v['warnings'])}, see the Result card." if v["warnings"] else ""),
+        kind="praise" if v["status"] == "improved" else "finding", loop=loop,
+        refs={"final_report": str(pl.dir / "final" / "final_report.json")})
+    env = env_with_dotenv()
+    if final.get("hub_url") and final.get("adapter_path") == best_adapter and best_adapter:
+        say(f"HF push: already on {final['hub_url']}")
+    elif env.get("FTC_HF_PUSH", "1") != "0" and (env.get("HF_TOKEN") or env.get("HUGGING_FACE_HUB_TOKEN")):
+        step("uploading to Hugging Face")
+        say(f"HF push: {json.dumps(push_hub(pl.dir))[:300]}")
+    else:
+        pl.emit("output", "log", "Hugging Face push skipped (no HF_TOKEN, or FTC_HF_PUSH=0). Push later from the "
+                "Result card or: python3 -m ftc.publish <pipeline> --hub", loop=loop)
+    if post_infinite if post_infinite is not None else env.get("FTC_POST_INFINITE") == "1":
+        step("posting to Infinite")
+        say(f"Infinite post: {json.dumps(post_infinite_fn(pl.dir))[:300]}")
+    final = _load(pl) or final
+    t = (final["heldout"]["systems"].get("tuned") or {}).get("score")
+    pl.emit("output", "done", f"Done. {v['headline']}", loop=loop, held_out_tuned=t, verdict=v["status"])
+    return final
+
+
 def main(argv=None):
     import argparse
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
@@ -229,10 +266,13 @@ def main(argv=None):
     if a.hub:
         res["hub"] = push_hub(a.pipeline_dir, repo=a.repo, public=a.public or None)
     if a.infinite:
-        res["infinite"] = post_infinite(a.pipeline_dir, community=a.community)
+        res["infinite"] = post_infinite_fn(a.pipeline_dir, community=a.community)
     print(json.dumps(res, indent=2))
     return 0 if all(r.get("ok") for r in res.values()) else 1
 
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+post_infinite = post_infinite_fn     # public name (finalize's argument of the same name shadows it inside)

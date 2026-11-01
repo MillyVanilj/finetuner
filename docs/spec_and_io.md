@@ -27,7 +27,7 @@ $FINETUNER_DIR/pipelines/<pipeline_id>/        (FINETUNER_DIR defaults to ~/fine
   bench/                  dev.jsonl, heldout.jsonl, bench_report.json, progress.json   BenchGen
   loops/<n>/eval/         progress.json, predictions_<system>.jsonl, eval_report.json  Eval
   loops/<n>/              decision.json, retrain_config.json | data_feedback.json      Evaluator
-  final/                  final_report.json, model_card.md                    ReportAgent
+  final/                  final_report.json, heldout_answers.jsonl, model_card.md, infinite_post.json   ReportAgent
 
 links in pipeline.json:
   data_run_dir   [..]   ~/.scienceclaw/finetune/runs/<run_id>/   DataGen (Owen): state.json, raw.jsonl, rejects.jsonl, train.jsonl
@@ -188,8 +188,57 @@ Overwrite it every ~20 items (`Pipeline.progress("eval", ...)` does this):
 **Passing the spec between skills:** the key is `spec` (the path to `task_spec.json`), matching DataGen's `--spec`.
 Skills that take a spec should accept `--spec`, optionally with `--task-spec-path` as an alias.
 
-### 3.7 Final report: `final/final_report.json`
-`{pipeline_id, best_loop, train_job_id, adapter_path, hub_url, infinite_post_url, heldout: {systems, by_source}, dev_history: [{loop, tuned}], model_card_path, created_at}`.
+### 3.7 Final report: `final/final_report.json` (ReportAgent, `ftc/report.py`)
+Written after the held-out split is scored once, by `ftc.publish.finalize` (called by `run_pipeline.py` and the
+`finetune-report` skill). Rebuild it any time from the files on disk: `python3 -m ftc.report <pipeline> --print`.
+No LLM writes any of it: every sentence is a template filled with the numbers, so it can't claim more than they say.
+```json
+{"pipeline_id": "...", "title": "...", "task": "...", "io_format": "...",
+ "best_loop": 3, "train_job_id": "...", "adapter_path": ".../adapter",
+ "verdict": {"status": "improved",            // improved | no_clear_gain (gain CI includes 0) | worse | unknown
+             "headline": "Fine-tuning worked: the tuned Qwen3-4B-Instruct-2507 scores 81% on 100 held-out items it never saw, vs 52% for the same model prompted with examples (few-shot): +29 points (95% CI +20 to +38).",
+             "details": ["Item by item: fine-tuning fixed 30 answers ... broke 1 ...", "The teacher ... 92% of it.", "..."],
+             "warnings": [{"level": "warn|info|critical", "text": "Every held-out item is synthetic ..."}],
+             "gain": 0.29, "gain_ci95": [0.2, 0.38], "baseline": "base_fewshot"},
+ "heldout": {"n_items": 100, "systems": {...§3.4...}, "by_source": [...], "by_category": [...],
+             "gain_vs_base_few_shot": {"mean", "ci95", "n"}, "source_counts": {"user": 10, "synthetic": 90},
+             "pass_threshold": 0.5, "outcomes": {"fixed": 30, "broke": 1, "both_pass": 51, "both_fail": 18, "unscored": 0},
+             "report_path": "...heldout_report.json", "answers_path": ".../final/heldout_answers.jsonl"},
+ "general": [...§3.4 general...], "general_from": "loop 3 dev run",   // M8 of the same adapter
+ "examples": [{"kind": "fixed|still_fails|broke", "id", "category", "source", "source_ref", "question", "reference",
+               "answers": {"base_fewshot": {"output", "score", "format_ok", "judge_reason"}, "tuned": {...}, "teacher": {...}}}],
+ "dev_history": [{"loop", "tuned", "base_fewshot", "train_job_id", "action", "rule", "reason"}],
+ "made_with": {"student", "training_config", "train_examples", "dataset_sha256", "data": {"verified", "rejected", "reject_rate",
+               "contaminated_removed", "duplicates_removed"}, "models": {...}, "benchmark": {"n_dev", "n_heldout", "bench_sha256",
+               "few_shot_k"}, "loops", "train_metrics"},
+ "cost": {"train_jobs", "train_gpu_hours", "eval_gpu_hours", "gpu_hours", "api_usd": null, "wall_clock_s"},
+ "usage_snippet": "from transformers import ...",   // points at the HF repo once pushed, else the local adapter
+ "hub_url", "hub_repo", "hub_private", "infinite_post_url", "publish_log": [{"ts", "target", "ok", "msg"}],
+ "simulated": false, "model_card_path": ".../final/model_card.md", "created_at", "updated_at"}
+```
+- **Examples are picked by fixed rules, not by hand:** up to 4 items fine-tuning *fixed* (baseline wrong, tuned right),
+  2 it *still fails* (teacher-solvable first), 2 it *broke* (baseline right, tuned wrong). User/real items first,
+  categories cycled. Pass = score ≥ `scoring.pass_threshold`. Baseline = base few-shot (zero-shot if there is none).
+- `final/heldout_answers.jsonl`: one line per held-out item: `{id, category, source, source_ref, difficulty, scoring,
+  question, reference, grading_note, answers: {system: {output, score, format_ok, judge_reason}}}` (BenchGen's
+  `GRADING NOTE` is split off the reference). Made from finetune-eval's `<run>/eval_heldout/outputs.jsonl`.
+- `final/model_card.md`: the Hugging Face README (YAML header: base_model, library_name peft, license, tags), then the
+  same facts as prose: verdict, results table, outcomes, by category/source, general ability, examples, how it was
+  made, limitations (synthetic data, LLM-written benchmark and judge), usage code, reproducibility hashes.
+- `final/infinite_post.json`: `{community, title, content, hypothesis, method, findings, data_sources}` for
+  ScienceClaw's `InfiniteClient.create_post`. Community from `spec.domain` (chemistry, biology, materials) or `scienceclaw`.
+- `final/publish_state.json`: `{target: hub|infinite, state: running|done|failed, msg, pid}` while publishing.
+
+**Publishing** (`ftc/publish.py`; never fails the pipeline, every attempt is in `publish_log` and the Activity feed):
+- HF Hub: `python3 -m ftc.publish <pipeline> --hub [--repo user/name] [--public]`. Needs `HF_TOKEN` (env or `.env`).
+  Runs `scripts/hub_push.py` with `.venv-train`'s Python. Uploads `adapter/` + `README.md` (the card) + `eval/final_report.json`
+  + `eval/heldout_answers.jsonl`. Repo: `$FTC_HF_REPO`, else `<$FTC_HF_NAMESPACE or your HF user>/<pipeline id>-lora`.
+  **Private** unless `--public` / `FTC_HF_PUBLIC=1`. At the end of a run it pushes automatically when `HF_TOKEN` is set
+  (`FTC_HF_PUSH=0` turns that off).
+- Infinite: `python3 -m ftc.publish <pipeline> --infinite [--community ...]`. Uses ScienceClaw's own
+  `skills/infinite/scripts/infinite_client.py` (ScienceClaw's venv) with an agent's saved login (`$FTC_INFINITE_CONFIG`,
+  else `~/.scienceclaw/infinite_config.json`). Public, so it is **opt-in**: `FTC_POST_INFINITE=1` at the end of a run,
+  or the Result card's button. A new agent needs 10 karma first.
 
 ### 3.8 Training progress (Trainer → UI): already exists
 `runs/<job_id>/status.json` (live), plus **new** `runs/<job_id>/train_log.jsonl`: `train_sft.py` now appends every
@@ -270,7 +319,14 @@ python3 scripts/simulate_pipeline.py --speed 2          # fake run to watch (or 
   category and source, and sample items. *Trainer* shows step/ETA, a **live loss curve** (train + eval), config
   chips and all runs. *Evaluation* shows per-system live progress with running scores, then scores with 95% CIs vs
   target, per-category and per-source bars, M8 forgetting check and failure categories. *Iterate?* shows each
-  decision with its rule and the exact feedback sent back. *Output* shows held-out scores and links.
+  decision with its rule and the exact feedback sent back. *Output* shows the verdict and the publish buttons.
+- **Result card** (top of the page, once `final/final_report.json` exists): the verdict sentence + warnings, number
+  tiles (held-out tuned / baseline / gain with CI / share of teacher / worst general-skill change / GPU hours),
+  held-out bars with CIs, the item-by-item outcome bar, **side-by-side examples** (base few-shot vs tuned vs
+  reference, judge reasons, teacher on demand; tabs Fixed / Still wrong / Broken / *All answers* with search and an
+  outcome filter), by category and source, M8, how it was made, and *Use it*: push to HF / post to Infinite,
+  the model card viewer and the loading code. Endpoints: `GET /api/answers`, `GET /api/model_card`,
+  `POST /api/pipelines/<id>/publish {target: hub|infinite, public?}` (refused for simulated runs).
 - **Across loops**: tuned dev score per loop vs base few-shot and target, plus the decision history.
 - **Activity**: the event log, newest first.
 - **New task**: M1 in the browser: goal → draft → questions → editable spec form with live validation →
@@ -298,7 +354,9 @@ repo's `skills/`:
    - `regenerate_data`: DataGen can't read `data_feedback.json` yet, so the runner writes
      `loops/<n>/task_spec_data.json`, with the weak categories first (twice) in `edge_cases` and `n_examples` raised,
      and runs DataGen on that.
-   - `stop`: score the held-out split once, then write `final/final_report.json`.
+   - `stop`: score the held-out split once (M8 too, if the best loop's dev run skipped it), then
+     `ftc.publish.finalize`: final report + model card + wall note, HF push if `HF_TOKEN` is set, Infinite if
+     `FTC_POST_INFINITE=1`.
 
 State: `runner.json` (pid, current step, error), log: `runner.log`, both shown in the dashboard. **■ Stop**
 sends SIGTERM: the runner stops after its current call. Jobs it already launched (training, eval, BenchGen) keep
@@ -313,7 +371,9 @@ Test without GPU or API: `python3 tests/test_run_pipeline.py` (stand-in skills, 
 - `finetune-eval` writes its own `report.json`, not §3.4. `run_pipeline.py` converts it (`ftc/report_convert.py`), but
   under the ScienceClaw reactor nothing does, and `finetune-decide` reads §3.4 only. Either Eval writes
   `loops/<n>/eval/eval_report.json` itself, or the Evaluator calls `report_convert`.
-- ReportAgent (HF push, model card, Infinite post) is not built; the runner writes `final/final_report.json` for it.
+- ReportAgent is built (`skills/finetune-report`). Not yet: API spend in the cost section (`budget.max_api_usd` is
+  still not tracked), pushing the training data to an HF dataset repo, and a "try your own question" box (it would
+  need the GPU: do it by hand with the card's loading code).
 - DataGen reads `--data-feedback-path` (agent mode; builds the same spec copy as the runner's `regen_spec`). It
   still ignores the v2-only fields (seed examples, coverage topics); using `seed_examples` as few-shot is a cheap win.
 - `finetune-eval` reports only a stage name while running (no item counts), so the Evaluation panel shows its

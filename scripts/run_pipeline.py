@@ -423,32 +423,12 @@ def run(pl: Pipeline, max_loops_cap: int, skip_general: bool):
 
 
 def finish(pl: Pipeline, best_loop, best_job, best_adapter, loop, post_infinite=None):
-    """Write final_report.json + model card (ftc/report.py), then publish (ftc/publish.py). Publishing never
-    fails the pipeline: the adapter and the report are already on disk."""
-    from ftc.publish import env_with_dotenv, post_infinite as do_post, push_hub
-    from ftc.report import build_final
-    write_runner_state(pl, step="writing the final report")
-    final = build_final(pl.dir, best_loop=best_loop, best_job=best_job, best_adapter=best_adapter)
-    v = final["verdict"]
-    wall = Wall.for_pipeline(pl)
-    wall.post("ReportAgent", v["headline"] + (" " + " ".join(v["details"][:2]) if v["details"] else "")
-              + (f" Caveats: {len(v['warnings'])}, see the Result card." if v["warnings"] else ""),
-              kind="praise" if v["status"] == "improved" else "finding", loop=loop,
-              refs={"final_report": str(pl.dir / "final" / "final_report.json")})
-    env = env_with_dotenv()
-    if env.get("FTC_HF_PUSH", "1") != "0" and (env.get("HF_TOKEN") or env.get("HUGGING_FACE_HUB_TOKEN")):
-        write_runner_state(pl, step="uploading to Hugging Face")
-        r = push_hub(pl.dir)
-        log(pl, f"HF push: {json.dumps(r)[:300]}")
-    else:
-        pl.emit("output", "log", "Hugging Face push skipped (no HF_TOKEN, or FTC_HF_PUSH=0). Push later from the "
-                "Result card or: python3 -m ftc.publish <pipeline> --hub", loop=loop)
-    if post_infinite if post_infinite is not None else env.get("FTC_POST_INFINITE") == "1":
-        write_runner_state(pl, step="posting to Infinite")
-        r = do_post(pl.dir)
-        log(pl, f"Infinite post: {json.dumps(r)[:300]}")
-    t = (final["heldout"]["systems"].get("tuned") or {}).get("score")
-    pl.emit("output", "done", f"Done. {v['headline']}", loop=loop, held_out_tuned=t, verdict=v["status"])
+    """The ReportAgent step (ftc/publish.py finalize): final report + model card, then publishing.
+    Publishing never fails the pipeline: the adapter and the report are already on disk."""
+    from ftc.publish import finalize
+    finalize(pl.dir, best_loop=best_loop, best_job=best_job, best_adapter=best_adapter, loop=loop,
+             post_infinite=post_infinite, on_step=lambda step: write_runner_state(pl, step=step),
+             log=lambda msg: log(pl, msg))
 
 
 def main():

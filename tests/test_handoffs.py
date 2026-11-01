@@ -44,6 +44,9 @@ OUTPUTS = {
                         "data_feedback_path", "best_adapter_path", "best_loop", "spec", "focus_categories",
                         "tuned_score", "decision_path", "summary", "changed", "final_adapter_path", "best_job_id",
                         "stop_reason", "next_step"},
+    # the ReportAgent: the end of the chain, so none of its keys may be another skill's flag
+    "finetune-report": {"state", "stage", "error", "final_report_path", "model_card_path", "hub_url",
+                        "infinite_post_url", "verdict", "summary"},
     # the poster wall: called on purpose by agents, must neither take nor feed any hand-off
     "finetune-wall": {"ok", "id", "wall", "agent", "n", "posts", "summary", "error"},
 }
@@ -57,7 +60,8 @@ INTENDED = {
     "finetune-decide": {"finetune-submit": {"train_path", "retrain_config_path"},
                         "finetune-data-gen": {"data_feedback_path", "spec"},
                         # harmless: BenchGen answers a frozen benchmark instantly without API calls
-                        "finetune-bench-gen": {"spec"}},
+                        "finetune-bench-gen": {"spec"},
+                        "finetune-report": {"best_adapter_path"}},
 }
 
 
@@ -81,6 +85,7 @@ def installed():
     if (SKILLS / "finetune-decide").exists():
         names.append("finetune-decide")
     names.append("finetune-wall")
+    names.append("finetune-report")
     return names
 
 
