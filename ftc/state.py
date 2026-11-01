@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .pipeline import STAGES, finetuner_dir
+from .wall import Wall, summary as wall_summary
 
 TAIL_EVENTS = 200
 
@@ -300,6 +301,7 @@ def snapshot(pipeline_dir) -> dict:
         "data": data, "bench": bench, "train": jobs, "loops": loops, "final": final,
         "budget": meta.get("budget_used") or {},
         "events": events[-TAIL_EVENTS:], "n_events": len(events),
+        "wall": wall_summary(Wall(pdir / "wall.jsonl")),
         "generated_at": time.time(),
     }
 

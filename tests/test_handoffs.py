@@ -44,6 +44,8 @@ OUTPUTS = {
                         "data_feedback_path", "best_adapter_path", "best_loop", "spec", "focus_categories",
                         "tuned_score", "decision_path", "summary", "changed", "final_adapter_path", "best_job_id",
                         "stop_reason", "next_step"},
+    # the poster wall: called on purpose by agents, must neither take nor feed any hand-off
+    "finetune-wall": {"ok", "id", "wall", "agent", "n", "posts", "summary", "error"},
 }
 # Intended chain: producer -> {consumer: key(s) that should carry it}
 INTENDED = {
@@ -78,6 +80,7 @@ def installed():
         names += ["finetune-data-gen", "finetune-bench-gen"]
     if (SKILLS / "finetune-decide").exists():
         names.append("finetune-decide")
+    names.append("finetune-wall")
     return names
 
 
@@ -96,6 +99,12 @@ def test_output_keys_only_reach_the_intended_skill():
             elif want and not want <= hit:
                 problems.append(f"{prod} -> {cons}: {sorted(want - hit)} not accepted by {cons}")
     assert not problems, "hand-off key problems:\n  " + "\n  ".join(problems)
+
+
+def test_wall_takes_no_artifacts():
+    """finetune-wall is called on purpose, never by the reactor. A visible --spec/--format would let a wall
+    call (exit 0) use up the task spec before DataGen/BenchGen get it."""
+    assert help_params("finetune-wall") == {"help"}
 
 
 def test_generators_expose_only_pipeline_inputs():

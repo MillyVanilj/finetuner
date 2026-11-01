@@ -19,6 +19,9 @@ API (all JSON):
     POST /api/simulate        {spec?, speed?}   -> start scripts/simulate_pipeline.py (no GPU, demo only)
     POST /api/pipelines/<id>/start {skip_general?} -> run scripts/run_pipeline.py (the REAL pipeline) in the background
     POST /api/pipelines/<id>/stop                  -> stop that runner
+    GET  /api/wall?p=<id>                       the poster wall (p omitted = the lobby wall)
+    POST /api/wall?p=<id> {author, text, to?, kind?, reply_to?}   pin a note (humans can talk to the agents)
+    POST /api/wall/react?p=<id> {post, author, emoji}
 """
 import argparse
 import hashlib
@@ -36,6 +39,7 @@ from ftc import m1                                          # noqa: E402
 from ftc.pipeline import Pipeline, list_pipelines, pipelines_root   # noqa: E402
 from ftc.spec import upgrade, validate_spec                 # noqa: E402
 from ftc.state import snapshot                              # noqa: E402
+from ftc.wall import Wall, summary as wall_summary          # noqa: E402
 
 STATIC = Path(__file__).resolve().parent
 POLL_S = 1.0
@@ -154,6 +158,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(snapshot(pipeline_dir(q.get("p"))))
             if u.path == "/api/stream":
                 return self._stream(pipeline_dir(q.get("p")))
+            if u.path == "/api/wall":
+                return self._json(wall_summary(self._wall(q)))
             if u.path == "/api/file":
                 return self._file(pipeline_dir(q.get("p")), q.get("path", ""), int(q.get("n", 20)))
             return self._json({"error": "not found"}, 404)
@@ -163,6 +169,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         except Exception as e:
             return self._json({"error": repr(e)}, 500)
+
+    def _wall(self, q: dict) -> Wall:
+        return Wall(pipeline_dir(q["p"]) / "wall.jsonl") if q.get("p") else Wall.lobby()
 
     def _stream(self, d: Path):
         self.send_response(200)
@@ -205,8 +214,19 @@ class Handler(BaseHTTPRequestHandler):
     # ---------- POST ----------
     def do_POST(self):
         u = urlparse(self.path)
+        q = {k: v[0] for k, v in parse_qs(u.query).items()}
         try:
             body = self._body()
+            if u.path == "/api/wall":
+                if not (body.get("text") or "").strip():
+                    return self._json({"error": "text is required"}, 400)
+                pid = self._wall(q).post((body.get("author") or "Human").strip()[:40], body["text"],
+                                         to=body.get("to"), kind=body.get("kind") or "note",
+                                         reply_to=body.get("reply_to") or None)
+                return self._json({"ok": bool(pid), "id": pid})
+            if u.path == "/api/wall/react":
+                pid = self._wall(q).react(body.get("post", ""), (body.get("author") or "Human")[:40], body.get("emoji") or "👍")
+                return self._json({"ok": bool(pid), "id": pid})
             if u.path == "/api/spec/validate":
                 spec = upgrade(body.get("spec") or {})
                 errors, warnings = validate_spec(spec)
@@ -256,6 +276,8 @@ class Handler(BaseHTTPRequestHandler):
                         return self._json({"pipeline_id": new[0]["pipeline_id"], "pid": proc.pid})
                 return self._json({"error": "simulator did not start", "returncode": proc.poll()}, 500)
             return self._json({"error": "not found"}, 404)
+        except FileNotFoundError as e:
+            return self._json({"error": f"no such pipeline: {e}"}, 404)
         except ValueError as e:
             return self._json({"error": str(e)}, 400)
         except Exception as e:

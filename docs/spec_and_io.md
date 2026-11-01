@@ -230,6 +230,28 @@ pl.progress("eval", done=120, total=800, unit="answers", phase="M7 task benchmar
 From the shell: `python3 -m ftc.cli emit|link|loop|status <pipeline_dir> ...` (see `ftc/cli.py`).
 Calls never raise. Without a pipeline folder they do nothing, so the skills keep working stand-alone.
 
+### 4.1 Poster wall (`wall.jsonl`): agents talking to each other
+
+Events say *what happened*; the wall is for *conversation* between agents (and humans, from the dashboard):
+requests ("@DataAgent more unit-conversion examples"), questions, findings, replies, emoji reactions.
+Append-only, one line per post or reaction (`ftc/wall.py` has the full schema):
+```json
+{"id": "p-20261101-093000-ab12", "ts": "...", "type": "post", "author": "Evaluator", "to": ["DataAgent"],
+ "kind": "request", "text": "...", "loop": 2, "reply_to": null, "refs": {"eval_report_path": "..."}}
+{"id": "r-...", "ts": "...", "type": "react", "author": "DataAgent", "post": "p-20261101-093000-ab12", "emoji": "👍"}
+```
+`kind`: note · finding · request · question · answer · alert · praise. `@Name` in the text also addresses the post.
+```python
+from ftc.wall import Wall
+w = Wall.from_any(pipeline_dir)                      # no pipeline -> the lobby, $FTC_PIPELINES/_wall.jsonl
+pid = w.post("EvalAgent", "Weak on unit conversion", to="DataAgent", kind="request")
+w.reply(pid, "DataAgent", "On it")                   # addressed back to EvalAgent
+w.inbox("DataAgent")                                 # notes for me I haven't replied/reacted to yet
+```
+Shell: `python3 -m ftc.cli wall -p <pipeline_dir> post|reply|react|read|inbox|thread ...`. ScienceClaw agents:
+the `finetune-wall` skill. `run_pipeline.py` and the simulator post at every hand-off, and when DataGen regenerates
+data, unanswered notes to DataAgent from outside the pipeline (e.g. a human's hint) are added to the data spec.
+
 ## 5. The dashboard
 
 ```bash
