@@ -58,7 +58,9 @@ if counter("bench") < 1: out({"state": "running", "done": False}, 1)
 it = lambda i, s: json.dumps({"id": f"{s}{i}", "messages": [{"role": "user", "content": f"Q{i}"}], "reference": "A",
                               "scoring": "judge", "category": "typical cases", "source": "synthetic", "difficulty": "easy"})
 (bd / "dev.jsonl").write_text("\\n".join(it(i, "d") for i in range(6)) + "\\n")
-(bd / "heldout.jsonl").write_text("\\n".join(it(i, "h") for i in range(4)) + "\\n")
+hit = lambda i: json.dumps({**json.loads(it(i, "h")), "reference": f"ANSWER: {i}\\n\\nGRADING NOTE: key is {i}",
+                             "category": ["typical cases", "Trick questions"][i % 2], "source": "user" if i == 0 else "synthetic"})
+(bd / "heldout.jsonl").write_text("\\n".join(hit(i) for i in range(4)) + "\\n")
 (bd / "bench_report.json").write_text(json.dumps({"n_dev": 6, "n_heldout": 4}))
 out({"state": "done", "done": True, "bench_dir": str(bd), "n_dev": 6, "n_heldout": 4})
 """,
@@ -104,6 +106,13 @@ rep = {"split": a.split, "base_model": "Qwen/Qwen3-4B-Instruct-2507", "adapter_p
        "general": None if a.skip_general else {"base": {"gsm8k": 84.0}, "tuned": {"gsm8k": 83.0}, "delta": {"gsm8k": -1.0}, "max_drop_points": 1.0},
        "train_metrics": {"train_loss": 1.1}, "notes": []}
 (ed / "report.json").write_text(json.dumps(rep))
+items = [json.loads(l) for l in (Path(a.bench_dir) / f"{a.split}.jsonl").read_text().splitlines() if l.strip()]
+passes = {"base_zero_shot": {1}, "base_few_shot": {1}, "tuned": {0, 1, 2}, "teacher": {0, 1, 2, 3}}
+with open(ed / "outputs.jsonl", "w") as f:
+    for name, ok in passes.items():
+        for i, x in enumerate(items):
+            f.write(json.dumps({"id": x["id"], "system": name, "output": f"{name} says {i}", "score": float(i in ok),
+                                "format_ok": True, "judge_reason": "matches the key" if i in ok else "wrong value"}) + "\\n")
 out({"state": "done", "eval_report_path": str(ed / "report.json"), "split": a.split})
 """,
     "finetune-decide/scripts/finetune_decide.py": """
@@ -138,7 +147,7 @@ def test_runner_end_to_end(keep=False):
     spec["n_examples"] = 10
     spec["edge_cases"] = ["Trick questions"] + spec["edge_cases"]
     pl = Pipeline.create(spec, root=tmp / "pipelines")
-    env = dict(os.environ, SCIENCECLAW_DIR=str(tmp / "sc"), FAKE_STATE=str(tmp / "state"),
+    env = dict(os.environ, SCIENCECLAW_DIR=str(tmp / "sc"), FAKE_STATE=str(tmp / "state"), FTC_HF_PUSH="0", FTC_POST_INFINITE="0",
                FINETUNER_RUNS=str(tmp / "runs"), FINETUNER_DIR=str(ROOT),
                FTC_POLL_TRAIN_S="0", FTC_POLL_EVAL_S="0", FTC_POLL_BENCH_S="0")
     p = subprocess.run([sys.executable, str(ROOT / "scripts/run_pipeline.py"), "--pipeline", str(pl.dir)],
@@ -157,6 +166,20 @@ def test_runner_end_to_end(keep=False):
     assert regen["edge_cases"][0] == "Trick questions" and regen["n_examples"] == 14
     assert json.loads((pl.dir / "loops/3/eval/heldout_report.json").read_text())["split"] == "heldout"
     assert s["final"]["dev_history"] and s["final"]["best_loop"] == 3
+    f = s["final"]
+    assert f["verdict"]["status"] == "improved" and f["verdict"]["headline"].startswith("Fine-tuning worked")
+    assert f["heldout"]["outcomes"] == {"fixed": 2, "broke": 0, "both_pass": 1, "both_fail": 1, "unscored": 0}
+    kinds = [e["kind"] for e in f["examples"]]
+    assert kinds == ["fixed", "fixed", "still_fails"], kinds
+    assert f["examples"][0]["source"] == "user"                                    # real/user items first
+    assert f["examples"][0]["reference"] == "ANSWER: 0"                             # grading note stripped
+    assert set(f["examples"][0]["answers"]) == {"base_fewshot", "tuned", "teacher"}
+    assert f["general"] and f["general_from"] == "loop 3 dev run"                  # M8 not re-run on held-out
+    assert len((pl.dir / "final/heldout_answers.jsonl").read_text().splitlines()) == 4
+    card = (pl.dir / "final/model_card.md").read_text()
+    assert card.startswith("---\nbase_model: Qwen/Qwen3-4B-Instruct-2507") and "## Examples" in card and "PeftModel" in card
+    assert json.loads((pl.dir / "final/infinite_post.json").read_text())["community"] == "chemistry"
+    assert any("Hugging Face push skipped" in e["msg"] for e in s["events"])
     assert s["runner"]["state"] == "done"
     if keep:
         print("pipeline kept at", pl.dir)

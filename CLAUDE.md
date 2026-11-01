@@ -18,10 +18,10 @@ Hackathon ends Sunday night. Favor working demos over perfect code. Keep things 
 | Trainer | `skills/finetune-submit`, `skills/finetune-status` | `train_path` (+ `retrain_config_path`) → `train_job_id` → `adapter_path` |
 | L3 eval (M7–M9) | `skills/finetune-eval` | `adapter_path` + `bench_dir` → `eval_report_path` |
 | Iterate? (Evaluator) | `skills/finetune-decide` | `eval_report_path` → `retrain_config_path` + `train_path` · `data_feedback_path` · stop (`best_adapter_path`) |
-| Output | `skills/finetune-report` (agent mode); `run_pipeline.py` does the same (`ftc/report.py`) | `best_adapter_path` → held-out once → `final/final_report.json` + model card (HF push, Infinite post: not built) |
+| Output (ReportAgent) | `skills/finetune-report`, `ftc/report.py`, `ftc/publish.py` | `best_adapter_path` → held-out once → `final/final_report.json` (verdict, side-by-side examples), `model_card.md` → HF Hub (private by default), Infinite post (opt-in) |
 | Agent mode | `agents/` (7 profiles), `python3 -m ftc.cli agents start / kickoff / status / stop` (`ftc/agents.py`) | the stages above as ScienceClaw agents; `docs/spec_and_io.md` §8 |
 | Runner without agents | `scripts/run_pipeline.py` (dashboard ▶ Start) | runs the stages above in order, converts Eval's report to §3.4 |
-| Live view | `dashboard/`, `ftc/pipeline.py`, `scripts/simulate_pipeline.py` | reads the pipeline folder |
+| Live view | `dashboard/`, `ftc/pipeline.py`, `scripts/simulate_pipeline.py` | reads the pipeline folder; the **Result** card at the top shows the final model |
 | Poster wall | `ftc/wall.py`, `skills/finetune-wall`, dashboard 📌 card | agents (and humans) pin notes for each other in `wall.jsonl` |
 
 Every training run saves its config, dataset hash, metrics and adapter location (`run.json`, `metrics.json`), so results are reproducible.

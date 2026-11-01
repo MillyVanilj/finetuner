@@ -22,6 +22,10 @@ API (all JSON):
     GET  /api/wall?p=<id>                       the poster wall (p omitted = the lobby wall)
     POST /api/wall?p=<id> {author, text, to?, kind?, reply_to?}   pin a note (humans can talk to the agents)
     POST /api/wall/react?p=<id> {post, author, emoji}
+    GET  /api/answers?p=<id>                    every held-out item with every system's answer (final/heldout_answers.jsonl)
+    GET  /api/model_card?p=<id>                 final/model_card.md as text
+    POST /api/pipelines/<id>/publish {target: "hub"|"infinite", public?, repo?, community?}
+                                                -> python3 -m ftc.publish in the background (status: final/publish_state.json)
 """
 import argparse
 import hashlib
@@ -91,6 +95,53 @@ def start_runner(d: Path, body: dict) -> dict:
     (d / "runner.json").write_text(json.dumps({"state": "running", "pid": proc.pid, "step": "starting",
                                                "started_at": time.strftime("%Y-%m-%dT%H:%M:%S")}))
     return {"ok": True, "pid": proc.pid}
+
+
+def start_publish(d: Path, body: dict) -> dict:
+    """Push the adapter + model card to the HF Hub, or post the result to Infinite (ftc/publish.py), in the
+    background: an upload can take minutes. Its progress is final/publish_state.json + the Activity feed."""
+    from ftc.state import read_publish
+    target = body.get("target")
+    if target not in ("hub", "infinite"):
+        return {"ok": False, "error": "target must be 'hub' or 'infinite'"}
+    try:
+        final = json.loads((d / "final" / "final_report.json").read_text())
+    except (OSError, ValueError):
+        return {"ok": False, "error": "no final report yet: the pipeline hasn't finished"}
+    if final.get("simulated"):
+        return {"ok": False, "error": "this is a simulated run: there is no real adapter to publish"}
+    if read_publish(d).get("alive"):
+        return {"ok": False, "error": "a publish step is already running"}
+    args = [sys.executable, "-m", "ftc.publish", str(d), "--" + target]
+    if target == "hub" and body.get("public"):
+        args.append("--public")
+    if target == "hub" and body.get("repo"):
+        args += ["--repo", str(body["repo"]).strip()]
+    if target == "infinite" and body.get("community"):
+        args += ["--community", str(body["community"]).strip()]
+    logf = open(d / "final" / "publish.log", "a")
+    logf.write(f"\n===== {target} from the dashboard {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n")
+    logf.flush()
+    proc = subprocess.Popen(args, stdout=logf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                            cwd=str(ROOT), start_new_session=True)
+    (d / "final" / "publish_state.json").write_text(json.dumps({"target": target, "state": "running", "pid": proc.pid,
+                                                                "msg": "starting…"}))
+    return {"ok": True, "pid": proc.pid}
+
+
+def read_answers(d: Path) -> dict:
+    """Every held-out item with every system's answer, for the Result card's 'all answers' browser."""
+    rows = []
+    try:
+        rows = [json.loads(x) for x in (d / "final" / "heldout_answers.jsonl").read_text().splitlines() if x.strip()]
+    except (OSError, ValueError):
+        pass
+    try:
+        final = json.loads((d / "final" / "final_report.json").read_text())
+    except (OSError, ValueError):
+        final = {}
+    return {"rows": rows, "baseline": (final.get("verdict") or {}).get("baseline") or "base_fewshot",
+            "pass_threshold": (final.get("heldout") or {}).get("pass_threshold") or 0.5}
 
 
 def stop_runner(d: Path) -> dict:
@@ -169,6 +220,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._stream(pipeline_dir(q.get("p")))
             if u.path == "/api/wall":
                 return self._json(wall_summary(self._wall(q)))
+            if u.path == "/api/answers":
+                return self._json(read_answers(pipeline_dir(q.get("p"))))
+            if u.path == "/api/model_card":
+                f = pipeline_dir(q.get("p")) / "final" / "model_card.md"
+                return self._json({"text": f.read_text() if f.exists() else None})
             if u.path == "/api/file":
                 return self._file(pipeline_dir(q.get("p")), q.get("path", ""), int(q.get("n", 20)))
             return self._json({"error": "not found"}, 404)
@@ -264,6 +320,8 @@ class Handler(BaseHTTPRequestHandler):
                 w.rename(d / "bench" / f"worker.json.failed-{time.strftime('%H%M%S')}")
                 Pipeline(d).emit("bench", "log", "BenchGen reset from the dashboard (worker.json set aside); press Start to retry", loop=0)
                 return self._json({"ok": True})
+            if u.path.startswith("/api/pipelines/") and u.path.endswith("/publish"):
+                return self._json(start_publish(pipeline_dir(u.path.split("/")[3]), body))
             if u.path.startswith("/api/pipelines/") and u.path.endswith(("/start", "/stop")):
                 pid_, action = u.path.split("/")[3], u.path.rsplit("/", 1)[1]
                 d = pipeline_dir(pid_)

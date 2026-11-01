@@ -30,7 +30,6 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 from ftc.pipeline import Pipeline, now_iso      # noqa: E402
-from ftc.report import dev_history, write_final   # noqa: E402
 from ftc.spec import upgrade                    # noqa: E402
 from ftc.wall import STAGE_AGENT, Wall          # noqa: E402
 
@@ -411,17 +410,25 @@ def run(pl: Pipeline, max_loops_cap: int, skip_general: bool):
             raise RunnerError(f"unknown Evaluator action {action!r}")
         pl.emit("bench", "done", "Benchmark unchanged (fixed across loops)", loop=nxt)
 
-    # Output: held-out once
+    # Output: held-out once, then the ReportAgent's files (ftc/report.py) and publishing (ftc/publish.py)
     best_adapter, best_job, best_loop = best
     loop = pl.current_loop()
     pl.emit("output", "start", f"Scoring the held-out split once (adapter from loop {best_loop})", loop=loop)
     write_runner_state(pl, step="held-out evaluation")
-    evaluate(pl, best_adapter, bench_dir, "heldout", loop, best_job, skip_general=True)
-    ho = json.loads((pl.loop_dir(loop) / "eval" / "heldout_report.json").read_text())
-    write_final(pl.dir / "final", pipeline_id=pl.id, best_adapter=best_adapter, best_job=best_job, best_loop=best_loop,
-                heldout=ho, history=dev_history(pl, loop), spec=pl.spec())   # same files as skills/finetune-report
-    t = (ho.get("systems") or {}).get("tuned", {}).get("score")
-    pl.emit("output", "done", f"Done. Held-out score of the tuned model: {t if t is None else round(t, 3)}", loop=loop)
+    # M8 (forgetting check) on held-out only if the best loop's dev run skipped it: same adapter, same numbers
+    best_dev = pl.loop_dir(best_loop) / "eval" / "eval_report.json"
+    has_general = best_dev.exists() and bool(json.loads(best_dev.read_text()).get("general"))
+    evaluate(pl, best_adapter, bench_dir, "heldout", loop, best_job, skip_general=has_general)
+    finish(pl, best_loop, best_job, best_adapter, loop)
+
+
+def finish(pl: Pipeline, best_loop, best_job, best_adapter, loop, post_infinite=None):
+    """The ReportAgent step (ftc/publish.py finalize): final report + model card, then publishing.
+    Publishing never fails the pipeline: the adapter and the report are already on disk."""
+    from ftc.publish import finalize
+    finalize(pl.dir, best_loop=best_loop, best_job=best_job, best_adapter=best_adapter, loop=loop,
+             post_infinite=post_infinite, on_step=lambda step: write_runner_state(pl, step=step),
+             log=lambda msg: log(pl, msg))
 
 
 def main():

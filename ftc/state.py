@@ -227,6 +227,16 @@ def read_runner(pdir: Path) -> dict:
     return r
 
 
+def read_publish(pdir: Path) -> dict:
+    """ftc/publish.py's state (final/publish_state.json) + whether that process is still alive."""
+    r = _read_json(Path(pdir) / "final" / "publish_state.json", {}) or {}
+    if r:
+        r["alive"] = r.get("state") == "running" and pid_alive(r.get("pid"))
+        if r.get("state") == "running" and not r["alive"]:
+            r["state"] = "died"
+    return r
+
+
 def snapshot(pipeline_dir) -> dict:
     pdir = Path(pipeline_dir).expanduser()
     meta = _read_json(pdir / "pipeline.json", {}) or {}
@@ -304,7 +314,7 @@ def snapshot(pipeline_dir) -> dict:
         "status": overall, "active_stages": running, "loop": loop,
         "max_loops": (spec.get("targets") or {}).get("max_loops"),
         "spec": spec, "links": links, "stages": stages, "train_last_event": train_ev, "runner": runner,
-        "data": data, "bench": bench, "train": jobs, "loops": loops, "final": final,
+        "data": data, "bench": bench, "train": jobs, "loops": loops, "final": final, "publish": read_publish(pdir) if final else {},
         "budget": meta.get("budget_used") or {},
         "events": events[-TAIL_EVENTS:], "n_events": len(events),
         "wall": wall_summary(Wall(pdir / "wall.jsonl")),

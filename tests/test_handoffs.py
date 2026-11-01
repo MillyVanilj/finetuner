@@ -46,8 +46,9 @@ OUTPUTS = {
                         "stop_reason", "next_step"},
     # the poster wall: called on purpose by agents, must neither take nor feed any hand-off
     "finetune-wall": {"ok", "id", "wall", "agent", "n", "posts", "summary", "error"},
-    # the end of the chain: held-out once + final report (agent mode's Output box)
-    "finetune-report": {"state", "final_report_path", "model_card_path", "heldout_tuned_score", "summary", "error"},
+    # the ReportAgent, end of the chain (held-out once, final report, publish): none of its keys may be a flag
+    "finetune-report": {"state", "stage", "error", "final_report_path", "model_card_path", "heldout_tuned_score",
+                        "hub_url", "infinite_post_url", "verdict", "summary"},
 }
 # `python3 -m ftc.cli agents kickoff` posts the first artifact (ftc/agents.py); its payload is only this key
 KICKOFF_OUTPUT = {"spec"}

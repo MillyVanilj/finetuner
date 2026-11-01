@@ -40,7 +40,7 @@ flowchart TD
     EV -->|"retrain: retrain_config_path + train_path<br/>(training issue → new hyperparameters)"| TR
     EV -->|"regenerate_data: data_feedback_path<br/>(failure categories only)"| M2
     EV -->|"stop: best_adapter_path<br/>(target met · gain below min_gain · 3 loops)"| OUT
-    HO --> OUT["Output · skills/finetune-report (ReportAgent)<br/>held-out once · final_report.json · model card<br/>HF Hub push · Infinite post: not yet"]
+    HO --> OUT["Output · ReportAgent · skills/finetune-report<br/>held-out once → verdict, side-by-side examples, model card<br/>adapter on HF Hub (private) · Infinite post (opt-in)"]
 
     DASH[["Live dashboard · dashboard/server.py<br/>reads the pipeline folder and events.jsonl"]]
     RUN[["scripts/run_pipeline.py<br/>runs the whole chain without agents (dashboard ▶ Start)"]]
@@ -48,8 +48,8 @@ flowchart TD
     classDef built fill:#d6f0dc,stroke:#2f7d43,color:#10301a
     classDef partial fill:#fdebc8,stroke:#b7791f,color:#3a2604
     classDef todo fill:#eeeeee,stroke:#8a8a8a,stroke-dasharray:5 3,color:#333333
-    class M1,SPEC,M2,M3,M4,CC,M5,M6,DEV,HO,TR,M7,M8,EV,DASH,RUN built
-    class M9,OUT partial
+    class M1,SPEC,M2,M3,M4,CC,M5,M6,DEV,HO,TR,M7,M8,EV,OUT,DASH,RUN built
+    class M9 partial
 ```
 
 ## What changed from v0.1
@@ -72,7 +72,7 @@ flowchart TD
 | Trainer | `skills/finetune-submit`, `skills/finetune-status`, `scripts/brev-smoke/train_sft.py` | Built, with automatic pre-flight checks |
 | L3 · M7–M9 | `skills/finetune-eval` | Built and smoke-tested. Writes its own `report.json` and also the §3.4 `eval_report.json` the Evaluator reads (`ftc/report_convert.py`), in both modes. M9 is skipped until the team writes `<bench>/safety.jsonl` |
 | Iterate? · Evaluator | `skills/finetune-decide` | Built (rules: `docs/evaluator-notes.md`) |
-| Output | `skills/finetune-report` (ReportAgent); `run_pipeline.py` uses the same `ftc/report.py` | **Partly:** held-out once, `final/final_report.json`, `final/model_card.md`. HF push (`train_sft.py --push-to-hub` exists) and the Infinite post aren't built |
+| Output | `skills/finetune-report` (agents), `ftc/report.py` (report, model card), `ftc/publish.py` (HF Hub, Infinite) | Built. `run_pipeline.py` and the skill share `ftc.publish.finalize`; the dashboard's **Result** card shows it. HF push needs `HF_TOKEN`; the Infinite post is opt-in (`FTC_POST_INFINITE=1` or the Result card button) |
 | *(not in the wireframe)* Live view | `dashboard/`, `ftc/pipeline.py` event log, `scripts/simulate_pipeline.py` | Built |
 | *(not in the wireframe)* Runner | `scripts/run_pipeline.py` | Built: the whole chain as subprocesses, no agents |
 | *(not in the wireframe)* Agent mode | `agents/` (7 profiles), `ftc/agents.py` (`ftc.cli agents start / kickoff / status / stop`) | Built: kickoff artifact + one ScienceClaw agent per skill; tested with ScienceClaw's reactor, not yet on the Brev machine |

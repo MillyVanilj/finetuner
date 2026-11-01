@@ -1,36 +1,45 @@
 ---
 name: finetune-report
-description: After the fine-tuning loop stops, score the best adapter once on the held-out benchmark and write the final report and model card
+description: ReportAgent for the fine-tuning loop - after the Evaluator stops, score the held-out split once, write the final report and model card, and publish the adapter (Hugging Face) and result (Infinite)
 metadata:
 ---
 
-# Fine-tune Report (wireframe "Output")
+# Fine-tune ReportAgent ("Output" in wireframe v0.2)
 
-The last step in agent mode. When `finetune-decide` stops, it outputs `best_adapter_path`. This skill then:
+Runs once per pipeline, after `finetune-decide` says **stop**. It turns the best adapter into something a person can read, trust and use:
 
-1. Runs `finetune-eval` on the **held-out** split for that adapter, **once** (M8 skipped). That job runs in the background, so the skill exits 1 (`"state": "started"` / `"running"`) until it's done, and ScienceClaw calls it again next cycle.
-2. Writes `final/final_report.json` (docs/spec_and_io.md §3.7) and `final/model_card.md`, in the pipeline folder (or next to the run outside a pipeline). It uses `ftc/report.py`, the same code `scripts/run_pipeline.py` uses, so both modes produce the same files.
+1. **Held-out once.** Starts `finetune-eval --split heldout` for the best adapter in the background (M8 only if the best loop's dev run skipped it), and exits 1 while it runs, so the reactor calls again.
+2. **Final report** (`ftc/report.py`, no LLM): `final/final_report.json` with a one-sentence verdict + warnings (CI includes 0, forgetting, all-synthetic held-out, format problems), the paired gain vs base few-shot with its 95% CI, item-by-item outcomes (fixed / broke / both right / both wrong), side-by-side examples picked by fixed rules (wins, still wrong, broken), general ability, how the model was made and GPU cost. Also `final/heldout_answers.jsonl`, `final/model_card.md` (the Hugging Face README) and `final/infinite_post.json`.
+3. **Publish** (`ftc/publish.py`): pushes the adapter + model card to the HF Hub when `HF_TOKEN` is set (**private** unless `FTC_HF_PUBLIC=1`; `FTC_HF_PUSH=0` turns it off; repo `<your user>/<pipeline id>-lora`, or `FTC_HF_REPO`). Posts to Infinite only when `FTC_POST_INFINITE=1`. Publishing failures are logged, never fatal.
 
-Called again after that, it answers at once from the existing report.
+The dashboard shows the result as the **Result** card, with buttons to push / post later.
 
 ## Parameters
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `--best-adapter-path` | `adapter/` dir of the best run (finetune-decide's `best_adapter_path`) | Required |
-| `--best-loop` | finetune-decide's `best_loop` (shown in the report) | the pipeline's loop |
-| `--best-job-id` | finetune-decide's `best_job_id` | from the run's `run.json` |
+| `--best-adapter-path` | The adapter `finetune-decide` picked (its stop result's `best_adapter_path`) | Required |
+| `--best-loop` | finetune-decide's `best_loop` (shown in the report) | from the stop decision |
+| `--best-job-id` | finetune-decide's `best_job_id` | the adapter's run folder name |
 
-Unknown flags are ignored. Needs `$FINETUNER_DIR` (default `~/finetuner`) for the `ftc` package, and everything `finetune-eval` needs for the held-out run: the training venv and the API key of its judge and teacher models. Which keys exactly is listed in `finetune-eval`'s SKILL.md, the one place to keep up to date when the judge model changes.
+The pipeline folder is found from `run.json` next to the adapter (or `$FTC_PIPELINE_DIR`). **Outside a pipeline folder** it still scores held-out once, then writes a shorter report (no examples or outcome counts: there are no benchmark files to read) to `<run dir>/final/` and doesn't publish. Called again for the same adapter, it answers at once from the existing report. Unknown flags are ignored. Needs `$FINETUNER_DIR` (default `~/finetuner`) for the `ftc` package, and everything `finetune-eval` needs for the held-out run (training venv, judge/teacher API keys: see its SKILL.md).
 
 ## Output
 
-`{"state": "done", "final_report_path", "model_card_path", "heldout_tuned_score"}`. None of these keys is a flag of another skill, so the chain ends here.
+| State | Exit | Keys |
+|---|---|---|
+| held-out eval running | 1 | `state: running`, `stage` |
+| done | 0 | `final_report_path`, `model_card_path`, `heldout_tuned_score`, `hub_url`, `infinite_post_url`, `verdict` (improved · no_clear_gain · worse · unknown), `summary` (the verdict sentence) |
+| failed | 1 | `state: failed`, `error` |
 
-Not built yet: pushing the adapter to Hugging Face (train with `finetune-submit --push-to-hub` instead; the report then shows `hub_url`) and posting to Infinite.
+None of these keys is another skill's flag, so the chain ends here.
 
 ## Examples
 
 ```bash
-python3 {baseDir}/scripts/finetune_report.py --best-adapter-path ~/finetuner/runs/<job_id>/adapter --best-loop 2
+python3 {baseDir}/scripts/finetune_report.py --best-adapter-path ~/finetuner/runs/<job_id>/adapter
+# rebuild the report / publish by hand:
+python3 -m ftc.report ~/finetuner/pipelines/<id> --print
+python3 -m ftc.publish ~/finetuner/pipelines/<id> --hub [--public]
+python3 -m ftc.publish ~/finetuner/pipelines/<id> --infinite
 ```

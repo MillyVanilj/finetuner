@@ -131,6 +131,51 @@ select.btn { padding-right: 8px; max-width: 360px; }
 .ex .r { color: var(--ink-2); }
 .ex .r b { color: var(--ink); }
 @keyframes fadein { from { opacity: 0; transform: translateY(-3px); } }
+/* result card: what the user gets at the end */
+.result { margin-top: 16px; border-width: 1.5px; }
+.result.improved { border-color: var(--good); }
+.result.no_clear_gain, .result.unknown { border-color: var(--warning); }
+.result.worse { border-color: var(--critical); }
+.res-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.res-head h3 { margin: 0; }
+.verdict { display: inline-flex; align-items: center; gap: 6px; font-weight: 650; font-size: 13px; padding: 3px 10px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); }
+.verdict .ic { width: 16px; height: 16px; border-radius: 50%; display: inline-grid; place-items: center; color: #fff; font-size: 11px; }
+.verdict.improved .ic { background: var(--good); } .verdict.worse .ic { background: var(--critical); }
+.verdict.no_clear_gain .ic, .verdict.unknown .ic { background: var(--warning); color: #1b1b1b; }
+.headline { font-size: 18px; font-weight: 600; line-height: 1.35; margin: 10px 0 6px; letter-spacing: -0.005em; max-width: 1050px; }
+ul.details { margin: 0 0 10px; padding-left: 18px; color: var(--ink-2); }
+.warns { display: flex; flex-direction: column; gap: 6px; margin: 8px 0 14px; }
+.warns .callout { padding: 7px 10px; font-size: 13px; }
+.warns .callout.critical { border-color: var(--critical); }
+.tile .v.good { color: var(--good-text); } .tile .v.bad { color: var(--critical); }
+.tile .s { font-size: 11.5px; color: var(--muted); }
+.outbar { display: flex; height: 22px; border-radius: 6px; overflow: hidden; margin: 6px 0 6px; background: var(--grid); }
+.outbar > span { display: block; height: 100%; }
+.outlegend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12.5px; color: var(--ink-2); }
+.outlegend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 10px; }
+.tab { border: 1px solid var(--border); background: var(--surface); border-radius: 999px; padding: 3px 11px; font-size: 12.5px; cursor: pointer; }
+.tab.on { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.cmp { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; background: var(--surface); }
+.cmp-h { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 12px; margin-bottom: 6px; }
+.kind { font-weight: 650; font-size: 12.5px; }
+.kind.fixed { color: var(--good-text); } .kind.broke { color: var(--critical); } .kind.still_fails { color: var(--ink-2); }
+.cmp .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; margin-bottom: 3px; }
+.cmp .q { white-space: pre-wrap; font-size: 13px; margin-bottom: 8px; max-height: 180px; overflow: auto; }
+.cmp-cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+@media (max-width: 900px) { .cmp-cols { grid-template-columns: 1fr; } }
+.ans { border-radius: 8px; padding: 7px 9px; background: var(--surface-2); border-left: 3px solid var(--axis); min-width: 0; }
+.ans.pass { border-left-color: var(--good); } .ans.fail { border-left-color: var(--critical); } .ans.ref { border-left-color: var(--s1); }
+.ans pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: var(--mono); font-size: 12px; max-height: 220px; overflow: auto; }
+.ans .why { font-size: 11.5px; color: var(--ink-2); margin-top: 5px; font-style: italic; }
+.cmp details { margin-top: 6px; font-size: 12px; } .cmp details summary { cursor: pointer; color: var(--ink-2); }
+.browse { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+.browse input, .browse select { border: 1px solid var(--border); border-radius: 8px; padding: 4px 8px; background: var(--page); }
+.pub { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 16px; }
+@media (max-width: 900px) { .pub { grid-template-columns: 1fr; } }
+.pubrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.copy { float: right; font-size: 11.5px; padding: 2px 8px; }
+
 .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 @media (max-width: 800px) { .two { grid-template-columns: 1fr; } }
 table.t { border-collapse: collapse; width: 100%; font-size: 12.5px; font-variant-numeric: tabular-nums; }
@@ -277,6 +322,8 @@ pre.cmd { background: var(--surface-2); padding: 8px 10px; border-radius: 8px; o
       </div>
     </div>
 
+    <div class="card result" id="resultCard" style="display:none"></div>
+
     <div class="card map" id="map">
       <svg class="edges" id="edges"></svg>
       <div class="lanes" id="lanes"></div>
@@ -310,6 +357,8 @@ pre.cmd { background: var(--surface-2); padding: 8px 10px; border-radius: 8px; o
 </div>
 
 <div class="tip" id="tip"></div>
+<div class="overlay" id="mcOv"><div class="sheet"><div style="display:flex;align-items:center;gap:10px"><h2 style="flex:1">Model card <span class="muted" style="font-size:13px;font-weight:400">final/model_card.md · the README on Hugging Face</span></h2>
+  <button class="btn" id="mcCopy">Copy</button><button class="btn" id="mcClose">Close</button></div><pre class="cmd" id="mcText" style="max-height:75vh;white-space:pre-wrap"></pre></div></div>
 
 <!-- New task (M1) -->
 <div class="overlay" id="ov">
@@ -541,6 +590,7 @@ async function loadPipelines(selectId) {
 function connect(pid) {
   const hp = new URLSearchParams(location.hash.slice(1));
   if (ES) ES.close(); PID = pid; S = null; SEL = null; USER_SEL = false;
+  RES_FP = null; ANSWERS = null; RES_TAB = "fixed"; BROWSE = {q: "", kind: "", page: 0};
   $("main").style.display = "";
   if (hp.get("once") && hp.get("p") === pid) { // static snapshot (screenshots, slow links): no live stream
     SEL = hp.get("stage") || null; USER_SEL = !!SEL; $("liveTxt").textContent = "snapshot";
@@ -600,7 +650,7 @@ function render() {
   ].filter(c => c[1]).map(c => `<span class="chip">${c[0]} <b>${esc(c[1])}</b></span>`).join("");
   $("loopV").textContent = `${S.loop}${S.max_loops ? " / " + S.max_loops : ""}`;
   $("bestV").textContent = fmtPct(bestDev());
-  renderMap(); renderPanel(); renderFeed(); renderLoops(); renderRunner(); renderWall();
+  renderResult(); renderMap(); renderPanel(); renderFeed(); renderLoops(); renderRunner(); renderWall();
 }
 
 // ▶ Start / ■ Stop: runs scripts/run_pipeline.py (the real skills) on the machine the dashboard runs on.
@@ -698,6 +748,165 @@ function renderLoops() {
     return `<div class="callout ${kind}" style="margin-bottom:8px"><b>Loop ${l.loop}</b> ${r ? `· tuned ${fmtPct(r.systems.tuned.score)}` : ""}
       ${d ? `<div><b>${esc(d.action.replace(/_/g, " "))}</b>: ${esc(d.reason)}</div><div class="muted" style="font-size:12px">rule: ${esc(d.rule)}</div>` : `<div class="muted">${S.loop === l.loop ? "in progress…" : ""}</div>`}</div>`; }).join("");
 }
+
+// ---------------- result card (final/final_report.json, written by ftc/report.py) ----------------
+const VERDICT = {improved: ["✓", "Fine-tuning worked"], no_clear_gain: ["~", "No clear gain"], worse: ["✕", "Worse than the baseline"], unknown: ["?", "Incomplete"]};
+const KIND = {fixed: "✓ Fixed by fine-tuning", still_fails: "✗ Still wrong after fine-tuning", broke: "! Broken by fine-tuning"};
+const OUTCOMES = [["fixed", "Fixed by tuning", "--good"], ["both_pass", "Right for both", "--s1"], ["both_fail", "Wrong for both", "--axis"], ["broke", "Broken by tuning", "--critical"]];
+let RES_FP = null, RES_TAB = "fixed", ANSWERS = null, BROWSE = {q: "", kind: "", page: 0};
+const sysName = (k) => ({tuned: "Tuned", base_fewshot: "Base few-shot", base_zeroshot: "Base zero-shot", teacher: "Teacher"})[k] || k;
+const signedPts = (x, d = 0) => x == null ? "–" : `${x > 0 ? "+" : ""}${(x * 100).toFixed(d)}`;
+
+function ansBox(k, a, thr) {
+  if (!a) return `<div class="ans"><div class="lbl">${sysName(k)}</div><pre class="muted">no answer</pre></div>`;
+  const pass = a.score != null && a.score >= thr;
+  return `<div class="ans ${a.score == null ? "" : pass ? "pass" : "fail"}"><div class="lbl">${a.score == null ? "" : pass ? "✓ " : "✗ "}${sysName(k)}${a.score != null ? ` · score ${fmtNum(a.score, 2)}` : ""}</div>
+    <pre>${esc(a.output)}</pre>${a.judge_reason ? `<div class="why">${esc(a.judge_reason)}</div>` : ""}</div>`;
+}
+function cmpCard(e, base, thr, kind) {
+  const t = e.answers.teacher;
+  return `<div class="cmp"><div class="cmp-h">${kind ? `<span class="kind ${kind}">${KIND[kind] || esc(kind)}</span>` : ""}
+      <span class="chip">${esc(e.category)}</span><span class="chip">${esc(e.source)}${e.source_ref ? " · " + esc(e.source_ref) : ""}</span><span class="muted mono">${esc(e.id)}</span></div>
+    <div class="lbl">Input</div><div class="q">${esc(e.question)}</div>
+    <div class="cmp-cols">${ansBox(base, e.answers[base], thr)}${ansBox("tuned", e.answers.tuned, thr)}
+      <div class="ans ref"><div class="lbl">Reference answer</div><pre>${esc(e.reference)}</pre></div></div>
+    ${t ? `<details><summary>Teacher's answer (score ${fmtNum(t.score, 2)})</summary><pre class="cmd" style="white-space:pre-wrap;margin-top:6px">${esc(t.output)}</pre></details>` : ""}</div>`;
+}
+function outcomeOf(r, base, thr) {
+  const b = r.answers?.[base]?.score, t = r.answers?.tuned?.score;
+  if (b == null || t == null) return "unscored";
+  return b >= thr ? (t >= thr ? "both_pass" : "broke") : (t >= thr ? "fixed" : "both_fail");
+}
+
+function renderResult() {
+  const el = $("resultCard"), f = S.final;
+  if (!f || !f.verdict) { el.style.display = "none"; RES_FP = null; return; }
+  const fp = JSON.stringify([f.updated_at, f.hub_url, f.infinite_post_url, S.publish, RES_TAB, BROWSE, !!ANSWERS]);
+  if (fp === RES_FP) return; RES_FP = fp;
+  const v = f.verdict, ho = f.heldout || {}, sy = ho.systems || {}, base = v.baseline || "base_fewshot", thr = ho.pass_threshold ?? 0.5;
+  const oc = ho.outcomes, mw = f.made_with || {}, models = mw.models || {}, c = f.cost || {};
+  const [ic, word] = VERDICT[v.status] || VERDICT.unknown;
+  el.className = `card result ${v.status}`; el.style.display = "";
+  const teacherFrac = sy.teacher?.score && sy.tuned?.score != null ? sy.tuned.score / sy.teacher.score : null;
+  const worst = (f.general || []).reduce((m, g) => (m == null || g.delta < m.delta ? g : m), null);
+  const lim = S.spec.targets?.max_general_drop ?? 0.03;
+  const ex = f.examples || [], counts = {fixed: 0, still_fails: 0, broke: 0}; ex.forEach(e => counts[e.kind]++);
+  if (RES_TAB !== "all" && !counts[RES_TAB]) RES_TAB = ["fixed", "still_fails", "broke"].find(k => counts[k]) || "all";
+  const tabs = [["fixed", `Fixed (${counts.fixed})`], ["still_fails", `Still wrong (${counts.still_fails})`], ["broke", `Broken (${counts.broke})`], ["all", `All ${fmtNum(ho.n_items)} answers`]]
+    .filter(([k]) => k === "all" ? ho.answers_path : counts[k]);
+  const total = oc ? OUTCOMES.reduce((a, [k]) => a + (oc[k] || 0), 0) : 0;
+
+  el.innerHTML = `<div class="res-head"><h3>Result</h3><span class="verdict ${v.status}"><span class="ic">${ic}</span>${word}</span>
+      ${f.simulated ? `<span class="chip" title="scripts/simulate_pipeline.py"><b>SIMULATED</b> no real model</span>` : ""}
+      <span class="muted" style="font-size:12px">held-out split, scored once after training was finished · loop ${f.best_loop} adapter</span>
+      <span class="spacer"></span><button class="btn" id="mcBtn">📄 Model card</button></div>
+    <p class="headline">${esc(v.headline)}</p>
+    ${(v.details || []).length ? `<ul class="details">${v.details.map(d => `<li>${esc(d)}</li>`).join("")}</ul>` : ""}
+    ${(v.warnings || []).length ? `<div class="warns">${v.warnings.map(w => `<div class="callout ${w.level === "info" ? "" : w.level === "critical" ? "critical" : "warn"}">${w.level === "info" ? "ℹ︎" : "⚠︎"} ${esc(w.text)}</div>`).join("")}</div>` : ""}
+    <div class="tiles">
+      <div class="tile"><div class="v">${fmtPct(sy.tuned?.score)}</div><div class="l">tuned, held-out</div><div class="s">${sy.tuned?.ci95 ? `95% CI ${fmtPct(sy.tuned.ci95[0])}–${fmtPct(sy.tuned.ci95[1])}` : ""}</div></div>
+      <div class="tile"><div class="v">${fmtPct(sy[base]?.score)}</div><div class="l">${base === "base_fewshot" ? "base + few-shot prompt" : "base, zero-shot"}</div><div class="s">the baseline to beat</div></div>
+      <div class="tile"><div class="v ${v.gain > 0 && v.status === "improved" ? "good" : v.status === "worse" ? "bad" : ""}">${signedPts(v.gain)} <small>pts</small></div><div class="l">gain vs baseline</div><div class="s">${v.gain_ci95 ? `95% CI ${signedPts(v.gain_ci95[0])} to ${signedPts(v.gain_ci95[1])}` : "no paired CI"}</div></div>
+      <div class="tile"><div class="v">${teacherFrac == null ? "–" : Math.round(teacherFrac * 100) + "%"}</div><div class="l">of the teacher's score</div><div class="s">${esc(sy.teacher?.model || "")} ${fmtPct(sy.teacher?.score)}</div></div>
+      <div class="tile"><div class="v ${worst && worst.delta < -lim ? "bad" : worst ? "good" : ""}">${worst ? signedPts(Math.min(0, worst.delta), 1) + " <small>pts</small>" : "–"}</div><div class="l">general skills, worst change</div><div class="s">${worst ? esc(worst.task.toUpperCase()) + " · limit −" + (lim * 100).toFixed(0) : "not measured"}</div></div>
+      <div class="tile"><div class="v">${c.gpu_hours != null ? fmtNum(c.gpu_hours, 2) : "–"} <small>GPU h</small></div><div class="l">${fmtNum(c.train_jobs)} training run${c.train_jobs === 1 ? "" : "s"} · ${f.dev_history?.length || 0} loop${f.dev_history?.length === 1 ? "" : "s"}</div><div class="s">API spend not tracked</div></div>
+    </div>
+    <div class="two"><div><h4 style="margin:0 0 6px">Held-out score by system <span class="muted">(95% CI)</span></h4><div id="rBars"></div></div>
+      <div>${oc ? `<h4 style="margin:0 0 6px">Item by item: tuned vs ${base === "base_fewshot" ? "few-shot" : "zero-shot"} <span class="muted">(pass = score ≥ ${thr})</span></h4>
+        <div class="outbar" role="img" aria-label="Outcome per held-out item">${OUTCOMES.map(([k, l, col]) => oc[k] ? `<span title="${l}: ${oc[k]}" style="width:${oc[k] / total * 100}%;background:var(${col})"></span>` : "").join("")}</div>
+        <div class="outlegend">${OUTCOMES.map(([k, l, col]) => `<span><i style="background:var(${col})"></i>${l} <b>${fmtNum(oc[k] || 0)}</b></span>`).join("")}</div>
+        <p class="muted" style="font-size:12px">"Fixed" = the baseline got it wrong, the tuned model right. "Broken" = the reverse. Both are shown below.</p>` : ""}
+        <h4 style="margin:12px 0 6px">By source <span class="muted">(real items aren't LLM-written)</span></h4><div id="rSrc"></div></div></div>
+
+    <div class="sec"><h4>Side by side: what fine-tuning changed <span class="muted">(held-out; picked by fixed rules, not by hand)</span></h4>
+      <div class="tabs">${tabs.map(([k, l]) => `<button class="tab ${RES_TAB === k ? "on" : ""}" data-tab="${k}">${esc(l)}</button>`).join("")}</div>
+      <div id="rEx">${RES_TAB === "all" ? browseHtml(base, thr) : ex.filter(e => e.kind === RES_TAB).map(e => cmpCard(e, base, thr, e.kind)).join("") || `<p class="muted">No per-item answers were saved for this run.</p>`}</div></div>
+
+    <div class="two sec"><div><h4>By category <span class="muted">(the spec's edge cases)</span></h4><div id="rCat"></div></div>
+      <div>${(f.general || []).length ? genTable(f.general).replace("<h4>", `<h4 title="${esc(f.general_from || "")}">`) : `<h4>General ability</h4><p class="muted">Not measured for this adapter (MMLU / GSM8K / IFEval): run without --skip-general to check for forgetting.</p>`}</div></div>
+
+    <div class="pub sec"><div><h4>How it was made</h4><dl class="kvlist">
+      <dt>Task</dt><dd>${esc(f.task || S.spec.task)}</dd>
+      <dt>Training data</dt><dd>${fmtNum(mw.train_examples)} synthetic examples · generator <b>${esc(models.generator || "?")}</b>, verifier <b>${esc(models.verifier || "?")}</b>${mw.data?.rejected != null ? ` · ${fmtNum(mw.data.rejected)} rejected (${fmtPct(mw.data.reject_rate)})` : ""}${mw.data?.contaminated_removed ? ` · ${mw.data.contaminated_removed} removed (overlap with the benchmark)` : ""}</dd>
+      <dt>Benchmark</dt><dd>${fmtNum(mw.benchmark?.n_dev)} dev + ${fmtNum(mw.benchmark?.n_heldout)} held-out · writer <b>${esc(models.bench_writer || "?")}</b> · held-out: ${Object.entries(ho.source_counts || {}).map(([k, n]) => `${esc(k)} ${n}`).join(", ")}</dd>
+      <dt>Scoring</dt><dd>code checks, then judge <b>${esc(models.judge || "?")}</b> · teacher <b>${esc(models.teacher || sy.teacher?.model || "?")}</b></dd>
+      <dt>Training</dt><dd class="mono">${esc(Object.entries(mw.training_config || {}).filter(([k]) => k !== "model").map(([k, x]) => `${k}=${x}`).join("  "))}</dd>
+      <dt>Loops</dt><dd>${(f.dev_history || []).map(h => `<div>${h.loop === f.best_loop ? "★ " : ""}<b>Loop ${h.loop}</b> dev ${fmtPct(h.tuned)} → ${esc((h.action || "").replace(/_/g, " "))}${h.reason ? `: <span class="muted">${esc(h.reason)}</span>` : ""}</div>`).join("")}</dd>
+    </dl></div>
+    <div><h4>Use it</h4>${publishBlock(f)}
+      <div class="sec"><h4 style="margin-bottom:4px">Load the adapter <button class="btn copy" id="cpSnip">Copy</button></h4><pre class="cmd" id="snip">${esc(f.usage_snippet || "")}</pre></div></div></div>`;
+
+  barCI($("rBars"), SYSTEMS.map(x => ({name: x.name, short: x.short, color: x.color, score: sy[x.key]?.score, ci: sy[x.key]?.ci95,
+    tipExtra: `<div class="row"><span>format ok</span><b>${fmtPct(sy[x.key]?.format_rate)}</b></div><div class="row"><span>model</span><b>${esc(sy[x.key]?.model || "")}</b></div>`})),
+    {target: S.spec.targets?.target_score, aria: "Held-out scores by system"});
+  hbars($("rSrc"), (ho.by_source || []).map(r => ({label: r.source, values: [{name: "Base few-shot", color: "--s2", v: r.base_fewshot}, {name: "Tuned", color: "--s1", v: r.tuned}], extra: `<div class="row"><span>items</span><b>${r.n}</b></div>`})), {pct: true, max: 1, aria: "Held-out by source"});
+  hbars($("rCat"), (ho.by_category || []).map(r => ({label: r.category, values: [{name: "Base few-shot", color: "--s2", v: r.base_fewshot}, {name: "Tuned", color: "--s1", v: r.tuned}], extra: `<div class="row"><span>items</span><b>${r.n}</b></div>`})), {pct: true, max: 1, aria: "Held-out by category"});
+  el.querySelectorAll(".tab").forEach(b => b.addEventListener("click", () => { RES_TAB = b.dataset.tab; if (RES_TAB === "all" && !ANSWERS) loadAnswers(); renderResult(); }));
+  $("mcBtn").addEventListener("click", openCard);
+  $("cpSnip")?.addEventListener("click", () => copyText($("snip").textContent, $("cpSnip")));
+  bindBrowse(); bindPublish();
+}
+
+async function loadAnswers() {
+  ANSWERS = {rows: [], loading: true};
+  ANSWERS = await fetch("/api/answers?p=" + encodeURIComponent(PID)).then(r => r.json()).catch(() => ({rows: []}));
+  RES_FP = null; renderResult();
+}
+function browseHtml(base, thr) {
+  if (!ANSWERS || ANSWERS.loading) return `<p class="muted">Loading every held-out answer…</p>`;
+  const q = BROWSE.q.toLowerCase(), per = 8;
+  const rows = ANSWERS.rows.filter(r => (!BROWSE.kind || outcomeOf(r, base, thr) === BROWSE.kind)
+    && (!q || JSON.stringify([r.question, r.category, r.reference, r.id]).toLowerCase().includes(q)));
+  const pages = Math.max(1, Math.ceil(rows.length / per)), pg = Math.min(BROWSE.page, pages - 1);
+  return `<div class="browse"><input id="bQ" placeholder="Search question, category, id…" value="${esc(BROWSE.q)}">
+      <select id="bK"><option value="">every outcome</option>${OUTCOMES.map(([k, l]) => `<option value="${k}" ${BROWSE.kind === k ? "selected" : ""}>${l}</option>`).join("")}</select>
+      <span class="muted">${rows.length} item${rows.length === 1 ? "" : "s"}</span><span class="spacer"></span>
+      <button class="btn" id="bPrev" ${pg ? "" : "disabled"}>‹</button><span class="muted">${pg + 1} / ${pages}</span><button class="btn" id="bNext" ${pg < pages - 1 ? "" : "disabled"}>›</button></div>
+    ${rows.slice(pg * per, pg * per + per).map(r => { const k = outcomeOf(r, base, thr);
+      return cmpCard(r, base, thr, k === "fixed" ? "fixed" : k === "broke" ? "broke" : k === "both_fail" ? "still_fails" : null); }).join("") || `<p class="muted">Nothing matches.</p>`}`;
+}
+function bindBrowse() {
+  const q = $("bQ"); if (!q) return;
+  let t = null;
+  q.addEventListener("input", () => { clearTimeout(t); t = setTimeout(() => { BROWSE = {...BROWSE, q: q.value, page: 0}; renderResult(); $("bQ")?.focus(); const n = $("bQ"); if (n) n.selectionStart = n.selectionEnd = n.value.length; }, 250); });
+  $("bK").addEventListener("change", e => { BROWSE = {...BROWSE, kind: e.target.value, page: 0}; renderResult(); });
+  $("bPrev").addEventListener("click", () => { BROWSE = {...BROWSE, page: Math.max(0, BROWSE.page - 1)}; renderResult(); });
+  $("bNext").addEventListener("click", () => { BROWSE = {...BROWSE, page: BROWSE.page + 1}; renderResult(); });
+}
+
+// ---------------- publishing (ftc/publish.py via POST /api/pipelines/<id>/publish) ----------------
+function publishBlock(f) {
+  const p = S.publish || {}, busy = p.alive, sim = f.simulated;
+  const st = (t) => p.target === t && p.state ? `<span class="badge ${p.state === "running" ? "running" : p.state === "done" ? "done" : "failed"}"><span class="ic">${p.state === "done" ? "✓" : p.state === "running" ? "" : "✕"}</span>${esc(p.state)}</span> <span class="muted" style="font-size:12px">${esc(p.msg || "")}</span>` : "";
+  const log = (f.publish_log || []).slice(-4).reverse();
+  return `<div class="pubrow"><b style="min-width:110px">🤗 Hugging Face</b>${f.hub_url ? `<a href="${esc(f.hub_url)}" target="_blank" rel="noopener">${esc(f.hub_repo || f.hub_url)}</a> <span class="chip">${f.hub_private === false ? "public" : "private"}</span>` : `<span class="muted">not pushed yet</span>`}
+      ${sim ? "" : `<button class="btn" data-pub="hub" ${busy ? "disabled" : ""} title="Upload the adapter + model card (private unless you tick public)">${f.hub_url ? "Push again" : "Push adapter + card"}</button>
+      <label style="font-size:12px"><input type="checkbox" id="pubPublic" ${f.hub_private === false ? "checked" : ""}> public</label>`} ${st("hub")}</div>
+    <div class="pubrow"><b style="min-width:110px">∞ Infinite</b>${f.infinite_post_url ? `<a href="${esc(f.infinite_post_url)}" target="_blank" rel="noopener">${esc(f.infinite_post_url)}</a>` : `<span class="muted">not posted yet</span>`}
+      ${sim ? "" : `<button class="btn" data-pub="infinite" ${busy ? "disabled" : ""} title="Post the verdict, method and links to Infinite with ScienceClaw's client">${f.infinite_post_url ? "Post again" : "Post result"}</button>`} ${st("infinite")}</div>
+    ${sim ? `<p class="muted" style="font-size:12px">Simulated run: there's no real adapter, so publishing is off.</p>` : ""}
+    ${f.hub_url && f.hub_private !== false && !sim ? `<p class="muted" style="font-size:12px">The repo is private: only you (and your org) can open it. Tick <i>public</i> and push again to share it.</p>` : ""}
+    ${log.length ? `<details><summary class="muted" style="font-size:12px">Publish log</summary>${log.map(l => `<div style="font-size:12px">${l.ok ? "✓" : "✕"} <span class="muted">${timeOf(l.ts)}</span> ${esc(l.msg)}</div>`).join("")}</details>` : ""}`;
+}
+function bindPublish() {
+  document.querySelectorAll("[data-pub]").forEach(b => { if (b.dataset.bound) return; b.dataset.bound = 1; b.addEventListener("click", async () => {
+    const target = b.dataset.pub, pub = $("pubPublic")?.checked;
+    const msg = target === "hub" ? `Upload the adapter, model card and held-out answers to Hugging Face as a ${pub ? "PUBLIC" : "private"} repo?\n\nNeeds HF_TOKEN in .env.`
+      : "Post the result (verdict, method, caveats, one example, HF link) to Infinite?\n\nIt is public on lamm.mit.edu/infinite. Needs a registered agent with 10 karma.";
+    if (!confirm(msg)) return;
+    b.disabled = true;
+    const r = await fetch(`/api/pipelines/${encodeURIComponent(PID)}/publish`, {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({target, public: !!pub})}).then(r => r.json()).catch(e => ({error: String(e)}));
+    if (!r.ok) { alert(r.error || "Could not start"); b.disabled = false; } }); });
+}
+async function openCard() {
+  const r = await fetch("/api/model_card?p=" + encodeURIComponent(PID)).then(r => r.json()).catch(() => ({}));
+  $("mcText").textContent = r.text || "No model card yet."; $("mcOv").classList.add("show");
+}
+function copyText(t, btn) { navigator.clipboard?.writeText(t).then(() => { const o = btn.textContent; btn.textContent = "Copied"; setTimeout(() => btn.textContent = o, 1200); }); }
+$("mcClose").addEventListener("click", () => $("mcOv").classList.remove("show"));
+$("mcOv").addEventListener("click", e => { if (e.target === $("mcOv")) $("mcOv").classList.remove("show"); });
+$("mcCopy").addEventListener("click", () => copyText($("mcText").textContent, $("mcCopy")));
 
 // ---------------- poster wall ----------------
 // Agents pin notes for each other (ftc/wall.py, <pipeline>/wall.jsonl). Humans can pin notes too.
@@ -957,17 +1166,14 @@ function pDecide() {
 
 function pOutput() {
   const f = S.final;
-  if (!f) return {html: `<p class="muted">${esc(S.stages.output.msg || "When the loop stops, the held-out set is scored once and the adapter, eval report and model card are published.")}</p>`};
-  const ho = f.heldout?.systems || {};
-  return {html: `<div class="tiles"><div class="tile"><div class="v">${fmtPct(ho.tuned?.score)}</div><div class="l">held-out, tuned</div></div>
-      <div class="tile"><div class="v">${fmtPct(ho.base_fewshot?.score)}</div><div class="l">held-out, base few-shot</div></div>
-      <div class="tile"><div class="v">${fmtPct(ho.teacher?.score)}</div><div class="l">held-out, teacher</div></div>
-      <div class="tile"><div class="v">${f.best_loop}</div><div class="l">best loop</div></div></div>
-    <div class="two"><div><h4>Held-out score (scored once)</h4><div id="oBars"></div></div><div><h4>By source</h4><div id="oSrc"></div></div></div>
-    <dl class="kvlist sec"><dt>Adapter</dt><dd class="mono">${esc(f.adapter_path)}</dd><dt>Hugging Face</dt><dd>${f.hub_url ? `<a href="${esc(f.hub_url)}" target="_blank" rel="noopener">${esc(f.hub_url)}</a>` : "–"}</dd>
-    <dt>Model card</dt><dd class="mono">${esc(f.model_card_path)}</dd><dt>Infinite post</dt><dd>${f.infinite_post_url ? `<a href="${esc(f.infinite_post_url)}" target="_blank" rel="noopener">${esc(f.infinite_post_url)}</a>` : "–"}</dd></dl>`,
-    after: () => { barCI($("oBars"), SYSTEMS.map(s => ({name: s.name, short: s.short, color: s.color, score: ho[s.key]?.score, ci: ho[s.key]?.ci95})), {target: S.spec.targets?.target_score, aria: "Held-out scores"});
-      hbars($("oSrc"), (f.heldout?.by_source || []).map(c => ({label: c.source, values: [{name: "Base few-shot", color: "--s2", v: c.base_fewshot}, {name: "Tuned", color: "--s1", v: c.tuned}]})), {pct: true, max: 1}); }};
+  if (!f) return {html: `<p class="muted">${esc(S.stages.output.msg || "When the loop stops, the held-out set is scored once, the Result card appears at the top, and the adapter and model card are published.")}</p>`};
+  const v = f.verdict || {}, ho = f.heldout?.systems || {};
+  return {html: `<div class="callout ${v.status === "improved" ? "stop" : "warn"}" style="margin-bottom:12px"><b>${esc(v.headline || "")}</b>
+      <div class="muted" style="font-size:12px;margin-top:4px">The full report is the <a href="#" id="toResult">Result card</a> at the top of the page.</div></div>
+    <div class="tiles"><div class="tile"><div class="v">${fmtPct(ho.tuned?.score)}</div><div class="l">held-out, tuned</div></div>
+      <div class="tile"><div class="v">${fmtPct(ho[v.baseline || "base_fewshot"]?.score)}</div><div class="l">held-out, ${v.baseline === "base_zeroshot" ? "zero-shot" : "few-shot"}</div></div>
+      <div class="tile"><div class="v">${fmtPct(ho.teacher?.score)}</div><div class="l">held-out, teacher</div></div></div>
+    ${publishBlock(f)}`, after: () => { $("toResult")?.addEventListener("click", e => { e.preventDefault(); $("resultCard").scrollIntoView({behavior: "smooth"}); }); bindPublish(); }};
 }
 
 // ---------------- top bar actions ----------------

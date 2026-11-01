@@ -89,7 +89,8 @@ def test_report_skill_writes_final_report_and_model_card():
         run = fake_run(tmp / "runs", "j1", pl.dir)
         cmd = [sys.executable, str(ROOT / "skills/finetune-report/scripts/finetune_report.py"),
                "--best-adapter-path", str(run / "adapter"), "--best-loop", "1", "--best-job-id", "j1", "--query", "x"]
-        env = {**os.environ, "FINETUNER_DIR": str(ROOT), "FINETUNER_RUNS": str(tmp / "runs")}
+        env = {**os.environ, "FINETUNER_DIR": str(ROOT), "FINETUNER_RUNS": str(tmp / "runs"), "FTC_HF_PUSH": "0",
+               "FTC_POST_INFINITE": "0"}   # never publish from a test, even with HF_TOKEN in .env
         r = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=60)
         assert r.returncode == 0, r.stdout + r.stderr
         out = json.loads(r.stdout)
@@ -97,7 +98,7 @@ def test_report_skill_writes_final_report_and_model_card():
         assert out["final_report_path"] == str(pl.dir / "final/final_report.json") and out["heldout_tuned_score"] == 0.7
         assert final["best_loop"] == 1 and final["train_job_id"] == "j1" and final["heldout"]["systems"]["tuned"]["score"] == 0.7
         card = (pl.dir / "final/model_card.md").read_text()
-        assert "Held-out results" in card and "| Fine-tuned | 0.700 |" in card
+        assert "## Results" in card and "| **This adapter** | 70.0% |" in card
         assert (pl.dir / "loops/1/eval/heldout_report.json").exists()   # the held-out eval ran (once)
         r2 = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=60)   # called again: instant
         assert r2.returncode == 0 and json.loads(r2.stdout)["summary"] == "final report already written"
