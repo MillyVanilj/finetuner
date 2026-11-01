@@ -219,6 +219,26 @@ def test_eval_hands_decide_a_spec_io_report():
         assert rc == 0 and dec.get("status") == "ok" and dec.get("action") in ("retrain", "regenerate_data", "stop"), dec
 
 
+def test_submit_finds_the_pipeline_from_train_path():
+    """Agent mode hands finetune-submit only DataGen's train_path, which lives in DataGen's run folder outside the
+    pipeline, and no $FTC_PIPELINE_DIR. DataGen leaves a .pipeline pointer there (ftc/pipeline.py POINTER); without
+    it run.json got pipeline_dir null and the eval report, the loop count and the final report lost the pipeline."""
+    sys.path.insert(0, str(ROOT))
+    from ftc.pipeline import Pipeline, POINTER
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d).resolve()
+        pl = Pipeline.create(json.loads((ROOT / "examples/specs/chem_qa.json").read_text()), root=d / "pipelines")
+        run = d / "datagen-runs" / "chem-qa-l1"; run.mkdir(parents=True)
+        (run / "train.jsonl").write_text("".join(json.dumps({"messages": [{"role": "user", "content": f"q{i}"},
+                                                 {"role": "assistant", "content": "a"}]}) + "\n" for i in range(20)))
+        (run / POINTER).write_text(str(pl.dir))
+        env = {"FINETUNER_DIR": str(ROOT), "FINETUNER_RUNS": str(d / "runs"), "FTC_PIPELINE_DIR": ""}
+        rc, out = _run("finetune-submit", ["--train-path", str(run / "train.jsonl"), "--dry-run"], env)
+        assert rc == 0 and out.get("train_job_id"), out
+        rj = json.loads((d / "runs" / out["train_job_id"] / "run.json").read_text())
+        assert rj["pipeline_dir"] == str(pl.dir), rj.get("pipeline_dir")
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

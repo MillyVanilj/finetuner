@@ -356,3 +356,11 @@ python3 -m ftc.cli agents stop
   (newest values win) and marks both used, so a second kickoff could swallow the first.
 - Skill help text matters: the reactor treats every `--word` in a skill's `--help` output (description included) as
   an input flag. Keep flag names out of descriptions, and hide internal flags with `help=argparse.SUPPRESS`.
+- Finding the pipeline without `$FTC_PIPELINE_DIR`: the daemons don't set it, and DataGen's run folder
+  (`~/.scienceclaw/finetune/runs/<run_id>/`, which holds `train_path`) is outside the pipeline. So DataGen writes a
+  `.pipeline` pointer file there, and `Pipeline.from_any()` follows it: finetune-submit, handed only `train_path`,
+  records `pipeline_dir` in `run.json`, and everything after it (eval report under `loops/<n>/`, loop count, final
+  report) stays in the pipeline. Without it the chain still ran but outside the pipeline folder.
+- DataGen names a run for a spec inside a pipeline `<pipeline_id>-l<loop>` (like `run_pipeline.py`), not after the
+  file: every pipeline's spec is `task_spec.json`, so the old default (`task_spec`) made a second pipeline reuse the
+  first one's training data. It also links `data_run_dir` and posts the data stage's start/done events.

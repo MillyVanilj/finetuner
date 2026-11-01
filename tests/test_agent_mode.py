@@ -162,8 +162,9 @@ def test_kickoff_posts_a_scienceclaw_artifact():
 STANDINS = {
     "finetune-data-gen": """
         p.add_argument("--spec"); p.add_argument("--data-feedback-path"); a, _ = p.parse_known_args()
-        out = Path(os.environ["FINETUNER_RUNS"]) / "train.jsonl"; out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text('{"messages": []}\\n')
+        run = Path(os.environ["HOME"]) / ".scienceclaw/finetune/runs/data1"; run.mkdir(parents=True, exist_ok=True)
+        out = run / "train.jsonl"; out.write_text('{"messages": []}\\n')
+        (run / ".pipeline").write_text(str(Path(a.spec).parent))   # what the real DataGen writes (test_link.py #7)
         print(json.dumps({"done": True, "train_path": str(out)}))""",
     "finetune-bench-gen": """
         p.add_argument("--spec"); a, _ = p.parse_known_args()
@@ -176,7 +177,9 @@ STANDINS = {
         p.add_argument("--train-path"); p.add_argument("--retrain-config-path"); a, _ = p.parse_known_args()
         runs = Path(os.environ["FINETUNER_RUNS"]); job = f"j{len(list(runs.glob('j*'))) + 1}"
         sys.path.insert(0, os.environ["TEST_DIR"]); from test_agent_mode import fake_run
-        fake_run(runs, job, Path(os.environ["TEST_PIPELINE"]))
+        sys.path.insert(0, os.environ["FINETUNER_DIR"]); from ftc.pipeline import Pipeline
+        pl = Pipeline.from_any(a.train_path)    # how the real finetune-submit finds it: train_path only, no env var
+        fake_run(runs, job, pl.dir)
         print(json.dumps({"status": "submitted", "train_job_id": job}))""",
     "finetune-status": """
         p.add_argument("--train-job-id"); a, _ = p.parse_known_args()
@@ -227,7 +230,7 @@ def test_full_agent_chain_with_the_scienceclaw_reactor():
         spec = {**load_spec(ROOT / "examples/specs/chem_qa.json"), "targets": {"target_score": 0.6}}
         pl = Pipeline.create(spec, root=tmp / "pipelines")
         env = {**os.environ, "HOME": str(tmp / "home"), "FINETUNER_DIR": str(ROOT), "FINETUNER_RUNS": str(tmp / "runs"),
-               "SCIENCECLAW_DIR": str(sc), "TEST_DIR": str(Path(__file__).parent), "TEST_PIPELINE": str(pl.dir),
+               "SCIENCECLAW_DIR": str(sc), "TEST_DIR": str(Path(__file__).parent),
                "SCIENCECLAW_DISABLE_SKILL_AUTO_REFRESH": "1"}
         r = subprocess.run([sys.executable, "-c", DRIVER, str(sc), str(ROOT), str(pl.dir)],
                            capture_output=True, text=True, env=env, timeout=600)
