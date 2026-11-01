@@ -357,6 +357,16 @@ def main():
 
     dec = decide(n, spec, d, cfg, loop, prev, gpu_h, fail_cats, job_id, args.extra_examples)
 
+    # Never propose settings already trained on this data: finetune-submit would return the old job
+    # ("reused"), its report already exists, and the loop would cycle (e.g. r16 -> r64 -> back to r16).
+    if dec["action"] == "retrain":
+        proposed = {k: dec["retrain_config"][k] for k in TUNABLE}
+        tried = [h.get("config") for h in history if h.get("train_path") == train_path] + [cfg]
+        if proposed in tried:
+            dec = regen("config already tried",
+                        f"{dec['reason']}, but those settings were already trained on this data; fix the data instead",
+                        [c["category"] for c in fail_cats[:3]] or list(n["by_category"])[:3], args.extra_examples)
+
     # best loop so far (for stop): highest tuned dev score, this loop included
     all_loops = history + [{"job_id": job_id, "tuned": n["tuned"], "adapter_path": str(adapter)}]
     best = max(all_loops, key=lambda h: h["tuned"])
@@ -386,6 +396,7 @@ def main():
         f.write(json.dumps({"split": n["split"], "loop": loop, "job_id": job_id, "tuned": n["tuned"],
                             "report_path": str(report_path), "adapter_path": str(adapter),
                             "gpu_hours": round(runtime_hours(run_dir, report_path), 4),
+                            "config": cfg, "train_path": train_path,
                             "action": dec["action"], "rule": dec["rule"], "changed": dec.get("changed")}) + "\n")
 
     if pl:  # dashboard + docs/spec_and_io.md §3.6 location

@@ -31,7 +31,10 @@ Reads the eval report from `finetune-eval` and makes **one decision**: `retrain`
 7. **Underfitting** (train loss high or flat, and no clear gain over base few-shot): LoRA r=64 (alpha and lr unchanged), else epochs + 1 (max 3).
 8. Still not beating base few-shot: regenerate data. Beats it with no target set: stop. Below target: regenerate data.
 
-Retrain configs carry all current settings with **one** changed. Rank never goes above 64.
+Retrain configs carry all current settings with **one** changed. Rank never goes above 64. If the new settings
+were already trained on the same data (e.g. "back to r=16" after r=64 forgot), it regenerates data instead
+(`config already tried`): `finetune-submit` would just return the old job and the loop would go round in circles.
+If `finetune-submit` refuses a retrain (budget, job count, >1 h), no new job appears and the loop simply ends there.
 
 ## Output (one JSON object)
 

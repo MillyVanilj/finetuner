@@ -106,6 +106,14 @@ def t_forgetting_after_rank64(root):
     assert json.loads(Path(out["retrain_config_path"]).read_text())["rank"] == 16
 
 
+def t_no_cycle_back_to_tried_config(root):
+    """r16 underfits -> r64 forgets -> 'back to r16' was already trained on this data -> fix data instead."""
+    flat = (1.9, 1.85, 1.82, 1.8, 1.8, 1.79)
+    assert decide(make_run(root, "j1", losses=flat, tuned=0.52, few=0.5))["rule"] == "underfitting"
+    out = decide(make_run(root, "j2", cfg={"rank": 64}, parent="j1", tuned=0.7, drop_points=5.0))
+    assert out["action"] == "regenerate_data" and out["rule"] == "config already tried", out
+
+
 def t_overfit(root):
     out = decide(make_run(root, "j1", eval_losses=(0.8, 0.95)))
     assert out["action"] == "retrain" and out["rule"] == "overfitting", out
