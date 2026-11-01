@@ -98,6 +98,8 @@ a human. Without an API key it returns a template.
 ### 3.1 Training data (DataGen → Trainer): unchanged
 JSONL, one `{"messages": [{"role":"system"?}, {"role":"user"}, {"role":"assistant"}]}` per line.
 DataGen's result key is `train_path`; `finetune-submit` accepts it as `--train-path`.
+Run order: inside a pipeline, if `bench/` exists but is not frozen yet, DataGen returns `"state": "waiting_for_bench"`
+and exits 1 (no `train_path` yet), so the contamination check always uses this pipeline's benchmark.
 
 ### 3.2 Benchmark items (BenchGen → Eval, and DataGen's contamination check)
 `bench/dev.jsonl` and `bench/heldout.jsonl`, one item per line:
@@ -110,6 +112,11 @@ DataGen's result key is `train_path`; `finetune-submit` accepts it as `--train-p
  "difficulty": "easy", "source": "synthetic", "source_ref": null, "base_pass_rate": null}
 ```
 - `question` = plain user text. **Required**: `format_data.py --bench` reads it for the contamination check.
+- `scoring` = `exact` · `json` · `judge`: how `finetune-eval` scores the item (its `scoring.py`). BenchGen sets it;
+  `judge` items carry the answer key / rubric in a `GRADING NOTE` at the end of `reference`.
+- Extra fields (`grading`, `verify`) are BenchGen's own analysis data; consumers ignore them.
+- `bench/safety.jsonl` (optional, for finetune-eval's M9): same item shape, `category` = `should_refuse` | `should_help`.
+  BenchGen copies it from `--safety-file`; it does not write safety prompts itself.
 - `messages` = exactly what the model is sent (no assistant turn). `reference` = the ideal reply, as a **string**
   (for JSON tasks, the JSON text; the scorer parses it).
 - `category` ∈ `["typical cases"] + spec.edge_cases`. That makes failures map straight onto feedback categories.
@@ -225,7 +232,8 @@ python3 scripts/simulate_pipeline.py --speed 2          # fake run to watch (or 
 - `#p=<id>&once=1&stage=train&theme=light` in the URL gives a static snapshot (screenshots, slides).
 
 ## 6. Open items for the team
-- BenchGen, Eval, Evaluator and ReportAgent are not built yet; build them against §3.
+- BenchGen is built (`skills/finetune-bench-gen`, see its SKILL.md and `docs/benchgen-progress.md`); Eval exists
+  (`skills/finetune-eval`). Evaluator and ReportAgent: build them against §3.
 - `gen_data.py` and `finetune-submit` don't emit events yet. Until they do, run them with a pipeline and link their
   folders (`ftc.cli link`), or wrap them in `run_pipeline.py`, which can emit for them.
 - DataGen ignores the v2-only fields (seed examples, coverage topics) today. Using `seed_examples` as few-shot
