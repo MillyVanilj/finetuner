@@ -105,6 +105,7 @@ class AnthropicClient:
         # that to Opus for itself. BenchGen passes its own model (Opus) and is unaffected.
         self.anthropic_model = model or os.environ.get("FINETUNE_ANTHROPIC_MODEL") or "claude-sonnet-5-5"
         self._client = anthropic.Anthropic(api_key=key, max_retries=2)
+        self.refusals = 0          # replies Claude declined; BenchGen uses this to tell a refusal from an API error
 
     def call(self, prompt: str, max_tokens: int = 1000, temperature: float = None, **_ignored) -> str:
         """temperature is accepted for interface compatibility and NOT sent."""
@@ -112,6 +113,7 @@ class AnthropicClient:
             r = self._client.messages.create(model=self.anthropic_model, max_tokens=max_tokens,
                                              messages=[{"role": "user", "content": prompt}])
             if getattr(r, "stop_reason", None) == "refusal":
+                self.refusals += 1
                 print("Anthropic: model declined this request")
                 return ""
             return "".join(b.text for b in r.content if getattr(b, "type", "") == "text")

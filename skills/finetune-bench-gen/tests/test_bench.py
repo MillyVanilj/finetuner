@@ -447,5 +447,40 @@ res, err, code = run_main(["--spec", str(spec_f), "--run-id", "locked-run"], Fak
 check("stale lock (crash) is cleared -> worker started, lock removed",
       res["state"] == "started" and not (rd2 / "worker.lock").exists())
 
+# --- refused category: skipped, its share moved to other cells, benchmark still finishes ---
+qd = {"a||easy": 10, "b||easy": 6, "c||easy": 4}
+moved = B.drop_cell(qd, {"a||easy": 3, "c||easy": 4}, "a||easy")
+check("drop_cell: deficit 7 moved, total kept, filled cell untouched",
+      moved == 7 and qd["a||easy"] == 3 and sum(qd.values()) == 20 and qd["b||easy"] > 6)
+
+class RefusesTrick(Fake):
+    """Claude declines to write prompts for one edge case (like 'user asks for harmful content')."""
+    refusals = 0
+    def call(s, prompt, *a, **kw):
+        if prompt.startswith("You are writing a BENCHMARK") and 'category = "Trick questions"' in prompt:
+            s.refusals += 1
+            return ""
+        return super().call(prompt, *a, **kw)
+rf = RefusesTrick()
+res, err, code = run_main(["--spec", str(spec_f), "--run-id", "refuse-run", "--n-items", "30",
+                           "--time-budget", "0", "--format", "json"], rf)
+rr = tmp / "bench" / "refuse-run"
+items_r = [json.loads(l) for f_ in ("dev.jsonl", "heldout.jsonl") for l in (rr / f_).read_text().splitlines()]
+st = json.loads((rr / "state.json").read_text())
+check(f"refused category -> skipped, benchmark still frozen at full size (code {code}, {len(items_r)} items)",
+      code == 0 and res["done"] and len(items_r) == 30 and not any(x["category"] == "Trick questions" for x in items_r)
+      and set(st["skipped_cells"]) == {f"Trick questions||{d}" for d in ("easy", "medium", "hard")}
+      and "declined" in err)
+
+class Silent(Fake):
+    """API error (no refusal): every generate call returns nothing."""
+    def call(s, prompt, *a, **kw):
+        return "" if prompt.startswith("You are writing a BENCHMARK") else super().call(prompt, *a, **kw)
+res, err, code = run_main(["--spec", str(spec_f), "--run-id", "silent-run", "--n-items", "30",
+                           "--time-budget", "0", "--format", "json"], Silent())
+check("API error (not a refusal) still stops with 'no output', nothing skipped",
+      not res["done"] and "no output" in res["stop_reason"]
+      and "skipped_cells" not in json.loads((tmp / "bench" / "silent-run" / "state.json").read_text()))
+
 print(f"\n{'ALL PASSED' if not fails else f'{fails} FAILED'}")
 sys.exit(1 if fails else 0)
