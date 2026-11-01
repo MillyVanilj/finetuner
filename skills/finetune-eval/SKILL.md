@@ -42,6 +42,8 @@ One JSON object per line:
 
 Base-model outputs and scores, teacher answers and judge verdicts are cached in `<bench-dir>/.eval_cache/`, so each loop pays only for the tuned model.
 
+Deciding what to do with the report (retrain settings, LoRA rank, data feedback, stopping) is a separate step: see `docs/evaluator-notes.md` in the finetuner repo.
+
 ## Output
 
 `<run dir>/eval_<split>/`: `report.json` (everything above, plus train loss from `metrics.json`), `outputs.jsonl` (every answer with its score), `status.json`, `eval.log`. On success the skill prints `eval_report_path` plus headline numbers. A failed job is not restarted automatically: fix the cause, delete the folder, and call again.
