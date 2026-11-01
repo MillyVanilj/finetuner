@@ -10,8 +10,12 @@ sys.path.insert(0, str(HERE.parent / "scripts"))
 
 class Anthropic:
     def __init__(s, api_key, max_retries): s.messages = None
+class OpenAI:
+    def __init__(s, api_key, max_retries): s.responses = None
 sys.modules["anthropic"] = types.SimpleNamespace(Anthropic=Anthropic)
-os.environ.pop("FINETUNE_ANTHROPIC_MODEL", None)
+sys.modules["openai"] = types.SimpleNamespace(OpenAI=OpenAI)
+for k in ("FINETUNE_ANTHROPIC_MODEL", "FINETUNE_OPENAI_MODEL", "DATAGEN_GEN_BACKEND", "DATAGEN_VERIFY_BACKEND"):
+    os.environ.pop(k, None)
 
 import gen_data                                                     # noqa: E402
 shared = types.SimpleNamespace(backend="gemini", gemini_model="gemini-3.6-flash")
@@ -22,9 +26,15 @@ def check(name, ok):
     global fails; fails += not ok; print(f"{'PASS' if ok else 'FAIL'}  {name}")
 
 
+src = (HERE.parent / "scripts" / "gen_data.py").read_text()
+check("default writer = OpenAI, default checker = Anthropic (different families)",
+      'DATAGEN_GEN_BACKEND") or "openai"' in src and 'DATAGEN_VERIFY_BACKEND") or "anthropic"' in src)
+os.environ["OPENAI_API_KEY"] = "test-key"
+c, w = gen_data.gen_client("openai", None)
+check("openai writer = GPT-6.1 Sol", c.backend == "openai" and gen_data.model_name(c) == "gpt-6.1-sol" and w is None)
 os.environ["ANTHROPIC_API_KEY"] = "test-key"
 c, w = gen_data.gen_client("anthropic", None)
-check("default writer = Claude Sonnet", c.backend == "anthropic" and c.anthropic_model == "claude-sonnet-5-5" and w is None)
+check("anthropic writer = Claude Sonnet", c.backend == "anthropic" and c.anthropic_model == "claude-sonnet-5-5" and w is None)
 c, w = gen_data.gen_client("anthropic", "claude-opus-5-5")
 check("--gen-model picks the Claude model", gen_data.model_name(c) == "claude-opus-5-5")
 c, w = gen_data.gen_client("default", None)

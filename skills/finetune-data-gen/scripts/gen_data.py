@@ -88,7 +88,7 @@ Return ONLY a JSON list with one item per example, in order:
 
 
 # ---------- Step 7: resumable state ----------
-DEFAULT_GEN_MODEL = {"anthropic": "claude-sonnet-5-5"}
+DEFAULT_GEN_MODEL = {"openai": "gpt-6.1-sol", "anthropic": "claude-sonnet-5-5"}
 
 
 def model_name(llm):
@@ -445,14 +445,15 @@ def main():
     p.add_argument("--max-batches", type=int, default=0, help=H)
     p.add_argument("--parallel", type=int, default=1, help=H)
     p.add_argument("--bench", default=None, help=H)
-    # M2 writer. Claude Sonnet by default: in a 20-item test of hard / misleading SQL items it wrote the most
-    # correct answers (19/20 vs Gemini Flash 14/19, Gemini Pro 9/20; docs/decisions.md Decision 2b).
-    # "default" = the shared finetune backend ($FINETUNE_LLM_BACKEND, Gemini Flash unless set).
-    p.add_argument("--gen-backend", default=os.environ.get("DATAGEN_GEN_BACKEND") or "anthropic", help=H)
+    # M2 writer. OpenAI Sol by default: in two rounds of hard / misleading SQL items it wrote the most correct answers
+    # (38/38 vs Claude Sonnet 32/38, GPT-6.1 Terra 33/36, Gemini Flash 14/19; docs/decisions.md Decision 2b), and it
+    # is a different family from the benchmark writer (Claude Opus). "default" = the shared finetune backend
+    # ($FINETUNE_LLM_BACKEND, Gemini Flash unless set).
+    p.add_argument("--gen-backend", default=os.environ.get("DATAGEN_GEN_BACKEND") or "openai", help=H)
     p.add_argument("--gen-model", default=os.environ.get("DATAGEN_GEN_MODEL") or None, help=H)
-    # M3 runs on OpenAI Sol by default (a different model family from the writer).
-    # "same" = verify with the M2 backend (old behaviour, no OpenAI key needed).
-    p.add_argument("--verify-backend", default=os.environ.get("DATAGEN_VERIFY_BACKEND") or "openai", help=H)
+    # M3 runs on Claude Sonnet by default: a different family from the Sol writer, so no model checks its own
+    # family's work. "same" = verify with the M2 backend (no second key needed, less strict).
+    p.add_argument("--verify-backend", default=os.environ.get("DATAGEN_VERIFY_BACKEND") or "anthropic", help=H)
     # Default is JSON: core/skill_executor.py json.loads() stdout, and the agent never passes --format.
     p.add_argument("--format", default="json", choices=["summary", "json"], help=H)
     a, unknown = p.parse_known_args()   # agents sometimes add flags we don't use (e.g. --max-results)
@@ -631,9 +632,14 @@ def run(a) -> dict:
             llm_v = make_client("DataGenVerify", a.verify_backend)
         except (ValueError, ImportError) as e:   # no OPENAI_API_KEY / openai package: keep going, but say so
             verify_warning = (f"M3 verifier '{a.verify_backend}' unavailable ({e}); verified with the M2 model instead "
-                              "(same family, less strict). Fix: OPENAI_API_KEY in .env + pip install openai")
+                              "(same family, less strict). Fix: the API key for that backend in .env "
+                              "(ANTHROPIC_API_KEY / OPENAI_API_KEY)")
             log(f"[warning] {verify_warning}")
     state["verifier"] = {"backend": getattr(llm_v, "backend", None), "model": model_name(llm_v)}
+    if llm_v is not llm and state["verifier"]["backend"] == state["generator"]["backend"] and not verify_warning:
+        verify_warning = (f"M2 writer and M3 checker are both '{state['generator']['backend']}': a model family checking "
+                          "its own work is less strict. Set DATAGEN_VERIFY_BACKEND to another family")
+        log(f"[warning] {verify_warning}")
     for k in ("rejected", "unverified"):
         state.setdefault(k, 0)
     timing = state.setdefault("timing", {"per_ex": PER_EX_INIT, "rounds": 0})
