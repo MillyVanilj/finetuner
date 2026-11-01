@@ -67,12 +67,12 @@ def alive(pid):
 def spec_io_report(report_path, r, adapter_path):
     """Also write the docs/spec_and_io.md §3.4 eval_report.json, which finetune-decide reads (it rejects
     finetune-eval's own report.json). scripts/run_pipeline.py converts it the same way (ftc.report_convert);
-    in agent mode nothing else does, so the Evaluator failed on every call. Converted ONCE (the loop number is
-    fixed at that moment) and, inside a pipeline, also copied to loops/<n>/eval/ where finetune-decide looks
-    for earlier loops. Returns its path, or None when ftc is not importable (then decide can't run either)."""
+    in agent mode nothing else does, so the Evaluator failed on every call. Inside a pipeline it is converted on
+    EVERY call and filed under the pipeline's CURRENT loop (loops/<n>/eval/, where finetune-decide looks for
+    earlier loops): a reused training job (finetune-submit found identical data + settings, so report.json
+    already exists) must count as the loop that asked for it, not the loop that first trained it. Outside a
+    pipeline it is converted once. Returns its path, or None when ftc is not importable (then decide can't run)."""
     local = report_path.parent / ("eval_report.json" if r.get("split", "dev") == "dev" else "heldout_report.json")
-    if local.exists():
-        return local
     for d in (str(FINETUNER_DIR), str(Path(__file__).resolve().parents[3])):
         if (Path(d) / "ftc").exists() and d not in sys.path:
             sys.path.insert(0, d)
@@ -80,13 +80,15 @@ def spec_io_report(report_path, r, adapter_path):
         from ftc.report_convert import to_spec_io
         from ftc.pipeline import Pipeline
     except ImportError:
-        return None
+        return local if local.exists() else None
     pdir = None
     try:
         pdir = json.loads((Path(adapter_path).resolve().parent / "run.json").read_text()).get("pipeline_dir")
     except (OSError, ValueError, TypeError):
         pass
     pl = Pipeline.from_any(pdir) if pdir else Pipeline.from_any(None)
+    if not pl.active and local.exists():
+        return local
     loop = pl.current_loop() if pl.active else 1
     conv = to_spec_io(r, pipeline_id=pl.id, loop=loop, split=r.get("split", "dev"),
                       job_id=Path(adapter_path).resolve().parent.name, adapter=str(adapter_path),
@@ -124,7 +126,7 @@ def main():
     p.add_argument("--split", choices=["dev", "heldout"], default="dev")
     p.add_argument("--skip-general", action="store_true")
     p.add_argument("--format", choices=["json", "summary"], default="json")
-    a = p.parse_args()
+    a, _ = p.parse_known_args()                  # ignore extras like --query that ScienceClaw passes
 
     if a.bench_dir:                               # remember it: later loops may arrive with adapter_path only
         try:
