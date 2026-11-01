@@ -167,16 +167,15 @@ Overwrite it every ~20 items (`Pipeline.progress("eval", ...)` does this):
 ```
 - `action`: `retrain` (writes `retrain_config.json` = finetune-submit's `--retrain-config-path` format:
   `{lr, epochs, rank, …, parent_job_id, reason}`) · `regenerate_data` (writes `data_feedback.json`) · `stop`.
-- The skill's JSON output should include `retrain_config_path` or `data_feedback_path` so the ScienceClaw reactor
-  hands it to the right agent. For `stop`, output neither key.
-- `rule` names the deterministic rule that fired (table in `wireframe_v0.2_review.md` §3). The LLM only writes `reason`.
-- **Implemented by `skills/finetune-decide`** (branch `worktree-evaluator-decide`, not merged yet). Input:
-  `--spec` / `--task-spec-path` (same option) plus the eval report. It reads both this §3.4 `eval_report.json` and
-  the eval skill's `report.json`. It writes `decision.json` and the copies above, emits a `decide`/`decision` event,
-  and on retrain / regenerate_data calls `pl.set_loop(n+1)`. Output keys for the reactor:
-  - `retrain` → `retrain_config_path` (→ finetune-submit `--retrain-config-path`)
-  - `regenerate_data` → `data_feedback_path` + **`spec`** (→ DataGen's existing `--spec`)
-  - `stop` → `final_adapter_path`, `best_job_id`, `stop_reason`, `next_step`
+- Built: `skills/finetune-decide` (`--eval-report-path`; `--spec` is accepted and ignored, the spec is read from the
+  pipeline folder). It reads this §3.4 `eval_report.json` only, not the eval skill's own `report.json`. Its JSON output
+  carries the hand-off keys for the reactor:
+  `retrain` → `retrain_config_path` **and** `train_path` (finetune-submit requires both; same data, new settings) ·
+  `regenerate_data` → `data_feedback_path` · `stop` → neither, but `best_loop` + `best_adapter_path` for the held-out
+  run and the ReportAgent. A `stop` decision.json also has `best_loop` and `best_adapter_path`.
+- `rule` names the deterministic rule that fired (order and thresholds: `skills/finetune-decide/SKILL.md`,
+  reasoning: `docs/evaluator-notes.md`). `reason` is a templated sentence; there is no LLM call.
+- The Evaluator moves the pipeline to loop n+1 (`pipeline.json` → `loop`) unless it stops.
 
 **Passing the spec between skills:** the key is `spec` (the path to `task_spec.json`), matching DataGen's `--spec`.
 Skills that take a spec should accept `--spec`, optionally with `--task-spec-path` as an alias.
@@ -274,13 +273,16 @@ repo's `skills/`:
 State: `runner.json` (pid, current step, error), log: `runner.log`, both shown in the dashboard. **■ Stop**
 sends SIGTERM: the runner stops after its current call. Jobs it already launched (training, eval, BenchGen) keep
 running. A restart picks up where it was: DataGen, BenchGen and submit all resume or reuse.
-Needs: the Brev machine set up (`setup_brev.sh`, `install.sh`), keys loaded, and `finetune-decide` installed
-(not on main yet; two versions: branches `feat/evaluator` and `worktree-evaluator-decide`). BenchGen is on main. The runner reads both Evaluators' outputs.
+Needs: the Brev machine set up (`setup_brev.sh`, `install.sh`) and keys loaded. All skills it calls are on main.
 Test without GPU or API: `python3 tests/test_run_pipeline.py` (stand-in skills, 3 loops).
 
 ## 7. Open items for the team
-- BenchGen is on main (`skills/finetune-bench-gen`, see `docs/benchgen-progress.md`). Pick ONE Evaluator
-  (`feat/evaluator` or `worktree-evaluator-decide`) and merge it.
+- Status per box: `docs/wireframe_v0.2.md`. BenchGen is on main (`skills/finetune-bench-gen`, see
+  `docs/benchgen-progress.md`). The Evaluator on main is `skills/finetune-decide` from `feat/evaluator`;
+  `worktree-evaluator-decide` is an alternative version of the same skill.
+- `finetune-eval` writes its own `report.json`, not §3.4. `run_pipeline.py` converts it (`ftc/report_convert.py`), but
+  under the ScienceClaw reactor nothing does, and `finetune-decide` reads §3.4 only. Either Eval writes
+  `loops/<n>/eval/eval_report.json` itself, or the Evaluator calls `report_convert`.
 - ReportAgent (HF push, model card, Infinite post) is not built; the runner writes `final/final_report.json` for it.
 - DataGen doesn't read `--data-feedback-path` yet (the runner works around it, see §6) and ignores the v2-only
   fields (seed examples, coverage topics). Using `seed_examples` as few-shot examples is a cheap win.

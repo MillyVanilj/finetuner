@@ -1,6 +1,6 @@
 # Decisions & reasoning (living doc)
 
-*Last updated 2026-10-31. If you're an agent or teammate picking this up: read this first, then `docs/wireframe_v0.2_review.md` for the detailed critique and ScienceClaw internals. If you change a decision, update this file and say why.*
+*Last updated 2026-11-01. If you're an agent or teammate picking this up: read this first, then `docs/wireframe_v0.2.md` (the design and which code implements each box) and `docs/wireframe_v0.2_review.md` for the detailed critique and ScienceClaw internals. If you change a decision, update this file and say why.*
 
 ## What we're building
 
@@ -105,7 +105,8 @@ Brev machine
 - Script: `scripts/brev-smoke/train_sft.py` (Owen's). TRL `SFTTrainer`, LoRA all-linear, r=16, α=32, lr 1e-4–2e-4 (script default 2e-4; TRL's own default 2e-5 is too low for LoRA), 2 epochs, bf16, loss on assistant replies only.
 - **Trainer skills (built):** `skills/finetune-submit` (validates data, writes `run.json`, starts `train_sft.py` in the background, returns `train_job_id`; refuses when the GPU is busy; takes Evaluator overrides via `--retrain-config-path`) and `skills/finetune-status` (`--train-job-id` → running % / done with `adapter_path` / failed with log). Hand-off keys: `train_path` (DataGen output = submit's `--train-path`) → submit → `train_job_id` → status → `adapter_path` → Evaluator. Put status in a different agent from submit (agents ignore their own artifacts). Runs live in `~/finetuner/runs/<job_id>/`.
 - Every run saves `run.json`: spec, model IDs + prompts, LoRA config, seeds, dataset SHA-256s, git commit, metrics, adapter location.
-- **Evaluator decision rules** (when to retrain with new settings, when to try LoRA r=64, when to send failure categories back to DataGen, when to stop): `docs/evaluator-notes.md`.
+- **Eval (L3, built):** `skills/finetune-eval` (`--adapter-path` + `--bench-dir` → background job → `eval_report_path`). Its report format still differs from `docs/spec_and_io.md` §3.4; `run_pipeline.py` converts it (`ftc/report_convert.py`, see §7 there).
+- **Evaluator (built):** `skills/finetune-decide` (`--eval-report-path` → `decision.json`; hands on `retrain_config_path` + `train_path`, or `data_feedback_path`, or stops with `best_adapter_path`). Rules and reasoning (when to retrain with new settings, when to try LoRA r=64, when to send failure categories back to DataGen, when to stop): `docs/evaluator-notes.md`.
 - Eval report always shows: base zero-shot, **base few-shot (must beat this)**, teacher (ceiling), tuned, all with 95% confidence intervals.
 - **GPU jobs start automatically (no human OK), and are clamped, not refused.** `finetune-submit` runs pre-flight checks and decides **launch / reuse / wait / refuse**:
   1. GPU free: no training job alive, and < 2 GB GPU memory used by other programs. Otherwise **wait** (retried next cycle).
@@ -123,6 +124,7 @@ Agreed by both docs: Qwen3-4B-Instruct-2507, Brev as the main GPU, Vertex Gemini
 
 To settle as a team:
 1. **Who uses Gemini?** Owen's plan: Gemini = the agents' own LLM ("brains"), Claude/OpenAI = data generation + judge. This doc: Gemini = bulk data generator (M2). Both keep generator ≠ judge family, so either works. Pick one and update both docs.
+   *Update: the code follows this doc for M2: DataGen runs with `LLM_BACKEND=gemini` (`docs/datagen-progress.md`) and spec v2 defaults to `models.generator` = Gemini, `models.judge` = Claude. Which LLM the agents themselves run on is still open.*
 2. **Upgrade path:** Owen's plan suggests Qwen3.5-4B/9B later. Fine as a stretch goal, but it needs transformers v5 and a newer vLLM, so do it only once the loop works end-to-end.
 
 Things to fix in the setup plan (checked against ScienceClaw's code):
