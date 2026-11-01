@@ -20,6 +20,9 @@ looks different, trust the repo and **update this file** (whoever merges or open
   writes the benchmark), #13 BenchGen JSON-fence parsing fix, #17 BenchGen says why a job stopped + dashboard
   clears a stale "Failed" after a reset.
 - **Open:**
+  - **#27** hosting the dashboard (`docs/hosting.md`): `server.py --read-only` behind a Cloudflare tunnel for a
+    live public link, and `scripts/export_static.py` for a frozen copy (Netlify / GitHub Pages) that outlives
+    Brev. The normal server has no login: never expose it. Export the real run before stopping Brev.
   - **BenchGen skips refused categories** (branch `worktree-bench-skip-refused`): when Claude declines to write
     prompts for a category (e.g. "user asks for harmful content that should be declined"), BenchGen now drops
     that cell and moves its items to the others, instead of failing the whole benchmark after 3 restarts.
