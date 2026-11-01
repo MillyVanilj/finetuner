@@ -163,6 +163,9 @@ queued (nothing new is generated meanwhile); if Sol can't check even one example
 python3 dashboard/server.py                      # live view, create a pipeline, ▶ Start = run_pipeline.py
 python3 scripts/run_pipeline.py --pipeline ~/finetuner/pipelines/<id> [--skip-general]
 python3 scripts/simulate_pipeline.py             # fake run for the dashboard (no GPU/API)
+# share with judges (docs/hosting.md): NEVER expose the normal server, it has no login
+python3 dashboard/server.py --read-only --port 8766 & ~/cloudflared tunnel --url http://localhost:8766
+python3 scripts/export_static.py --out ~/site    # frozen copy for Netlify Drop / GitHub Pages, before Brev is stopped
 # agent mode (#12):  python3 -m ftc.cli agents kickoff <pipeline_dir> && python3 -m ftc.cli agents start
 # agent mode (#15):  ~/scienceclaw/.venv/bin/python scripts/run_agents.py --pipeline <pipeline_dir>
 ```

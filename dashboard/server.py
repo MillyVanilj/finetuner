@@ -25,6 +25,11 @@ API (all JSON):
     GET  /api/answers?p=<id>                    every held-out item with every system's answer (final/heldout_answers.jsonl)
     GET  /api/model_card?p=<id>                 final/model_card.md as text
     POST /api/pipelines/<id>/publish {target: "hub"|"infinite", public?, repo?, community?}
+
+Sharing it with people outside the team (docs/hosting.md):
+    python3 dashboard/server.py --read-only --port 8766    # every POST refused, write buttons hidden
+    cloudflared tunnel --url http://localhost:8766         # prints a public https://….trycloudflare.com URL
+    python3 scripts/export_static.py --out site/           # frozen copy for GitHub Pages / any static host
                                                 -> python3 -m ftc.publish in the background (status: final/publish_state.json)
 """
 import argparse
@@ -48,6 +53,15 @@ from ftc.wall import Wall, summary as wall_summary          # noqa: E402
 STATIC = Path(__file__).resolve().parent
 POLL_S = 1.0
 SIM_PROCS = []
+READ_ONLY = False   # --read-only: a view for the public (no runs, no API spend, no publishing, no wall posts)
+
+
+def render_index(flags: dict) -> bytes:
+    """index.html with window.FTC set, so the page knows it is read-only ({readOnly}) or a static export ({static})."""
+    html = (STATIC / "index.html").read_text()
+    if flags:
+        html = html.replace("<script>", f"<script>window.FTC = {json.dumps(flags)};</script>\n<script>", 1)
+    return html.encode()
 
 
 def pipeline_dir(pid: str) -> Path:
@@ -190,13 +204,9 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return (self.headers.get("Content-Type") or "").split(";")[0].strip().lower() == "application/json"
 
-    def _static(self, name, ctype):
-        p = STATIC / name
-        if not p.exists():
-            return self._json({"error": "not found"}, 404)
-        body = p.read_bytes()
+    def _html(self, body: bytes):
         self.send_response(200)
-        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -208,8 +218,10 @@ class Handler(BaseHTTPRequestHandler):
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
         try:
             if u.path in ("/", "/index.html"):
-                return self._static("index.html", "text/html; charset=utf-8")
+                return self._html(render_index({"readOnly": True} if READ_ONLY else {}))
             if u.path == "/api/pipelines":
+                if READ_ONLY:   # don't show the machine's folder layout to the public
+                    return self._json({"pipelines": list_pipelines()})
                 return self._json({"root": str(pipelines_root()), "pipelines": list_pipelines()})
             if u.path == "/api/examples":
                 ex = {p.stem: json.loads(p.read_text()) for p in sorted((ROOT / "examples" / "specs").glob("*.json"))}
@@ -280,6 +292,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         u = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
+        if READ_ONLY:
+            return self._json({"error": "this dashboard is read-only", "errors": ["this dashboard is read-only"]}, 403)
         if not self._same_origin():
             return self._json({"error": "refused: cross-site request, or not Content-Type: application/json"}, 403)
         try:
@@ -363,12 +377,16 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--read-only", action="store_true",
+                    help="refuse every POST and hide the write buttons: safe to expose through a public tunnel")
     a = ap.parse_args()
+    global READ_ONLY
+    READ_ONLY = a.read_only
     pipelines_root().mkdir(parents=True, exist_ok=True)
     srv = ThreadingHTTPServer((a.host, a.port), Handler)
     srv.daemon_threads = True
     print(f"Dashboard: http://{'localhost' if a.host in ('127.0.0.1', '0.0.0.0') else a.host}:{a.port}  "
-          f"(pipelines in {pipelines_root()})", file=sys.stderr)
+          f"(pipelines in {pipelines_root()}){'  READ-ONLY' if READ_ONLY else ''}", file=sys.stderr)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

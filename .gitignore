@@ -25,3 +25,6 @@ runs/
 
 # Pipeline records written by ftc / the dashboard (one folder per user goal)
 pipelines/
+
+# Static dashboard export (scripts/export_static.py)
+site/
