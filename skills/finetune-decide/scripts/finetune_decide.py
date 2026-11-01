@@ -334,7 +334,10 @@ def main():
     run_dir = adapter.parent
     run = read_json(run_dir / "run.json") or {}
     _, _, _, metrics = loss_curve(run_dir)
-    cfg = {**SUBMIT_DEFAULTS, **(metrics.get("config") or {}), **(run.get("config") or {})}
+    # requested_config = what was asked for; config may have epochs lowered by submit's budget clamp.
+    # Decide on the requested settings, so a clamp isn't mistaken for a deliberate change.
+    cfg = {**SUBMIT_DEFAULTS, **(metrics.get("config") or {}), **(run.get("config") or {}),
+           **(run.get("requested_config") or {})}
     cfg = {k: cfg[k] for k in TUNABLE}
     job_id = run.get("job_id") or run_dir.name
     train_path = (run.get("dataset") or {}).get("path") or (metrics.get("config") or {}).get("data")

@@ -119,6 +119,18 @@ def t_no_cycle_back_to_tried_config(root):
     assert out["action"] == "regenerate_data" and out["rule"] == "config already tried", out
 
 
+def t_budget_clamp_uses_requested_config(root):
+    """submit lowered epochs 2 -> 0.5 for budget: decide on the requested 2, so overfitting -> epochs 1."""
+    rep = make_run(root, "j1", cfg={"epochs": 0.5}, eval_losses=(0.8, 0.95))
+    run_json = rep.parent.parent / "run.json"
+    rj = json.loads(run_json.read_text())
+    rj["requested_config"] = {**rj["config"], "epochs": 2}
+    run_json.write_text(json.dumps(rj))
+    out = decide(rep)
+    cfg = json.loads(Path(out["retrain_config_path"]).read_text())
+    assert out["rule"] == "overfitting" and cfg["epochs"] == 1 and cfg["lr"] == 2e-4, (out, cfg)
+
+
 def t_overfit(root):
     out = decide(make_run(root, "j1", eval_losses=(0.8, 0.95)))
     assert out["action"] == "retrain" and out["rule"] == "overfitting", out
